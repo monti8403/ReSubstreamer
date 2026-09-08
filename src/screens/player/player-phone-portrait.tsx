@@ -1,5 +1,6 @@
 import Ionicons from "@react-native-vector-icons/ionicons/static";
 import { FlashList } from '@shopify/flash-list';
+import ReorderableList, { type ReorderableListReorderEvent } from 'react-native-reorderable-list';
 import { Stack, useNavigation, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
@@ -15,11 +16,14 @@ import {
 import Animated, {
   Easing,
   interpolate,
+  runOnJS,
+  useAnimatedGestureHandler,
   useAnimatedStyle,
   useSharedValue,
+  withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { Pressable as GHPressable } from 'react-native-gesture-handler';
+import { PanGestureHandler, Pressable as GHPressable, type PanGestureHandlerGestureEvent } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 
@@ -69,6 +73,7 @@ import { playbackSettingsStore } from '@/store/playbackSettingsStore';
 import { moreOptionsStore } from '@/store/moreOptionsStore';
 import { playerStore } from '@/store/playerStore';
 import { mixHexColors } from '@/utils/colors';
+import { reorderQueue } from '@/services/moreOptionsService';
 
 
 import { absoluteFill } from '@/utils/styles';
@@ -275,6 +280,13 @@ export function PlayerPhonePortrait() {
     [],
   );
 
+  const handleReorderQueue = useCallback(
+    ({ from, to }: ReorderableListReorderEvent) => {
+      void reorderQueue(from, to);
+    },
+    [],
+  );
+
   const queueListHeader = useMemo(
     () => (
       <QueueHeader
@@ -354,6 +366,7 @@ export function PlayerPhonePortrait() {
               handleSeek={handleSeek}
               handleShuffle={handleShuffle}
               shuffling={shuffling}
+              onSwitchToQueue={() => setActiveTab('queue')}
             />
           </Animated.View>
 
@@ -368,13 +381,13 @@ export function PlayerPhonePortrait() {
             pointerEvents={activeTab === 'queue' ? 'auto' : 'none'}
           >
             {mountedTabs.has('queue') && (
-              <FlashList
+              <ReorderableList
                 data={queue}
                 renderItem={renderQueueItem}
                 keyExtractor={keyExtractor}
+                onReorder={handleReorderQueue}
                 ListHeaderComponent={queueListHeader}
                 onScrollBeginDrag={closeOpenRow}
-                drawDistance={200}
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={QUEUE_CONTENT_CONTAINER_STYLE}
               />
@@ -447,7 +460,12 @@ interface PlayerContentProps {
   handleSeek: (seconds: number) => void;
   handleShuffle: () => void;
   shuffling: boolean;
+  /** Called when user swipes up on the player area to open the queue. */
+  onSwitchToQueue: () => void;
 }
+
+const SWIPE_H_THRESHOLD = 60;   // px horizontal to commit a track skip
+const SWIPE_V_THRESHOLD = -80;  // px vertical (negative = up) to open queue
 
 const PlayerContent = memo(function PlayerContent({
   currentTrack,
@@ -456,6 +474,7 @@ const PlayerContent = memo(function PlayerContent({
   handleSeek,
   handleShuffle,
   shuffling,
+  onSwitchToQueue,
 }: PlayerContentProps) {
   const { t } = useTranslation();
   const songCoverArtId = useSongCoverArt(currentTrack);
@@ -465,13 +484,65 @@ const PlayerContent = memo(function PlayerContent({
   const position = playerStore((s) => s.position);
   const duration = playerStore((s) => s.duration);
   const bufferedPosition = playerStore((s) => s.bufferedPosition);
+  const queue = playerStore((s) => s.queue);
+  const currentTrackIndex = playerStore((s) => s.currentTrackIndex);
+  const { canSkipNext, canSkipPrevious } = useCanSkip();
+
+  // Shared values for hero swipe animation
+  const heroTranslateX = useSharedValue(0);
+  const heroOpacity = useSharedValue(1);
+
+  const animateAndSkip = useCallback((direction: 'next' | 'prev') => {
+    const canSkip = direction === 'next' ? canSkipNext : canSkipPrevious;
+    if (!canSkip) return;
+    const toX = direction === 'next' ? -windowWidth : windowWidth;
+    heroTranslateX.value = withTiming(toX, { duration: 200 }, () => {
+      runOnJS(direction === 'next' ? skipToNext : skipToPrevious)();
+      heroTranslateX.value = -toX;
+      heroTranslateX.value = withSpring(0, { damping: 18, stiffness: 200 });
+    });
+  }, [canSkipNext, canSkipPrevious, windowWidth, heroTranslateX]);
+
+  const heroGestureHandler = useAnimatedGestureHandler<PanGestureHandlerGestureEvent, { startX: number }>({
+    onStart: (_, ctx) => {
+      ctx.startX = heroTranslateX.value;
+    },
+    onActive: (event, ctx) => {
+      if (Math.abs(event.translationX) > Math.abs(event.translationY)) {
+        heroTranslateX.value = ctx.startX + event.translationX;
+      }
+    },
+    onEnd: (event) => {
+      // Swipe up → open queue
+      if (event.translationY < SWIPE_V_THRESHOLD && Math.abs(event.translationX) < Math.abs(event.translationY)) {
+        heroTranslateX.value = withSpring(0);
+        runOnJS(onSwitchToQueue)();
+        return;
+      }
+      // Swipe right → previous
+      if (event.translationX > SWIPE_H_THRESHOLD && Math.abs(event.translationX) > Math.abs(event.translationY)) {
+        runOnJS(animateAndSkip)('prev');
+        return;
+      }
+      // Swipe left → next
+      if (event.translationX < -SWIPE_H_THRESHOLD && Math.abs(event.translationX) > Math.abs(event.translationY)) {
+        runOnJS(animateAndSkip)('next');
+        return;
+      }
+      heroTranslateX.value = withSpring(0);
+    },
+  });
+
+  const heroAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: heroTranslateX.value }],
+    opacity: heroOpacity.value,
+  }));
   const error = playerStore((s) => s.error);
   const retrying = playerStore((s) => s.retrying);
   const queueLength = playerStore((s) => s.queue.length);
 
   const showSkipInterval = playbackSettingsStore((s) => s.showSkipIntervalButtons);
   const showSleepTimer = playbackSettingsStore((s) => s.showSleepTimerButton);
-  const { canSkipNext, canSkipPrevious } = useCanSkip();
 
   // Content-height budget (window minus header + top/bottom safe-area insets)
   // and the portrait width drive the responsive tier: smaller art/controls/
@@ -532,20 +603,26 @@ const PlayerContent = memo(function PlayerContent({
       {Platform.OS === 'ios' && <View style={{ height: insets.top + HEADER_BAR_HEIGHT }} />}
       {/* Hero cover art */}
       <View style={[styles.hero, { paddingBottom: m.heroPadBottom }]}>
-        <View style={[styles.heroImageWrap, { width: heroSize, height: heroSize }]}>
-          <CachedImage
-            coverArtId={songCoverArtId}
-            size={HERO_COVER_SIZE}
-            style={styles.heroImage}
-            resizeMode="cover"
-          />
-          <View style={styles.sleepCapsuleOverlay} pointerEvents="box-none">
-            <SleepTimerCapsule />
-          </View>
-          <View style={styles.sourceBadgeOverlay} pointerEvents="none">
-            <PlaybackSourceBadge />
-          </View>
-        </View>
+        <PanGestureHandler
+          onGestureEvent={heroGestureHandler}
+          activeOffsetX={[-15, 15]}
+          activeOffsetY={[-15, 15]}
+        >
+          <Animated.View style={[styles.heroImageWrap, { width: heroSize, height: heroSize }, heroAnimatedStyle]}>
+            <CachedImage
+              coverArtId={songCoverArtId}
+              size={HERO_COVER_SIZE}
+              style={styles.heroImage}
+              resizeMode="cover"
+            />
+            <View style={styles.sleepCapsuleOverlay} pointerEvents="box-none">
+              <SleepTimerCapsule />
+            </View>
+            <View style={styles.sourceBadgeOverlay} pointerEvents="none">
+              <PlaybackSourceBadge />
+            </View>
+          </Animated.View>
+        </PanGestureHandler>
       </View>
 
       {/* Track info */}

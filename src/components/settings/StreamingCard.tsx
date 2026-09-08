@@ -32,9 +32,11 @@ function formatLabelFor(value: StreamFormat, t: (key: string) => string): string
 export function StreamingCard() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const maxBitRate = playbackSettingsStore((s) => s.maxBitRate);
+  const maxBitRateWifi = playbackSettingsStore((s) => s.maxBitRateWifi ?? s.maxBitRate);
+  const maxBitRateCellular = playbackSettingsStore((s) => s.maxBitRateCellular);
   const streamFormat = playbackSettingsStore((s) => s.streamFormat);
-  const setMaxBitRate = playbackSettingsStore((s) => s.setMaxBitRate);
+  const setMaxBitRateWifi = playbackSettingsStore((s) => s.setMaxBitRateWifi);
+  const setMaxBitRateCellular = playbackSettingsStore((s) => s.setMaxBitRateCellular);
 
   const options: DropdownOption<MaxBitRate>[] = useMemo(
     () => BITRATE_LABEL_KEYS.map((o) => ({ value: o.value, label: t(o.labelKey) })),
@@ -46,10 +48,16 @@ export function StreamingCard() {
       <SettingsSectionTitle>{t('streaming')}</SettingsSectionTitle>
       <View style={[settingsStyles.card, { backgroundColor: colors.card }]}>
         <DropdownRow
-          label={t('maxBitrate')}
-          value={maxBitRate as MaxBitRate}
+          label={t('maxBitrateWifi', { defaultValue: 'Max bitrate (Wi-Fi)' })}
+          value={maxBitRateWifi as MaxBitRate}
           options={options}
-          onChange={setMaxBitRate}
+          onChange={setMaxBitRateWifi}
+        />
+        <DropdownRow
+          label={t('maxBitrateCellular', { defaultValue: 'Max bitrate (Mobile data)' })}
+          value={maxBitRateCellular as MaxBitRate}
+          options={options}
+          onChange={setMaxBitRateCellular}
         />
         <Pressable
           onPress={() => streamFormatSheetStore.getState().show('stream')}

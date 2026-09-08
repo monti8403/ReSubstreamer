@@ -21,12 +21,14 @@ export interface ConnectivityState {
   isServerReachable: boolean;
   bannerState: BannerState;
   failoverPrompt: FailoverPrompt | null;
+  connectionType: string;
 
   setHasConnection: (reachable: boolean) => void;
   setServerReachable: (reachable: boolean) => void;
   setBannerState: (state: BannerState) => void;
   setFailoverPrompt: (prompt: FailoverPrompt) => void;
   clearFailoverPrompt: () => void;
+  setConnectionType: (connectionType: string) => void;
 }
 
 export const connectivityStore = create<ConnectivityState>()((set) => ({
@@ -34,10 +36,12 @@ export const connectivityStore = create<ConnectivityState>()((set) => ({
   isServerReachable: true,
   bannerState: 'hidden',
   failoverPrompt: null,
+  connectionType: 'wifi',
 
   setHasConnection: (reachable) => set({ hasConnection: reachable }),
   setServerReachable: (reachable) => set({ isServerReachable: reachable }),
   setBannerState: (bannerState) => set({ bannerState }),
   setFailoverPrompt: (failoverPrompt) => set({ failoverPrompt }),
   clearFailoverPrompt: () => set({ failoverPrompt: null }),
+  setConnectionType: (connectionType) => set({ connectionType }),
 }));

@@ -20,7 +20,7 @@ import i18n from '../i18n/i18n';
 
 import { authStore } from '../store/authStore';
 import { offlineModeStore } from '../store/offlineModeStore';
-import { FORMAT_PRESETS, playbackSettingsStore, type StreamFormat, type MaxBitRate } from '../store/playbackSettingsStore';
+import { FORMAT_PRESETS, getStreamingMaxBitRate, playbackSettingsStore, type StreamFormat, type MaxBitRate } from '../store/playbackSettingsStore';
 import { serverInfoStore, type ServerInfo } from '../store/serverInfoStore';
 import { supports } from './serverCapabilityService';
 
@@ -318,9 +318,10 @@ export function getStreamUrl(trackId: string): string | null {
   applyUrlAuth(params, username);
 
   // Apply playback settings
-  const { maxBitRate, streamFormat, estimateContentLength } =
+  const { streamFormat, estimateContentLength } =
     playbackSettingsStore.getState();
-  applyFormatAndBitrate(params, streamFormat, maxBitRate);
+  const effectiveMaxBitRate = getStreamingMaxBitRate();
+  applyFormatAndBitrate(params, streamFormat, effectiveMaxBitRate);
   if (estimateContentLength) {
     params.set('estimateContentLength', 'true');
   }

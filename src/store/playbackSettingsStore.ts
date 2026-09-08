@@ -2,10 +2,20 @@ import { Platform } from 'react-native';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
+import { connectivityStore } from './connectivityStore';
 import { kvStorage } from './persistence';
 import { type StreamFormat, type MaxBitRate } from '../types/audio';
 
 export type { StreamFormat, MaxBitRate } from '../types/audio';
+
+export function getStreamingMaxBitRate(): MaxBitRate {
+  const state = playbackSettingsStore.getState();
+  const connType = connectivityStore.getState().connectionType;
+  if (connType === 'cellular') {
+    return state.maxBitRateCellular;
+  }
+  return state.maxBitRateWifi ?? state.maxBitRate;
+}
 
 /**
  * Codec group identifier — presets sharing the same group are visually
@@ -132,8 +142,12 @@ export type ReplayGainModeSetting = (typeof REPLAY_GAIN_MODES)[number];
 export const LOOKAHEAD_MAX_CACHE_MB = 512;
 
 export interface PlaybackSettingsState {
-  /** Maximum bitrate for streaming. null = no limit (server default). */
+  /** Maximum bitrate for streaming (legacy/fallback). null = no limit (server default). */
   maxBitRate: MaxBitRate;
+  /** Maximum bitrate for streaming over Wi-Fi. null = no limit. */
+  maxBitRateWifi: MaxBitRate;
+  /** Maximum bitrate for streaming over cellular/mobile data. null = no limit. */
+  maxBitRateCellular: MaxBitRate;
   /** Stream format. 'raw' = original format, 'mp3' = transcode to MP3. */
   streamFormat: StreamFormat;
   /** Whether the server should estimate and set Content-Length headers. */
@@ -181,6 +195,8 @@ export interface PlaybackSettingsState {
   replayGainMode: ReplayGainModeSetting;
 
   setMaxBitRate: (bitRate: MaxBitRate) => void;
+  setMaxBitRateWifi: (bitRate: MaxBitRate) => void;
+  setMaxBitRateCellular: (bitRate: MaxBitRate) => void;
   setStreamFormat: (format: StreamFormat) => void;
   setEstimateContentLength: (enabled: boolean) => void;
   setRepeatMode: (mode: RepeatModeSetting) => void;
@@ -226,6 +242,8 @@ export const playbackSettingsStore = create<PlaybackSettingsState>()(
   persist(
     (set) => ({
       maxBitRate: null,
+      maxBitRateWifi: null,
+      maxBitRateCellular: 256,
       streamFormat: 'raw',
       estimateContentLength: Platform.OS === 'android',
       repeatMode: 'off',
@@ -246,7 +264,9 @@ export const playbackSettingsStore = create<PlaybackSettingsState>()(
       crossfadeDurationMs: 5000,
       replayGainMode: 'off',
 
-      setMaxBitRate: (maxBitRate) => set({ maxBitRate }),
+      setMaxBitRate: (maxBitRate) => set({ maxBitRate, maxBitRateWifi: maxBitRate }),
+      setMaxBitRateWifi: (maxBitRateWifi) => set({ maxBitRateWifi, maxBitRate: maxBitRateWifi }),
+      setMaxBitRateCellular: (maxBitRateCellular) => set({ maxBitRateCellular }),
       setStreamFormat: (streamFormat) => set({ streamFormat: normalizeFormat(streamFormat) }),
       setEstimateContentLength: (estimateContentLength) => set({ estimateContentLength }),
       setRepeatMode: (repeatMode) => set({ repeatMode }),
@@ -274,6 +294,8 @@ export const playbackSettingsStore = create<PlaybackSettingsState>()(
       storage: createJSONStorage(() => kvStorage),
       partialize: (state) => ({
         maxBitRate: state.maxBitRate,
+        maxBitRateWifi: state.maxBitRateWifi,
+        maxBitRateCellular: state.maxBitRateCellular,
         streamFormat: state.streamFormat,
         estimateContentLength: state.estimateContentLength,
         repeatMode: state.repeatMode,

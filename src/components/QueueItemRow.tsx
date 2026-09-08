@@ -1,6 +1,8 @@
 import { memo, useCallback, useMemo } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import Ionicons from '@react-native-vector-icons/ionicons/static';
+import { useReorderableDrag } from 'react-native-reorderable-list';
 
 import { CachedImage } from './CachedImage';
 import { NowPlayingIndicator } from './NowPlayingIndicator';
@@ -10,9 +12,8 @@ import { useDownloadStatus } from '../hooks/useDownloadStatus';
 import { useIsStarred } from '../hooks/useIsStarred';
 import { useRating } from '../hooks/useRating';
 import { useSongCoverArt } from '../hooks/useSongCoverArt';
-import { removeItemFromQueue, toggleStar } from '../services/moreOptionsService';
+import { moveQueueItemToPlayNext, removeItemFromQueue } from '../services/moreOptionsService';
 import { type Child } from '../services/subsonicService';
-import { addToPlaylistStore } from '../store/addToPlaylistStore';
 import { offlineModeStore } from '../store/offlineModeStore';
 import { formatTrackDuration } from '../utils/formatters';
 
@@ -33,7 +34,7 @@ export interface QueueItemRowProps {
   track: Child;
   index: number;
   isActive: boolean;
-  colors: Pick<ThemeColors, 'textPrimary' | 'textSecondary' | 'primary' | 'border' | 'red'>;
+  colors: Pick<ThemeColors, 'textPrimary' | 'textSecondary' | 'primary' | 'border' | 'red' | 'green'>;
   onPress: (index: number) => void;
   onLongPress?: (track: Child) => void;
 }
@@ -50,6 +51,8 @@ export const QueueItemRow = memo(function QueueItemRow({
   onPress,
   onLongPress,
 }: QueueItemRowProps) {
+  const drag = useReorderableDrag();
+
   const handlePress = useCallback(() => {
     onPress(index);
   }, [index, onPress]);
@@ -69,23 +72,36 @@ export const QueueItemRow = memo(function QueueItemRow({
     removeItemFromQueue(index);
   }, [index]);
 
-  const handleToggleStar = useCallback(() => {
-    toggleStar('song', track.id);
-  }, [track.id]);
-
-  const handleAddToPlaylist = useCallback(() => {
-    addToPlaylistStore.getState().showSong(track);
-  }, [track]);
+  const handlePlayNext = useCallback(() => {
+    void moveQueueItemToPlayNext(index);
+  }, [index]);
 
   const titleColor = isActive ? colors.primary : colors.textPrimary;
   const subtitleColor = isActive ? colors.primary : colors.textSecondary;
   const durationText =
     track.duration != null ? formatTrackDuration(track.duration) : '—';
 
+  // Swipe RIGHT → Play Next (green, shows after current track)
   const rightActions: SwipeAction[] = useMemo(
+    () =>
+      isActive
+        ? []
+        : [
+            {
+              icon: 'play-skip-forward-outline' as const,
+              color: colors.green,
+              label: t('playNext', { defaultValue: 'Play next' }),
+              onPress: handlePlayNext,
+            },
+          ],
+    [isActive, handlePlayNext, colors.green, t],
+  );
+
+  // Swipe LEFT → Remove from queue (red)
+  const leftActions: SwipeAction[] = useMemo(
     () => [
       {
-        icon: 'trash-outline',
+        icon: 'trash-outline' as const,
         color: colors.red,
         label: t('remove'),
         onPress: handleRemove,
@@ -95,30 +111,16 @@ export const QueueItemRow = memo(function QueueItemRow({
     [colors.red, handleRemove, t],
   );
 
-  const leftActions: SwipeAction[] = useMemo(
-    () =>
-      offlineMode
-        ? []
-        : [
-            {
-              icon: 'playlist-plus',
-              iconFamily: 'mdi' as const,
-              color: colors.primary,
-              label: t('playlist'),
-              onPress: handleAddToPlaylist,
-            },
-            {
-              icon: starred ? 'heart' : 'heart-outline',
-              color: colors.red,
-              label: starred ? t('remove') : t('add'),
-              onPress: handleToggleStar,
-            },
-          ],
-    [starred, colors.red, colors.primary, handleToggleStar, handleAddToPlaylist, offlineMode, t],
-  );
-
   return (
-    <SwipeableRow rightActions={rightActions} leftActions={leftActions} enableFullSwipeRight enableFullSwipeLeft={!offlineMode} restingBackgroundColor="transparent" onPress={handlePress} onLongPress={onLongPress ? handleLongPress : undefined}>
+    <SwipeableRow
+      rightActions={rightActions}
+      leftActions={leftActions}
+      enableFullSwipeRight={!isActive}
+      enableFullSwipeLeft
+      restingBackgroundColor="transparent"
+      onPress={handlePress}
+      onLongPress={onLongPress ? handleLongPress : undefined}
+    >
       <View style={[styles.row, { borderBottomColor: colors.border }]}>
         {/* Cover art with now-playing overlay */}
         <View style={styles.coverWrap}>
@@ -135,9 +137,7 @@ export const QueueItemRow = memo(function QueueItemRow({
           )}
         </View>
 
-        {/* Track info — title + duration on line 1, artist + status
-            icons on line 2. Mirrors the TrackRow layout so detail-view
-            and play-queue rows have the same shape. */}
+        {/* Track info */}
         <View style={styles.info}>
           <View style={styles.line}>
             <Text
@@ -162,8 +162,6 @@ export const QueueItemRow = memo(function QueueItemRow({
                 {track.artist}
               </Text>
             ) : (
-              // Keep the line height stable when artist is missing so the
-              // status icons don't shift up onto the title line.
               <View style={styles.artistPlaceholder} />
             )}
             <RowMetaLine
@@ -178,6 +176,19 @@ export const QueueItemRow = memo(function QueueItemRow({
             />
           </View>
         </View>
+
+        {/* Drag handle */}
+        <Pressable
+          onPressIn={drag}
+          hitSlop={8}
+          style={styles.dragHandle}
+        >
+          <Ionicons
+            name="reorder-three-outline"
+            size={24}
+            color={colors.textSecondary}
+          />
+        </Pressable>
       </View>
     </SwipeableRow>
   );
@@ -194,6 +205,10 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  dragHandle: {
+    marginLeft: 8,
+    opacity: 0.5,
   },
   coverWrap: {
     width: COVER_SIZE,

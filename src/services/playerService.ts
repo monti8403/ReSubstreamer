@@ -909,6 +909,89 @@ export async function removeFromQueue(index: number): Promise<void> {
 }
 
 /**
+ * Move a track from its current queue index to immediately after the active
+ * track ("Play Next"). No-op when the track is already the next one.
+ */
+export async function moveQueueItemToPlayNext(fromIndex: number): Promise<void> {
+  await awaitHydration();
+  if (fromIndex < 0 || fromIndex >= currentChildQueue.length) return;
+
+  const currentIndex = playerStore.getState().currentTrackIndex ?? 0;
+  const targetPosition = Math.min(currentIndex + 1, currentChildQueue.length - 1);
+
+  // Already in the right position
+  if (fromIndex === targetPosition) return;
+
+  const child = currentChildQueue[fromIndex];
+
+  // Remove from current position
+  if (currentChildQueue.length === 1) return;
+  await tp.removeFromQueue([fromIndex]);
+  trackPlaylistMap.delete(child.id);
+  currentChildQueue = currentChildQueue.filter((_, i) => i !== fromIndex);
+  playerStore.getState().setQueue(currentChildQueue);
+
+  // After removal, re-compute based on new current index from native engine
+  const newCurrentIndex = tp.getCurrentTrackIndex();
+  const newInsertBefore = Math.min((newCurrentIndex >= 0 ? newCurrentIndex : 0) + 1, currentChildQueue.length);
+
+  // Re-build a single-track RNQP entry and insert it
+  await waitForTrackMapsReady();
+  await ensureCoverArtAuth();
+  const { rnTracks, filteredQueue: playable } = await buildPlayableQueue([child]);
+  if (rnTracks.length > 0) {
+    await tp.addToQueue(rnTracks, newInsertBefore);
+    for (const c of playable) {
+      playerStore.getState().addQueueFormat(c.id, stampQueueFormat(c));
+    }
+    currentChildQueue.splice(newInsertBefore, 0, child);
+    playerStore.getState().setQueue([...currentChildQueue]);
+  }
+
+  const finalIndex = tp.getCurrentTrackIndex();
+  persistQueue(currentChildQueue, finalIndex >= 0 ? finalIndex : 0);
+}
+
+/**
+ * Reorder a track in the play queue from `fromIndex` to `toIndex`.
+ */
+export async function reorderQueue(fromIndex: number, toIndex: number): Promise<void> {
+  await awaitHydration();
+  if (
+    fromIndex < 0 ||
+    fromIndex >= currentChildQueue.length ||
+    toIndex < 0 ||
+    toIndex >= currentChildQueue.length ||
+    fromIndex === toIndex
+  ) {
+    return;
+  }
+
+  const child = currentChildQueue[fromIndex];
+  const newQueue = [...currentChildQueue];
+  const [removed] = newQueue.splice(fromIndex, 1);
+  newQueue.splice(toIndex, 0, removed);
+  currentChildQueue = newQueue;
+  playerStore.getState().setQueue(currentChildQueue);
+
+  // Sync with native player
+  await tp.removeFromQueue([fromIndex]);
+  await waitForTrackMapsReady();
+  await ensureCoverArtAuth();
+  const { rnTracks } = await buildPlayableQueue([child]);
+  if (rnTracks.length > 0) {
+    await tp.addToQueue(rnTracks, toIndex);
+  }
+
+  const activeIndex = tp.getCurrentTrackIndex();
+  playerStore.getState().setCurrentTrack(
+    playerStore.getState().currentTrack,
+    activeIndex >= 0 ? activeIndex : null,
+  );
+  persistQueue(currentChildQueue, activeIndex >= 0 ? activeIndex : 0);
+}
+
+/**
  * Remove all non-downloaded tracks from the queue (called when entering
  * offline mode). Iterates in reverse to avoid index shifting; clears the
  * queue if nothing remains.

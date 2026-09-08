@@ -263,6 +263,9 @@ function handleNetInfoChange(state: NetInfoState): void {
   // server is reachable. `isConnected` only answers "is there a network at all".
   const connected = state.isConnected ?? true;
   connectivityStore.getState().setHasConnection(connected);
+  if (state.type) {
+    connectivityStore.getState().setConnectionType(state.type);
+  }
 
   // WiFi emits frequent events for signal-strength / BSSID-roaming changes
   // that don't alter connectivity. Re-ping only when isConnected / type

@@ -21,7 +21,7 @@ import {
   enqueueSongDownload as enqueueSongDownloadService,
   removeCachedAlbumSong as removeCachedAlbumSongService,
 } from './musicCacheService';
-import { addToQueue, playSongNext, playTrack, removeFromQueue } from './playerService';
+import { addToQueue, moveQueueItemToPlayNext as _moveQueueItemToPlayNext, playSongNext, playTrack, removeFromQueue, reorderQueue as _reorderQueue } from './playerService';
 import {
   createNewPlaylist,
   getAlbum,
@@ -164,6 +164,20 @@ export async function addPlaylistToQueue(playlist: Playlist): Promise<void> {
  */
 export async function removeItemFromQueue(index: number): Promise<void> {
   await removeFromQueue(index);
+}
+
+/**
+ * Move a queue item to immediately after the currently playing track ("Play Next").
+ */
+export async function moveQueueItemToPlayNext(index: number): Promise<void> {
+  await _moveQueueItemToPlayNext(index);
+}
+
+/**
+ * Reorder a queue item from fromIndex to toIndex.
+ */
+export async function reorderQueue(fromIndex: number, toIndex: number): Promise<void> {
+  await _reorderQueue(fromIndex, toIndex);
 }
 
 /* ------------------------------------------------------------------ */

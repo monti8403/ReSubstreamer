@@ -11,7 +11,7 @@ import { type EffectiveFormat } from '../types/audio';
 import { completeSongFromCache, musicCacheStore } from '../store/musicCacheStore';
 import { offlineModeStore } from '../store/offlineModeStore';
 import { imageCacheDiagnosticsStore } from '../store/imageCacheDiagnosticsStore';
-import { playbackSettingsStore, type RepeatModeSetting } from '../store/playbackSettingsStore';
+import { getStreamingMaxBitRate, playbackSettingsStore, type RepeatModeSetting } from '../store/playbackSettingsStore';
 import { type PlaybackStatus } from '../store/playerStore';
 import { resolveEffectiveFormat } from '../utils/effectiveFormat';
 import { resolveSongCoverArt } from '../hooks/useSongCoverArt';
@@ -69,14 +69,15 @@ export function stampQueueFormat(child: Child): EffectiveFormat {
     };
   }
 
-  const { streamFormat, maxBitRate } = playbackSettingsStore.getState();
+  const { streamFormat } = playbackSettingsStore.getState();
+  const effectiveMaxBitRate = getStreamingMaxBitRate();
   return resolveEffectiveFormat({
     sourceSuffix: child.suffix,
     sourceBitRate: child.bitRate,
     sourceBitDepth: child.bitDepth,
     sourceSamplingRate: child.samplingRate,
     formatSetting: streamFormat,
-    bitRateSetting: maxBitRate,
+    bitRateSetting: effectiveMaxBitRate,
   });
 }
 

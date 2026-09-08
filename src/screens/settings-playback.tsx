@@ -74,6 +74,8 @@ export function SettingsPlaybackScreen() {
       onConfirm: () => {
         const s = playbackSettingsStore.getState();
         s.setMaxBitRate(null);
+        s.setMaxBitRateWifi(null);
+        s.setMaxBitRateCellular(256);
         s.setStreamFormat('raw');
         s.setEstimateContentLength(false);
         s.setDownloadMaxBitRate(320);
