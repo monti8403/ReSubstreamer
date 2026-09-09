@@ -46,3 +46,14 @@
 # JSSE / SSL — keep our custom TrustManager wiring (expo-ssl-trust module)
 -keep class * implements javax.net.ssl.X509TrustManager { *; }
 -keep class * implements javax.net.ssl.HostnameVerifier { *; }
+
+# SoLoader
+-keep class com.facebook.soloader.** { *; }
+-dontwarn com.facebook.soloader.**
+
+# React Native feature flags
+-keep class com.facebook.react.internal.featureflags.** { *; }
+
+# Margelo Nitro Modules / Queue Player
+-keep class com.margelo.nitro.** { *; }
+-dontwarn com.margelo.nitro.**

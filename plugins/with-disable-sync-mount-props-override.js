@@ -26,11 +26,14 @@ const { withMainApplication } = require('expo/config-plugins');
 
 const IMPORT_MARKER = 'com.facebook.react.internal.featureflags.ReactNativeFeatureFlagsDefaults';
 const IMPORTS =
+  'import com.facebook.soloader.SoLoader\n' +
   'import com.facebook.react.internal.featureflags.ReactNativeFeatureFlags\n' +
   'import com.facebook.react.internal.featureflags.ReactNativeFeatureFlagsDefaults\n';
 
 const METHOD_MARKER = 'overrideBySynchronousMountPropsAtMountingAndroid';
 const OVERRIDE_BLOCK =
+  '    // Initialize SoLoader before accessing ReactNativeFeatureFlags C++ JNI\n' +
+  '    SoLoader.init(this, false)\n' +
   '    // Disable RN 0.86 synchronous-mount-props override (default-on) — its\n' +
   '    // updateProps merge asserts transform is Array / opacity is Number and\n' +
   '    // crashes when a Reanimated-animated view gets a mismatched props update\n' +
