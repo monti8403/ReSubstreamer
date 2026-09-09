@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "ReSubstreamer",
-    "slug": "resubstreamer",
+    "slug": "substreamer",
     "version": "8.0.91",
     "scheme": "resubstreamer",
     "platforms": [
