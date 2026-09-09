@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "substreamer",
-    "slug": "substreamer",
+    "name": "ReSubstreamer",
+    "slug": "resubstreamer",
     "version": "8.0.91",
-    "scheme": "substreamer",
+    "scheme": "resubstreamer",
     "platforms": [
       "android",
       "ios"
@@ -12,7 +12,7 @@
     "icon": "./src/assets/icon.png",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "bundleIdentifier": "com.ghenry22.substream2",
+      "bundleIdentifier": "com.resubstreamer",
       "buildNumber": "176",
       "supportsTablet": true,
       "infoPlist": {
@@ -23,7 +23,7 @@
           "NSAllowsArbitraryLoads": true
         },
         "ITSAppUsesNonExemptEncryption": false,
-        "NSLocalNetworkUsageDescription": "Substreamer uses your local network to connect to your self-hosted music server.",
+        "NSLocalNetworkUsageDescription": "ReSubstreamer uses your local network to connect to your self-hosted music server.",
         "NSBonjourServices": [
           "_googlecast._tcp",
           "_CC1AD845._googlecast._tcp"
@@ -31,11 +31,11 @@
         "NSLocationWhenInUseUsageDescription": "Location access is needed to detect your WiFi network name for automatic offline mode switching.",
         "INAlternativeAppNames": [
           {
-            "INAlternativeAppName": "Substreamer",
-            "INAlternativeAppNamePronunciationHint": "Sub Streamer"
+            "INAlternativeAppName": "ReSubstreamer",
+            "INAlternativeAppNamePronunciationHint": "Re Sub Streamer"
           },
           {
-            "INAlternativeAppName": "Sub Streamer"
+            "INAlternativeAppName": "ReSubstreamer"
           }
         ]
       },
@@ -56,7 +56,7 @@
       ],
       "predictiveBackGestureEnabled": false,
       "versionCode": 80000176,
-      "package": "com.ghenry22.substream2"
+      "package": "com.resubstreamer"
     },
     "web": {
       "favicon": "./src/assets/favicon.png"

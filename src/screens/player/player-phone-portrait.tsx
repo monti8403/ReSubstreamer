@@ -17,13 +17,12 @@ import Animated, {
   Easing,
   interpolate,
   runOnJS,
-  useAnimatedGestureHandler,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { PanGestureHandler, Pressable as GHPressable, type PanGestureHandlerGestureEvent } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, Pressable as GHPressable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 
@@ -503,35 +502,43 @@ const PlayerContent = memo(function PlayerContent({
     });
   }, [canSkipNext, canSkipPrevious, windowWidth, heroTranslateX]);
 
-  const heroGestureHandler = useAnimatedGestureHandler<PanGestureHandlerGestureEvent, { startX: number }>({
-    onStart: (_, ctx) => {
-      ctx.startX = heroTranslateX.value;
-    },
-    onActive: (event, ctx) => {
-      if (Math.abs(event.translationX) > Math.abs(event.translationY)) {
-        heroTranslateX.value = ctx.startX + event.translationX;
-      }
-    },
-    onEnd: (event) => {
-      // Swipe up → open queue
-      if (event.translationY < SWIPE_V_THRESHOLD && Math.abs(event.translationX) < Math.abs(event.translationY)) {
+  const contextX = useSharedValue(0);
+
+  const heroPanGesture = useMemo(() => {
+    return Gesture.Pan()
+      .activeOffsetX([-15, 15])
+      .activeOffsetY([-15, 15])
+      .onStart(() => {
+        'worklet';
+        contextX.value = heroTranslateX.value;
+      })
+      .onUpdate((event) => {
+        'worklet';
+        if (Math.abs(event.translationX) > Math.abs(event.translationY)) {
+          heroTranslateX.value = contextX.value + event.translationX;
+        }
+      })
+      .onEnd((event) => {
+        'worklet';
+        // Swipe up → open queue
+        if (event.translationY < SWIPE_V_THRESHOLD && Math.abs(event.translationX) < Math.abs(event.translationY)) {
+          heroTranslateX.value = withSpring(0);
+          runOnJS(onSwitchToQueue)();
+          return;
+        }
+        // Swipe right → previous
+        if (event.translationX > SWIPE_H_THRESHOLD && Math.abs(event.translationX) > Math.abs(event.translationY)) {
+          runOnJS(animateAndSkip)('prev');
+          return;
+        }
+        // Swipe left → next
+        if (event.translationX < -SWIPE_H_THRESHOLD && Math.abs(event.translationX) > Math.abs(event.translationY)) {
+          runOnJS(animateAndSkip)('next');
+          return;
+        }
         heroTranslateX.value = withSpring(0);
-        runOnJS(onSwitchToQueue)();
-        return;
-      }
-      // Swipe right → previous
-      if (event.translationX > SWIPE_H_THRESHOLD && Math.abs(event.translationX) > Math.abs(event.translationY)) {
-        runOnJS(animateAndSkip)('prev');
-        return;
-      }
-      // Swipe left → next
-      if (event.translationX < -SWIPE_H_THRESHOLD && Math.abs(event.translationX) > Math.abs(event.translationY)) {
-        runOnJS(animateAndSkip)('next');
-        return;
-      }
-      heroTranslateX.value = withSpring(0);
-    },
-  });
+      });
+  }, [animateAndSkip, heroTranslateX, contextX, onSwitchToQueue]);
 
   const heroAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: heroTranslateX.value }],
@@ -603,11 +610,7 @@ const PlayerContent = memo(function PlayerContent({
       {Platform.OS === 'ios' && <View style={{ height: insets.top + HEADER_BAR_HEIGHT }} />}
       {/* Hero cover art */}
       <View style={[styles.hero, { paddingBottom: m.heroPadBottom }]}>
-        <PanGestureHandler
-          onGestureEvent={heroGestureHandler}
-          activeOffsetX={[-15, 15]}
-          activeOffsetY={[-15, 15]}
-        >
+        <GestureDetector gesture={heroPanGesture}>
           <Animated.View style={[styles.heroImageWrap, { width: heroSize, height: heroSize }, heroAnimatedStyle]}>
             <CachedImage
               coverArtId={songCoverArtId}
@@ -622,7 +625,7 @@ const PlayerContent = memo(function PlayerContent({
               <PlaybackSourceBadge />
             </View>
           </Animated.View>
-        </PanGestureHandler>
+        </GestureDetector>
       </View>
 
       {/* Track info */}

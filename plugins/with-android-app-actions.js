@@ -27,7 +27,7 @@ const { withAndroidManifest, withDangerousMod } = require('expo/config-plugins')
 const fs = require('fs');
 const path = require('path');
 
-const SCHEME = 'substreamer';
+const SCHEME = 'resubstreamer';
 
 const SHORTCUTS_XML = `<?xml version="1.0" encoding="utf-8"?>
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">

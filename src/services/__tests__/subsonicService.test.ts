@@ -17,6 +17,7 @@ jest.mock('../../store/offlineModeStore', () => ({
 }));
 jest.mock('../../store/playbackSettingsStore', () => ({
   playbackSettingsStore: { getState: jest.fn() },
+  getStreamingMaxBitRate: jest.fn(() => null),
   FORMAT_PRESETS: [
     { value: 'raw',      labelKey: 'formatOriginal',  highBitrate: null, lossless: true  },
     { value: 'mp3',      labelKey: 'formatMp3',       highBitrate: 320,  lossless: false },

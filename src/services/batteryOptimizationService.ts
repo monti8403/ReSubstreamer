@@ -26,7 +26,7 @@ export async function checkBatteryOptimization(): Promise<boolean> {
  */
 export async function requestBatteryOptimizationExemption(): Promise<void> {
   if (Platform.OS !== 'android') return;
-  const packageName = Constants.expoConfig?.android?.package ?? 'com.ghenry22.substream2';
+  const packageName = Constants.expoConfig?.android?.package ?? 'com.resubstreamer';
   try {
     await IntentLauncher.startActivityAsync(
       IntentLauncher.ActivityAction.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
