@@ -1,7 +1,7 @@
 import Ionicons from "@react-native-vector-icons/ionicons/static";
 import MaterialCommunityIcons from "@react-native-vector-icons/material-design-icons/static";
 import * as Haptics from '@/utils/haptics';
-import { memo, useCallback, useMemo, useRef } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Animated as RNAnimated, Pressable, StyleSheet, View } from 'react-native';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import Animated, {
@@ -183,14 +183,17 @@ export const SwipeableRow = memo(function SwipeableRow({
         fullSwipeRightRef.current
       ) {
         fullSwipeRightRef.current = false;
-        rightActions[0]?.onPress();
-        pendingFullSwipeCloseRef.current = true;
-        setTimeout(() => {
-          if (pendingFullSwipeCloseRef.current) {
-            pendingFullSwipeCloseRef.current = false;
-            swipeableRef.current?.close();
-          }
-        }, FULL_SWIPE_CLOSE_TIMEOUT);
+        const action = rightActions[0];
+        action?.onPress();
+        if (!action?.removesRow) {
+          pendingFullSwipeCloseRef.current = true;
+          setTimeout(() => {
+            if (pendingFullSwipeCloseRef.current) {
+              pendingFullSwipeCloseRef.current = false;
+              swipeableRef.current?.close();
+            }
+          }, FULL_SWIPE_CLOSE_TIMEOUT);
+        }
         return;
       }
       if (
@@ -199,18 +202,30 @@ export const SwipeableRow = memo(function SwipeableRow({
         fullSwipeLeftRef.current
       ) {
         fullSwipeLeftRef.current = false;
-        leftActions[leftActions.length - 1]?.onPress();
-        pendingFullSwipeCloseRef.current = true;
-        setTimeout(() => {
-          if (pendingFullSwipeCloseRef.current) {
-            pendingFullSwipeCloseRef.current = false;
-            swipeableRef.current?.close();
-          }
-        }, FULL_SWIPE_CLOSE_TIMEOUT);
+        const action = leftActions[leftActions.length - 1];
+        action?.onPress();
+        if (!action?.removesRow) {
+          pendingFullSwipeCloseRef.current = true;
+          setTimeout(() => {
+            if (pendingFullSwipeCloseRef.current) {
+              pendingFullSwipeCloseRef.current = false;
+              swipeableRef.current?.close();
+            }
+          }, FULL_SWIPE_CLOSE_TIMEOUT);
+        }
       }
     },
     [enableFullSwipeRight, enableFullSwipeLeft, rightActions, leftActions],
   );
+
+  useEffect(() => {
+    return () => {
+      pendingFullSwipeCloseRef.current = false;
+      if (_activeRef === swipeableRef.current) {
+        _activeRef = null;
+      }
+    };
+  }, []);
 
   const handleSwipeableOpen = useCallback(() => {
     if (pendingFullSwipeCloseRef.current) {

@@ -923,19 +923,21 @@ export async function moveQueueItemToPlayNext(fromIndex: number): Promise<void> 
   if (fromIndex === targetPosition) return;
 
   const child = currentChildQueue[fromIndex];
+  if (currentChildQueue.length <= 1) return;
 
-  // Remove from current position
-  if (currentChildQueue.length === 1) return;
-  await tp.removeFromQueue([fromIndex]);
-  trackPlaylistMap.delete(child.id);
-  currentChildQueue = currentChildQueue.filter((_, i) => i !== fromIndex);
+  // Optimistically reorder in-memory queue atomically once
+  const newQueue = [...currentChildQueue];
+  const [moved] = newQueue.splice(fromIndex, 1);
+  const newInsertBefore = Math.min(
+    (currentIndex >= 0 ? currentIndex : 0) + 1,
+    newQueue.length,
+  );
+  newQueue.splice(newInsertBefore, 0, moved);
+  currentChildQueue = newQueue;
   playerStore.getState().setQueue(currentChildQueue);
 
-  // After removal, re-compute based on new current index from native engine
-  const newCurrentIndex = tp.getCurrentTrackIndex();
-  const newInsertBefore = Math.min((newCurrentIndex >= 0 ? newCurrentIndex : 0) + 1, currentChildQueue.length);
-
-  // Re-build a single-track RNQP entry and insert it
+  // Sync with native player in background
+  await tp.removeFromQueue([fromIndex]);
   await waitForTrackMapsReady();
   await ensureCoverArtAuth();
   const { rnTracks, filteredQueue: playable } = await buildPlayableQueue([child]);
@@ -944,8 +946,6 @@ export async function moveQueueItemToPlayNext(fromIndex: number): Promise<void> 
     for (const c of playable) {
       playerStore.getState().addQueueFormat(c.id, stampQueueFormat(c));
     }
-    currentChildQueue.splice(newInsertBefore, 0, child);
-    playerStore.getState().setQueue([...currentChildQueue]);
   }
 
   const finalIndex = tp.getCurrentTrackIndex();

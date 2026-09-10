@@ -60,6 +60,16 @@ export interface PlayerState {
   setTrackSource: (source: TrackSource | null) => void;
 }
 
+let _queueKeySeq = 0;
+
+export function ensureQueueKey(item: any): string {
+  if (!item) return '';
+  if (!item._queueKey) {
+    item._queueKey = `${item.id ?? 'track'}_${++_queueKeySeq}`;
+  }
+  return item._queueKey;
+}
+
 export const playerStore = create<PlayerState>()((set) => ({
   currentTrack: null,
   currentTrackIndex: null,
@@ -81,7 +91,12 @@ export const playerStore = create<PlayerState>()((set) => ({
       ...(track ? {} : { trackSource: null }),
     }),
   setPlaybackState: (playbackState) => set({ playbackState }),
-  setQueue: (queue) => set({ queue }),
+  setQueue: (queue) => {
+    for (let i = 0; i < queue.length; i++) {
+      ensureQueueKey(queue[i]);
+    }
+    set({ queue });
+  },
   setProgress: (position, duration, buffered) =>
     set((state) => ({
       position,

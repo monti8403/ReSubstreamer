@@ -92,6 +92,7 @@ export function PlayerPhonePortrait() {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const navigation = useNavigation();
   const router = useRouter();
   const currentTrack = playerStore((s) => s.currentTrack);
@@ -138,8 +139,6 @@ export function PlayerPhonePortrait() {
   const [activeTab, setActiveTab] = useState<PlayerTab>('player');
   const [mountedTabs, setMountedTabs] = useState<Set<PlayerTab>>(() => new Set(['player']));
 
-
-
   // Ensure tab is mounted when selected
   useEffect(() => {
     if (!mountedTabs.has(activeTab)) {
@@ -147,44 +146,130 @@ export function PlayerPhonePortrait() {
     }
   }, [activeTab, mountedTabs]);
 
-  /* ---- Tab crossfade animation ---- */
+  const ensureQueueMounted = useCallback(() => {
+    setMountedTabs((prev) => (prev.has('queue') ? prev : new Set(prev).add('queue')));
+    setVisibleTabs((prev) => (prev.has('queue') ? prev : new Set(prev).add('queue')));
+  }, []);
+
+  /* ---- Tab crossfade & drawer animations ---- */
   const playerOpacity = useSharedValue(1);
   const queueOpacity = useSharedValue(0);
+  const queueTranslateY = useSharedValue(windowHeight);
   const infoOpacity = useSharedValue(0);
   const lyricsOpacity = useSharedValue(0);
 
-  const opacityMap = useMemo(() => ({
-    player: playerOpacity,
-    queue: queueOpacity,
-    info: infoOpacity,
-    lyrics: lyricsOpacity,
-  }), [playerOpacity, queueOpacity, infoOpacity, lyricsOpacity]);
+  // Screen-level vertical swipe up: opens queue from ANYWHERE on player screen
+  const screenSwipeUpGesture = useMemo(() => {
+    return Gesture.Pan()
+      .activeOffsetY([-10, 0])
+      .failOffsetX([-30, 30])
+      .onStart(() => {
+        'worklet';
+        runOnJS(ensureQueueMounted)();
+      })
+      .onUpdate((event) => {
+        'worklet';
+        if (event.translationY < 0) {
+          queueTranslateY.value = Math.max(0, windowHeight + event.translationY);
+          queueOpacity.value = interpolate(
+            queueTranslateY.value,
+            [0, windowHeight],
+            [1, 0.4],
+          );
+        }
+      })
+      .onEnd((event) => {
+        'worklet';
+        if (event.translationY < -60 || event.velocityY < -450) {
+          queueTranslateY.value = withTiming(
+            0,
+            { duration: 240, easing: Easing.out(Easing.cubic) },
+            (finished) => {
+              if (finished) {
+                runOnJS(setActiveTab)('queue');
+              }
+            },
+          );
+          queueOpacity.value = withTiming(1, { duration: 180 });
+        } else {
+          queueTranslateY.value = withTiming(windowHeight, {
+            duration: 200,
+            easing: Easing.out(Easing.cubic),
+          });
+          queueOpacity.value = withTiming(0, { duration: 180 });
+        }
+      });
+  }, [windowHeight, ensureQueueMounted, queueTranslateY, queueOpacity]);
+
+  // Swipe down gesture to dismiss queue back to player
+  const queueSwipeDownGesture = useMemo(() => {
+    return Gesture.Pan()
+      .activeOffsetY([0, 10])
+      .failOffsetX([-30, 30])
+      .onUpdate((event) => {
+        'worklet';
+        if (event.translationY > 0) {
+          queueTranslateY.value = event.translationY;
+          queueOpacity.value = interpolate(
+            queueTranslateY.value,
+            [0, windowHeight],
+            [1, 0.4],
+          );
+        }
+      })
+      .onEnd((event) => {
+        'worklet';
+        if (event.translationY > 60 || event.velocityY > 450) {
+          queueTranslateY.value = withTiming(
+            windowHeight,
+            { duration: 240, easing: Easing.in(Easing.cubic) },
+            (finished) => {
+              if (finished) {
+                runOnJS(setActiveTab)('player');
+              }
+            },
+          );
+          queueOpacity.value = withTiming(0, { duration: 180 });
+        } else {
+          queueTranslateY.value = withTiming(0, {
+            duration: 200,
+            easing: Easing.out(Easing.cubic),
+          });
+          queueOpacity.value = withTiming(1, { duration: 180 });
+        }
+      });
+  }, [windowHeight, queueTranslateY, queueOpacity]);
 
   useEffect(() => {
     const config = { duration: TAB_FADE_DURATION, easing: TAB_FADE_EASING };
-    for (const [tab, opacity] of Object.entries(opacityMap)) {
-      opacity.value = withTiming(tab === activeTab ? 1 : 0, config);
-    }
-  }, [activeTab, opacityMap]);
+    playerOpacity.value = withTiming(activeTab === 'player' ? 1 : 0, config);
+    infoOpacity.value = withTiming(activeTab === 'info' ? 1 : 0, config);
+    lyricsOpacity.value = withTiming(activeTab === 'lyrics' ? 1 : 0, config);
 
-  // Track which tabs should be visible in the compositor. The active tab
-  // is always visible; other tabs remain visible during their fade-out and
-  // are hidden with `display: 'none'` once the fade completes. Without
-  // this, the last-declared panel (Lyrics) keeps bleeding through whatever
-  // tab is active — opacity alone doesn't remove a view from compositing.
+    if (activeTab === 'queue') {
+      queueTranslateY.value = withTiming(0, { duration: 280, easing: Easing.out(Easing.cubic) });
+      queueOpacity.value = withTiming(1, { duration: 200 });
+    } else {
+      queueTranslateY.value = withTiming(windowHeight, { duration: 240, easing: Easing.in(Easing.cubic) });
+      queueOpacity.value = withTiming(0, { duration: 240 });
+    }
+  }, [activeTab, windowHeight, playerOpacity, infoOpacity, lyricsOpacity, queueTranslateY, queueOpacity]);
+
+  // Track which tabs should be visible in the compositor.
   const [visibleTabs, setVisibleTabs] = useState<Set<PlayerTab>>(
     () => new Set([activeTab]),
   );
   useEffect(() => {
     setVisibleTabs((prev) => {
-      if (prev.has(activeTab) && prev.size === 1) return prev;
       const next = new Set(prev);
       next.add(activeTab);
+      if (activeTab === 'queue') next.add('player');
+      if (activeTab === 'player') next.add('queue');
       return next;
     });
     const timer = setTimeout(() => {
       setVisibleTabs(new Set([activeTab]));
-    }, TAB_FADE_DURATION + 50);
+    }, TAB_FADE_DURATION + 60);
     return () => clearTimeout(timer);
   }, [activeTab]);
 
@@ -194,7 +279,7 @@ export function PlayerPhonePortrait() {
   }));
   const queueAnimatedStyle = useAnimatedStyle(() => ({
     opacity: queueOpacity.value,
-    transform: [{ translateY: interpolate(queueOpacity.value, [0, 1], [TAB_SLIDE_DISTANCE, 0]) }],
+    transform: [{ translateY: queueTranslateY.value }],
   }));
   const infoAnimatedStyle = useAnimatedStyle(() => ({
     opacity: infoOpacity.value,
@@ -275,7 +360,7 @@ export function PlayerPhonePortrait() {
   );
 
   const keyExtractor = useCallback(
-    (item: Child, index: number) => `${item.id}-${index}`,
+    (item: Child) => (item as any)._queueKey || item.id,
     [],
   );
 
@@ -295,9 +380,10 @@ export function PlayerPhonePortrait() {
         handleShareQueue={handleShareQueue}
         shuffling={shuffling}
         queueLength={queue.length}
+        swipeDownGesture={queueSwipeDownGesture}
       />
     ),
-    [colors, handleClearQueue, handleShuffle, handleShareQueue, shuffling, queue.length],
+    [colors, handleClearQueue, handleShuffle, handleShareQueue, shuffling, queue.length, queueSwipeDownGesture],
   );
 
   const headerTopPadding = Platform.OS === 'ios'
@@ -358,22 +444,26 @@ export function PlayerPhonePortrait() {
             ]}
             pointerEvents={activeTab === 'player' ? 'auto' : 'none'}
           >
-            <PlayerContent
-              currentTrack={currentTrack}
-              colors={colors}
-              queueLoading={queueLoading}
-              handleSeek={handleSeek}
-              handleShuffle={handleShuffle}
-              shuffling={shuffling}
-              onSwitchToQueue={() => setActiveTab('queue')}
-            />
+            <GestureDetector gesture={screenSwipeUpGesture}>
+              <View style={{ flex: 1 }}>
+                <PlayerContent
+                  currentTrack={currentTrack}
+                  colors={colors}
+                  queueLoading={queueLoading}
+                  handleSeek={handleSeek}
+                  handleShuffle={handleShuffle}
+                  shuffling={shuffling}
+                  onSwitchToQueue={() => setActiveTab('queue')}
+                />
+              </View>
+            </GestureDetector>
           </Animated.View>
 
-          {/* Queue tab — below header */}
+          {/* Queue tab — below header, slides up as sheet */}
           <Animated.View
             style={[
               styles.tabPanel,
-              { top: headerTopPadding },
+              { top: headerTopPadding, zIndex: 10 },
               !visibleTabs.has('queue') && styles.hiddenTab,
               queueAnimatedStyle,
             ]}
@@ -463,8 +553,7 @@ interface PlayerContentProps {
   onSwitchToQueue: () => void;
 }
 
-const SWIPE_H_THRESHOLD = 60;   // px horizontal to commit a track skip
-const SWIPE_V_THRESHOLD = -80;  // px vertical (negative = up) to open queue
+const CAROUSEL_GAP = 22;
 
 const PlayerContent = memo(function PlayerContent({
   currentTrack,
@@ -473,7 +562,6 @@ const PlayerContent = memo(function PlayerContent({
   handleSeek,
   handleShuffle,
   shuffling,
-  onSwitchToQueue,
 }: PlayerContentProps) {
   const { t } = useTranslation();
   const songCoverArtId = useSongCoverArt(currentTrack);
@@ -487,63 +575,14 @@ const PlayerContent = memo(function PlayerContent({
   const currentTrackIndex = playerStore((s) => s.currentTrackIndex);
   const { canSkipNext, canSkipPrevious } = useCanSkip();
 
-  // Shared values for hero swipe animation
-  const heroTranslateX = useSharedValue(0);
-  const heroOpacity = useSharedValue(1);
+  // Active track index and adjacent track previews
+  const activeIndex = currentTrackIndex ?? 0;
+  const prevTrack = activeIndex > 0 ? queue[activeIndex - 1] : null;
+  const nextTrack = activeIndex < queue.length - 1 ? queue[activeIndex + 1] : null;
 
-  const animateAndSkip = useCallback((direction: 'next' | 'prev') => {
-    const canSkip = direction === 'next' ? canSkipNext : canSkipPrevious;
-    if (!canSkip) return;
-    const toX = direction === 'next' ? -windowWidth : windowWidth;
-    heroTranslateX.value = withTiming(toX, { duration: 200 }, () => {
-      runOnJS(direction === 'next' ? skipToNext : skipToPrevious)();
-      heroTranslateX.value = -toX;
-      heroTranslateX.value = withSpring(0, { damping: 18, stiffness: 200 });
-    });
-  }, [canSkipNext, canSkipPrevious, windowWidth, heroTranslateX]);
+  const prevCoverArtId = useSongCoverArt(prevTrack);
+  const nextCoverArtId = useSongCoverArt(nextTrack);
 
-  const contextX = useSharedValue(0);
-
-  const heroPanGesture = useMemo(() => {
-    return Gesture.Pan()
-      .activeOffsetX([-15, 15])
-      .activeOffsetY([-15, 15])
-      .onStart(() => {
-        'worklet';
-        contextX.value = heroTranslateX.value;
-      })
-      .onUpdate((event) => {
-        'worklet';
-        if (Math.abs(event.translationX) > Math.abs(event.translationY)) {
-          heroTranslateX.value = contextX.value + event.translationX;
-        }
-      })
-      .onEnd((event) => {
-        'worklet';
-        // Swipe up → open queue
-        if (event.translationY < SWIPE_V_THRESHOLD && Math.abs(event.translationX) < Math.abs(event.translationY)) {
-          heroTranslateX.value = withSpring(0);
-          runOnJS(onSwitchToQueue)();
-          return;
-        }
-        // Swipe right → previous
-        if (event.translationX > SWIPE_H_THRESHOLD && Math.abs(event.translationX) > Math.abs(event.translationY)) {
-          runOnJS(animateAndSkip)('prev');
-          return;
-        }
-        // Swipe left → next
-        if (event.translationX < -SWIPE_H_THRESHOLD && Math.abs(event.translationX) > Math.abs(event.translationY)) {
-          runOnJS(animateAndSkip)('next');
-          return;
-        }
-        heroTranslateX.value = withSpring(0);
-      });
-  }, [animateAndSkip, heroTranslateX, contextX, onSwitchToQueue]);
-
-  const heroAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: heroTranslateX.value }],
-    opacity: heroOpacity.value,
-  }));
   const error = playerStore((s) => s.error);
   const retrying = playerStore((s) => s.retrying);
   const queueLength = playerStore((s) => s.queue.length);
@@ -551,20 +590,12 @@ const PlayerContent = memo(function PlayerContent({
   const showSkipInterval = playbackSettingsStore((s) => s.showSkipIntervalButtons);
   const showSleepTimer = playbackSettingsStore((s) => s.showSleepTimerButton);
 
-  // Content-height budget (window minus header + top/bottom safe-area insets)
-  // and the portrait width drive the responsive tier: smaller art/controls/
-  // fonts on short OR narrow screens, and the secondary controls row is dropped
-  // on the smallest tier so the essential transport controls always stay above
-  // the nav bar AND fit horizontally (800×480 is narrow in portrait).
   const availableHeight = windowHeight - insets.top - insets.bottom - HEADER_BAR_HEIGHT;
   const m = useMemo(
     () => getPlayerSize(availableHeight, windowWidth),
     [availableHeight, windowWidth],
   );
 
-  // Clamp the centre transport cluster to the actual width so the shuffle/repeat
-  // side controls keep room and never overflow off-screen. Each side needs at
-  // least its icon plus a little breathing space.
   const transportWidth = useMemo(() => {
     const sideMin = m.sideIcon + 8;
     const maxCenter = windowWidth - 2 * HERO_PADDING - 2 * sideMin;
@@ -576,8 +607,7 @@ const PlayerContent = memo(function PlayerContent({
     return Math.max(120, Math.min(m.secondaryCenterWidth, maxCenter));
   }, [windowWidth, m.sideIcon, m.secondaryCenterWidth]);
 
-  // Shrink the hero to leave room for the controls; never below the tier floor.
-  // Scaled to ~90% of the fitted size to give the controls a little more room.
+  // Fitted hero size
   const heroSize = useMemo(() => {
     const naturalWidth = Math.min(windowWidth - 2 * HERO_PADDING, 464 - 2 * HERO_PADDING);
     const reserved = insets.top + HEADER_BAR_HEIGHT + insets.bottom + m.reserved;
@@ -585,6 +615,85 @@ const PlayerContent = memo(function PlayerContent({
     const fitted = Math.max(Math.min(naturalWidth, maxHero), m.heroFloor);
     return Math.round(fitted * 0.9);
   }, [windowHeight, windowWidth, insets.top, insets.bottom, m.reserved, m.heroFloor]);
+
+  const stepDistance = heroSize + CAROUSEL_GAP;
+
+  // Shared values for hero carousel swipe
+  const heroTranslateX = useSharedValue(0);
+  const contextX = useSharedValue(0);
+
+  const skipTrack = useCallback((direction: 'next' | 'prev') => {
+    if (direction === 'next') {
+      void skipToNext();
+    } else {
+      void skipToPrevious();
+    }
+  }, []);
+
+  const heroPanGesture = useMemo(() => {
+    return Gesture.Pan()
+      .activeOffsetX([-10, 10])
+      .failOffsetY([-15, 15])
+      .onStart(() => {
+        'worklet';
+        contextX.value = heroTranslateX.value;
+      })
+      .onUpdate((event) => {
+        'worklet';
+        let delta = event.translationX;
+        if (delta > 0 && !canSkipPrevious) {
+          delta *= 0.2;
+        } else if (delta < 0 && !canSkipNext) {
+          delta *= 0.2;
+        }
+        heroTranslateX.value = contextX.value + delta;
+      })
+      .onEnd((event) => {
+        'worklet';
+        const threshold = stepDistance * 0.22;
+        const velocity = event.velocityX;
+
+        // Swipe Left -> Next Track
+        if ((event.translationX < -threshold || velocity < -450) && canSkipNext) {
+          heroTranslateX.value = withTiming(
+            -stepDistance,
+            { duration: 180, easing: Easing.bezier(0.25, 0.1, 0.25, 1) },
+            (finished) => {
+              if (finished) {
+                runOnJS(skipTrack)('next');
+                heroTranslateX.value = 0;
+              }
+            },
+          );
+          return;
+        }
+
+        // Swipe Right -> Previous Track
+        if ((event.translationX > threshold || velocity > 450) && canSkipPrevious) {
+          heroTranslateX.value = withTiming(
+            stepDistance,
+            { duration: 180, easing: Easing.bezier(0.25, 0.1, 0.25, 1) },
+            (finished) => {
+              if (finished) {
+                runOnJS(skipTrack)('prev');
+                heroTranslateX.value = 0;
+              }
+            },
+          );
+          return;
+        }
+
+        // Return cleanly to 0 without bouncing
+        heroTranslateX.value = withTiming(0, {
+          duration: 180,
+          easing: Easing.out(Easing.cubic),
+        });
+      });
+  }, [stepDistance, canSkipNext, canSkipPrevious, skipTrack, contextX, heroTranslateX]);
+
+  const heroAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: heroTranslateX.value }],
+  }));
 
   const marqueeStyle = useMemo(
     () => [styles.trackTitle, { color: colors.textPrimary, fontSize: m.titleFont }],
@@ -608,23 +717,76 @@ const PlayerContent = memo(function PlayerContent({
           so use a fixed spacer to clear it. On Android the panel is
           already offset via top: headerTopPadding. */}
       {Platform.OS === 'ios' && <View style={{ height: insets.top + HEADER_BAR_HEIGHT }} />}
-      {/* Hero cover art */}
+      {/* Hero cover art carousel */}
       <View style={[styles.hero, { paddingBottom: m.heroPadBottom }]}>
         <GestureDetector gesture={heroPanGesture}>
-          <Animated.View style={[styles.heroImageWrap, { width: heroSize, height: heroSize }, heroAnimatedStyle]}>
-            <CachedImage
-              coverArtId={songCoverArtId}
-              size={HERO_COVER_SIZE}
-              style={styles.heroImage}
-              resizeMode="cover"
-            />
-            <View style={styles.sleepCapsuleOverlay} pointerEvents="box-none">
-              <SleepTimerCapsule />
-            </View>
-            <View style={styles.sourceBadgeOverlay} pointerEvents="none">
-              <PlaybackSourceBadge />
-            </View>
-          </Animated.View>
+          <View style={{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }}>
+            <Animated.View style={[{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }, heroAnimatedStyle]}>
+              {/* Previous track preview */}
+              {prevTrack && (
+                <View
+                  style={[
+                    styles.heroImageWrap,
+                    styles.previewHeroImageWrap,
+                    {
+                      position: 'absolute',
+                      left: -(heroSize + CAROUSEL_GAP),
+                      width: heroSize,
+                      height: heroSize,
+                    },
+                  ]}
+                  pointerEvents="none"
+                >
+                  <CachedImage
+                    coverArtId={prevCoverArtId}
+                    size={HERO_COVER_SIZE}
+                    style={styles.heroImage}
+                    resizeMode="cover"
+                  />
+                </View>
+              )}
+
+              {/* Current track */}
+              <View style={[styles.heroImageWrap, { width: heroSize, height: heroSize }]}>
+                <CachedImage
+                  coverArtId={songCoverArtId}
+                  size={HERO_COVER_SIZE}
+                  style={styles.heroImage}
+                  resizeMode="cover"
+                />
+                <View style={styles.sleepCapsuleOverlay} pointerEvents="box-none">
+                  <SleepTimerCapsule />
+                </View>
+                <View style={styles.sourceBadgeOverlay} pointerEvents="none">
+                  <PlaybackSourceBadge />
+                </View>
+              </View>
+
+              {/* Next track preview */}
+              {nextTrack && (
+                <View
+                  style={[
+                    styles.heroImageWrap,
+                    styles.previewHeroImageWrap,
+                    {
+                      position: 'absolute',
+                      left: heroSize + CAROUSEL_GAP,
+                      width: heroSize,
+                      height: heroSize,
+                    },
+                  ]}
+                  pointerEvents="none"
+                >
+                  <CachedImage
+                    coverArtId={nextCoverArtId}
+                    size={HERO_COVER_SIZE}
+                    style={styles.heroImage}
+                    resizeMode="cover"
+                  />
+                </View>
+              )}
+            </Animated.View>
+          </View>
         </GestureDetector>
       </View>
 
@@ -780,6 +942,7 @@ interface QueueHeaderProps {
   handleShareQueue: () => void;
   shuffling: boolean;
   queueLength: number;
+  swipeDownGesture?: any;
 }
 
 const QueueHeader = memo(function QueueHeader({
@@ -789,12 +952,16 @@ const QueueHeader = memo(function QueueHeader({
   handleShareQueue,
   shuffling,
   queueLength,
+  swipeDownGesture,
 }: QueueHeaderProps) {
   const { t } = useTranslation();
   if (queueLength === 0) return null;
 
-  return (
+  const headerContent = (
     <View style={styles.queueSection}>
+      <View style={styles.dragHandleContainer}>
+        <View style={[styles.dragHandlePill, { backgroundColor: colors.textSecondary }]} />
+      </View>
       <View style={styles.queueHeaderRow}>
         <Text style={[styles.queueHeaderText, { color: colors.textPrimary }]}>
           {t('queue')}
@@ -836,6 +1003,12 @@ const QueueHeader = memo(function QueueHeader({
       </View>
     </View>
   );
+
+  if (swipeDownGesture) {
+    return <GestureDetector gesture={swipeDownGesture}>{headerContent}</GestureDetector>;
+  }
+
+  return headerContent;
 });
 
 /* ------------------------------------------------------------------ */
@@ -974,6 +1147,22 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 16,
     elevation: 12,
+  },
+  previewHeroImageWrap: {
+    opacity: 0.75,
+    transform: [{ scale: 0.92 }],
+  },
+  dragHandleContainer: {
+    width: '100%',
+    alignItems: 'center',
+    paddingTop: 8,
+    paddingBottom: 6,
+  },
+  dragHandlePill: {
+    width: 38,
+    height: 4,
+    borderRadius: 2,
+    opacity: 0.35,
   },
   heroImage: {
     width: '100%',
