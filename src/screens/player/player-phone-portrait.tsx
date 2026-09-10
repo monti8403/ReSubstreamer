@@ -21,6 +21,7 @@ import Animated, {
   useSharedValue,
   withSpring,
   withTiming,
+  type SharedValue,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector, Pressable as GHPressable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -158,6 +159,11 @@ export function PlayerPhonePortrait() {
   const infoOpacity = useSharedValue(0);
   const lyricsOpacity = useSharedValue(0);
 
+  const ensurePlayerMounted = useCallback(() => {
+    setMountedTabs((prev) => (prev.has('player') ? prev : new Set(prev).add('player')));
+    setVisibleTabs((prev) => (prev.has('player') ? prev : new Set(prev).add('player')));
+  }, []);
+
   // Screen-level vertical swipe up: opens queue from upper part of player screen
   const screenSwipeUpGesture = useMemo(() => {
     return Gesture.Pan()
@@ -182,10 +188,10 @@ export function PlayerPhonePortrait() {
       })
       .onEnd((event) => {
         'worklet';
-        if (event.translationY < -50 || event.velocityY < -350) {
-          queueTranslateY.value = withTiming(
+        if (event.translationY < -45 || event.velocityY < -300) {
+          queueTranslateY.value = withSpring(
             0,
-            { duration: 240, easing: Easing.out(Easing.cubic) },
+            { damping: 28, stiffness: 220, mass: 0.8 },
             (finished) => {
               if (finished) {
                 runOnJS(setActiveTab)('queue');
@@ -195,7 +201,7 @@ export function PlayerPhonePortrait() {
           queueOpacity.value = withTiming(1, { duration: 180 });
         } else {
           queueTranslateY.value = withTiming(windowHeight, {
-            duration: 200,
+            duration: 220,
             easing: Easing.out(Easing.cubic),
           });
           queueOpacity.value = withTiming(0, { duration: 180 });
@@ -208,6 +214,10 @@ export function PlayerPhonePortrait() {
     return Gesture.Pan()
       .activeOffsetY([0, 10])
       .failOffsetX([-30, 30])
+      .onStart(() => {
+        'worklet';
+        runOnJS(ensurePlayerMounted)();
+      })
       .onUpdate((event) => {
         'worklet';
         if (event.translationY > 0) {
@@ -221,39 +231,52 @@ export function PlayerPhonePortrait() {
       })
       .onEnd((event) => {
         'worklet';
-        if (event.translationY > 60 || event.velocityY > 450) {
+        if (event.translationY > 55 || event.velocityY > 300) {
           queueTranslateY.value = withTiming(
             windowHeight,
-            { duration: 240, easing: Easing.in(Easing.cubic) },
+            { duration: 250, easing: Easing.bezier(0.25, 1, 0.5, 1) },
             (finished) => {
               if (finished) {
                 runOnJS(setActiveTab)('player');
               }
             },
           );
-          queueOpacity.value = withTiming(0, { duration: 180 });
+          queueOpacity.value = withTiming(0, { duration: 200 });
         } else {
-          queueTranslateY.value = withTiming(0, {
-            duration: 200,
-            easing: Easing.out(Easing.cubic),
+          queueTranslateY.value = withSpring(0, {
+            damping: 28,
+            stiffness: 220,
+            mass: 0.8,
           });
           queueOpacity.value = withTiming(1, { duration: 180 });
         }
       });
-  }, [windowHeight, queueTranslateY, queueOpacity]);
+  }, [windowHeight, queueTranslateY, queueOpacity, ensurePlayerMounted]);
 
   useEffect(() => {
     const config = { duration: TAB_FADE_DURATION, easing: TAB_FADE_EASING };
-    playerOpacity.value = withTiming(activeTab === 'player' ? 1 : 0, config);
+    if (activeTab === 'info' || activeTab === 'lyrics') {
+      playerOpacity.value = withTiming(0, config);
+    } else {
+      // Keep player panel visible during queue transitions so queueTranslateY drives the synergy animation
+      playerOpacity.value = withTiming(1, config);
+    }
     infoOpacity.value = withTiming(activeTab === 'info' ? 1 : 0, config);
     lyricsOpacity.value = withTiming(activeTab === 'lyrics' ? 1 : 0, config);
 
     if (activeTab === 'queue') {
-      queueTranslateY.value = withTiming(0, { duration: 280, easing: Easing.out(Easing.cubic) });
+      queueTranslateY.value = withSpring(0, {
+        damping: 28,
+        stiffness: 220,
+        mass: 0.8,
+      });
       queueOpacity.value = withTiming(1, { duration: 200 });
     } else {
-      queueTranslateY.value = withTiming(windowHeight, { duration: 240, easing: Easing.in(Easing.cubic) });
-      queueOpacity.value = withTiming(0, { duration: 240 });
+      queueTranslateY.value = withTiming(windowHeight, {
+        duration: 250,
+        easing: Easing.out(Easing.cubic),
+      });
+      queueOpacity.value = withTiming(0, { duration: 200 });
     }
   }, [activeTab, windowHeight, playerOpacity, infoOpacity, lyricsOpacity, queueTranslateY, queueOpacity]);
 
@@ -456,6 +479,7 @@ export function PlayerPhonePortrait() {
                 shuffling={shuffling}
                 onSwitchToQueue={() => setActiveTab('queue')}
                 screenSwipeUpGesture={screenSwipeUpGesture}
+                queueTranslateY={queueTranslateY}
               />
             </View>
           </Animated.View>
@@ -464,7 +488,19 @@ export function PlayerPhonePortrait() {
           <Animated.View
             style={[
               styles.tabPanel,
-              { top: headerTopPadding, zIndex: 10 },
+              {
+                top: headerTopPadding,
+                zIndex: 10,
+                backgroundColor: colors.background,
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: -6 },
+                shadowOpacity: 0.25,
+                shadowRadius: 16,
+                elevation: 16,
+                overflow: 'hidden',
+              },
               !visibleTabs.has('queue') && styles.hiddenTab,
               queueAnimatedStyle,
             ]}
@@ -553,6 +589,7 @@ interface PlayerContentProps {
   /** Called when user swipes up on the player area to open the queue. */
   onSwitchToQueue: () => void;
   screenSwipeUpGesture?: any;
+  queueTranslateY?: SharedValue<number>;
 }
 
 const CAROUSEL_GAP = 22;
@@ -565,6 +602,7 @@ const PlayerContent = memo(function PlayerContent({
   handleShuffle,
   shuffling,
   screenSwipeUpGesture,
+  queueTranslateY,
 }: PlayerContentProps) {
   const { t } = useTranslation();
   const songCoverArtId = useSongCoverArt(currentTrack);
@@ -698,6 +736,54 @@ const PlayerContent = memo(function PlayerContent({
     transform: [{ translateX: heroTranslateX.value }],
   }));
 
+  // Synergistic cover art, info, and controls movement as queue rises/falls
+  const heroSynergyStyle = useAnimatedStyle(() => {
+    if (!queueTranslateY) return {};
+    const ty = queueTranslateY.value;
+    // progress: 0 when queue is closed, 1 when queue is fully open
+    const progress = interpolate(ty, [0, windowHeight], [1, 0], 'clamp');
+
+    const scale = interpolate(progress, [0, 1], [1, 0.78], 'clamp');
+    const translateY = interpolate(progress, [0, 1], [0, -48], 'clamp');
+    const opacity = interpolate(progress, [0.12, 0.72], [1, 0], 'clamp');
+
+    return {
+      opacity,
+      transform: [
+        { translateY },
+        { scale },
+      ],
+    };
+  });
+
+  const infoSynergyStyle = useAnimatedStyle(() => {
+    if (!queueTranslateY) return {};
+    const ty = queueTranslateY.value;
+    const progress = interpolate(ty, [0, windowHeight], [1, 0], 'clamp');
+
+    const translateY = interpolate(progress, [0, 1], [0, -24], 'clamp');
+    const opacity = interpolate(progress, [0.08, 0.60], [1, 0], 'clamp');
+
+    return {
+      opacity,
+      transform: [{ translateY }],
+    };
+  });
+
+  const bottomControlsSynergyStyle = useAnimatedStyle(() => {
+    if (!queueTranslateY) return {};
+    const ty = queueTranslateY.value;
+    const progress = interpolate(ty, [0, windowHeight], [1, 0], 'clamp');
+
+    const translateY = interpolate(progress, [0, 1], [0, 36], 'clamp');
+    const opacity = interpolate(progress, [0, 0.42], [1, 0], 'clamp');
+
+    return {
+      opacity,
+      transform: [{ translateY }],
+    };
+  });
+
   const marqueeStyle = useMemo(
     () => [styles.trackTitle, { color: colors.textPrimary, fontSize: m.titleFont }],
     [colors.textPrimary, m.titleFont],
@@ -714,315 +800,228 @@ const PlayerContent = memo(function PlayerContent({
     );
   }
 
+  const upperContent = (
+    <View>
+      {Platform.OS === 'ios' && <View style={{ height: insets.top + HEADER_BAR_HEIGHT }} />}
+      {/* Hero cover art carousel with synergistic scale, lift, and fade */}
+      <Animated.View style={[styles.hero, { paddingBottom: m.heroPadBottom }, heroSynergyStyle]}>
+        <GestureDetector gesture={heroPanGesture}>
+          <View style={{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }}>
+            <Animated.View style={[{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }, heroAnimatedStyle]}>
+              {/* Previous track preview */}
+              {prevTrack && (
+                <View
+                  style={[
+                    styles.heroImageWrap,
+                    styles.previewHeroImageWrap,
+                    {
+                      position: 'absolute',
+                      left: -(heroSize + CAROUSEL_GAP),
+                      width: heroSize,
+                      height: heroSize,
+                    },
+                  ]}
+                  pointerEvents="none"
+                >
+                  <CachedImage
+                    coverArtId={prevCoverArtId}
+                    size={HERO_COVER_SIZE}
+                    style={styles.heroImage}
+                    resizeMode="cover"
+                  />
+                </View>
+              )}
+
+              {/* Current track */}
+              <View style={[styles.heroImageWrap, { width: heroSize, height: heroSize }]}>
+                <CachedImage
+                  coverArtId={songCoverArtId}
+                  size={HERO_COVER_SIZE}
+                  style={styles.heroImage}
+                  resizeMode="cover"
+                />
+                <View style={styles.sleepCapsuleOverlay} pointerEvents="box-none">
+                  <SleepTimerCapsule />
+                </View>
+                <View style={styles.sourceBadgeOverlay} pointerEvents="none">
+                  <PlaybackSourceBadge />
+                </View>
+              </View>
+
+              {/* Next track preview */}
+              {nextTrack && (
+                <View
+                  style={[
+                    styles.heroImageWrap,
+                    styles.previewHeroImageWrap,
+                    {
+                      position: 'absolute',
+                      left: heroSize + CAROUSEL_GAP,
+                      width: heroSize,
+                      height: heroSize,
+                    },
+                  ]}
+                  pointerEvents="none"
+                >
+                  <CachedImage
+                    coverArtId={nextCoverArtId}
+                    size={HERO_COVER_SIZE}
+                    style={styles.heroImage}
+                    resizeMode="cover"
+                  />
+                </View>
+              )}
+            </Animated.View>
+          </View>
+        </GestureDetector>
+      </Animated.View>
+
+      {/* Track info */}
+      <Animated.View style={[styles.trackInfo, { marginBottom: m.infoMarginBottom }, infoSynergyStyle]}>
+        <View style={styles.trackInfoRow}>
+          <View style={styles.trackInfoText}>
+            <MarqueeText style={marqueeStyle}>
+              {currentTrack.title}
+            </MarqueeText>
+            <Text
+              style={[styles.trackArtist, { color: colors.textSecondary, fontSize: m.artistFont }]}
+              numberOfLines={1}
+            >
+              {currentTrack.artist ?? t('unknownArtist')}
+            </Text>
+            <CastButton />
+          </View>
+          <FavoriteButton trackId={currentTrack.id} style={styles.favoriteButton} />
+        </View>
+      </Animated.View>
+    </View>
+  );
+
   return (
     <View style={styles.playerContentContainer}>
       {/* Upper area (Hero carousel + Track info) with swipe up gesture to open queue */}
       {screenSwipeUpGesture ? (
         <GestureDetector gesture={screenSwipeUpGesture}>
-          <View>
-            {Platform.OS === 'ios' && <View style={{ height: insets.top + HEADER_BAR_HEIGHT }} />}
-            {/* Hero cover art carousel */}
-            <View style={[styles.hero, { paddingBottom: m.heroPadBottom }]}>
-              <GestureDetector gesture={heroPanGesture}>
-                <View style={{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }}>
-                  <Animated.View style={[{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }, heroAnimatedStyle]}>
-                    {/* Previous track preview */}
-                    {prevTrack && (
-                      <View
-                        style={[
-                          styles.heroImageWrap,
-                          styles.previewHeroImageWrap,
-                          {
-                            position: 'absolute',
-                            left: -(heroSize + CAROUSEL_GAP),
-                            width: heroSize,
-                            height: heroSize,
-                          },
-                        ]}
-                        pointerEvents="none"
-                      >
-                        <CachedImage
-                          coverArtId={prevCoverArtId}
-                          size={HERO_COVER_SIZE}
-                          style={styles.heroImage}
-                          resizeMode="cover"
-                        />
-                      </View>
-                    )}
-
-                    {/* Current track */}
-                    <View style={[styles.heroImageWrap, { width: heroSize, height: heroSize }]}>
-                      <CachedImage
-                        coverArtId={songCoverArtId}
-                        size={HERO_COVER_SIZE}
-                        style={styles.heroImage}
-                        resizeMode="cover"
-                      />
-                      <View style={styles.sleepCapsuleOverlay} pointerEvents="box-none">
-                        <SleepTimerCapsule />
-                      </View>
-                      <View style={styles.sourceBadgeOverlay} pointerEvents="none">
-                        <PlaybackSourceBadge />
-                      </View>
-                    </View>
-
-                    {/* Next track preview */}
-                    {nextTrack && (
-                      <View
-                        style={[
-                          styles.heroImageWrap,
-                          styles.previewHeroImageWrap,
-                          {
-                            position: 'absolute',
-                            left: heroSize + CAROUSEL_GAP,
-                            width: heroSize,
-                            height: heroSize,
-                          },
-                        ]}
-                        pointerEvents="none"
-                      >
-                        <CachedImage
-                          coverArtId={nextCoverArtId}
-                          size={HERO_COVER_SIZE}
-                          style={styles.heroImage}
-                          resizeMode="cover"
-                        />
-                      </View>
-                    )}
-                  </Animated.View>
-                </View>
-              </GestureDetector>
-            </View>
-
-            {/* Track info */}
-            <View style={[styles.trackInfo, { marginBottom: m.infoMarginBottom }]}>
-              <View style={styles.trackInfoRow}>
-                <View style={styles.trackInfoText}>
-                  <MarqueeText style={marqueeStyle}>
-                    {currentTrack.title}
-                  </MarqueeText>
-                  <Text
-                    style={[styles.trackArtist, { color: colors.textSecondary, fontSize: m.artistFont }]}
-                    numberOfLines={1}
-                  >
-                    {currentTrack.artist ?? t('unknownArtist')}
-                  </Text>
-                  <CastButton />
-                </View>
-                <FavoriteButton trackId={currentTrack.id} style={styles.favoriteButton} />
-              </View>
-            </View>
-          </View>
+          {upperContent}
         </GestureDetector>
       ) : (
-        <View>
-          {Platform.OS === 'ios' && <View style={{ height: insets.top + HEADER_BAR_HEIGHT }} />}
-          {/* Hero cover art carousel */}
-          <View style={[styles.hero, { paddingBottom: m.heroPadBottom }]}>
-            <GestureDetector gesture={heroPanGesture}>
-              <View style={{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }}>
-                <Animated.View style={[{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }, heroAnimatedStyle]}>
-                  {prevTrack && (
-                    <View
-                      style={[
-                        styles.heroImageWrap,
-                        styles.previewHeroImageWrap,
-                        {
-                          position: 'absolute',
-                          left: -(heroSize + CAROUSEL_GAP),
-                          width: heroSize,
-                          height: heroSize,
-                        },
-                      ]}
-                      pointerEvents="none"
-                    >
-                      <CachedImage
-                        coverArtId={prevCoverArtId}
-                        size={HERO_COVER_SIZE}
-                        style={styles.heroImage}
-                        resizeMode="cover"
-                      />
-                    </View>
-                  )}
-
-                  <View style={[styles.heroImageWrap, { width: heroSize, height: heroSize }]}>
-                    <CachedImage
-                      coverArtId={songCoverArtId}
-                      size={HERO_COVER_SIZE}
-                      style={styles.heroImage}
-                      resizeMode="cover"
-                    />
-                    <View style={styles.sleepCapsuleOverlay} pointerEvents="box-none">
-                      <SleepTimerCapsule />
-                    </View>
-                    <View style={styles.sourceBadgeOverlay} pointerEvents="none">
-                      <PlaybackSourceBadge />
-                    </View>
-                  </View>
-
-                  {nextTrack && (
-                    <View
-                      style={[
-                        styles.heroImageWrap,
-                        styles.previewHeroImageWrap,
-                        {
-                          position: 'absolute',
-                          left: heroSize + CAROUSEL_GAP,
-                          width: heroSize,
-                          height: heroSize,
-                        },
-                      ]}
-                      pointerEvents="none"
-                    >
-                      <CachedImage
-                        coverArtId={nextCoverArtId}
-                        size={HERO_COVER_SIZE}
-                        style={styles.heroImage}
-                        resizeMode="cover"
-                      />
-                    </View>
-                  )}
-                </Animated.View>
-              </View>
-            </GestureDetector>
-          </View>
-
-          {/* Track info */}
-          <View style={[styles.trackInfo, { marginBottom: m.infoMarginBottom }]}>
-            <View style={styles.trackInfoRow}>
-              <View style={styles.trackInfoText}>
-                <MarqueeText style={marqueeStyle}>
-                  {currentTrack.title}
-                </MarqueeText>
-                <Text
-                  style={[styles.trackArtist, { color: colors.textSecondary, fontSize: m.artistFont }]}
-                  numberOfLines={1}
-                >
-                  {currentTrack.artist ?? t('unknownArtist')}
-                </Text>
-                <CastButton />
-              </View>
-              <FavoriteButton trackId={currentTrack.id} style={styles.favoriteButton} />
-            </View>
-          </View>
-        </View>
+        upperContent
       )}
 
-      {/* Progress bar */}
-      <View style={[styles.progressSection, { marginBottom: m.progressMarginBottom }]}>
-        <PlayerProgressBar
-          position={position}
-          duration={duration}
-          bufferedPosition={bufferedPosition}
-          colors={colors}
-          onSeek={handleSeek}
-          isBuffering={isBuffering}
-          error={error}
-          retrying={retrying}
-          onRetry={retryPlayback}
-        />
-      </View>
-
-      {/* Three equal flex spacers */}
-      <View style={styles.playerSpacer} />
-
-      {/* Playback controls */}
-      <View style={[styles.controls, { paddingVertical: m.controlsPadV }]}>
-        {/* Shuffle toggle */}
-        <View style={styles.controlSideLeft}>
-          <ShuffleButton
-            onPress={handleShuffle}
-            disabled={shuffling || queueLength < 2}
-            size={m.sideIcon}
+      {/* Synergistic bottom controls container (slides down and dissolves as queue ascends) */}
+      <Animated.View style={[{ flex: 1 }, bottomControlsSynergyStyle]}>
+        {/* Progress bar */}
+        <View style={[styles.progressSection, { marginBottom: m.progressMarginBottom }]}>
+          <PlayerProgressBar
+            position={position}
+            duration={duration}
+            bufferedPosition={bufferedPosition}
+            colors={colors}
+            onSeek={handleSeek}
+            isBuffering={isBuffering}
+            error={error}
+            retrying={retrying}
+            onRetry={retryPlayback}
           />
         </View>
 
-        {/* Transport controls */}
-        <View style={[styles.transportControls, { width: transportWidth }]}>
-          <GHPressable
-            onPress={skipToPrevious}
-            hitSlop={12}
-            disabled={!canSkipPrevious}
-            style={({ pressed }) => [pressed && styles.pressed, !canSkipPrevious && styles.disabled]}
-          >
-            <Ionicons
-              name="play-back"
-              size={m.transportIcon}
-              color={canSkipPrevious ? colors.textPrimary : colors.textSecondary}
+        {/* Three equal flex spacers */}
+        <View style={styles.playerSpacer} />
+
+        {/* Playback controls */}
+        <View style={[styles.controls, { paddingVertical: m.controlsPadV }]}>
+          {/* Shuffle toggle */}
+          <View style={styles.controlSideLeft}>
+            <ShuffleButton
+              onPress={handleShuffle}
+              disabled={shuffling || queueLength < 2}
+              size={m.sideIcon}
             />
-          </GHPressable>
-
-          <GHPressable
-            onPress={togglePlayPause}
-            style={({ pressed }) => [
-              styles.playPauseButton,
-              { width: m.playButton, height: m.playButton, borderRadius: m.playButton / 2, backgroundColor: colors.textPrimary },
-              pressed && styles.playPausePressed,
-            ]}
-          >
-            {isBuffering ? (
-              <ActivityIndicator size="small" color={colors.background} />
-            ) : (
-              <Ionicons
-                name={isPlaying ? 'pause' : 'play'}
-                size={m.playIcon}
-                color={colors.background}
-                style={!isPlaying ? styles.playIcon : undefined}
-              />
-            )}
-          </GHPressable>
-
-          <GHPressable
-            onPress={skipToNext}
-            hitSlop={12}
-            disabled={!canSkipNext}
-            style={({ pressed }) => [pressed && styles.pressed, !canSkipNext && styles.disabled]}
-          >
-            <Ionicons
-              name="play-forward"
-              size={m.transportIcon}
-              color={canSkipNext ? colors.textPrimary : colors.textSecondary}
-            />
-          </GHPressable>
-        </View>
-
-        {/* Repeat toggle */}
-        <View style={styles.controlSideRight}>
-          <RepeatButton size={m.sideIcon} />
-        </View>
-      </View>
-
-      {/* Secondary controls row — dropped on the smallest tier
-          (m.showSecondaryRow === false) so the transport controls clear the nav
-          bar. When present, its own middle spacer keeps both rows
-          evenly distributed; when absent, the two remaining spacers center the
-          single primary row. */}
-      {m.showSecondaryRow && (
-        <>
-          <View style={styles.playerSpacer} />
-          <View style={styles.secondaryControls}>
-            <View style={[styles.controlSideLeft, styles.secondaryLeftInset]}>
-              {showSleepTimer && <SleepTimerButton />}
-            </View>
-            <View style={[styles.secondaryCenterRow, { width: secondaryCenterWidth }]}>
-              {showSkipInterval && (
-                <SkipIntervalButton direction="backward" size={32} />
-              )}
-              <View style={styles.secondaryRateSlot}>
-                <PlaybackRateButton />
-              </View>
-              {showSkipInterval && (
-                <SkipIntervalButton direction="forward" size={32} />
-              )}
-            </View>
-            <View style={styles.controlSideRight}>
-              <BookmarkButton style={styles.favoriteButton} />
-            </View>
           </View>
-        </>
-      )}
 
-      <View style={styles.playerSpacer} />
+          {/* Transport controls */}
+          <View style={[styles.transportControls, { width: transportWidth }]}>
+            <GHPressable
+              onPress={skipToPrevious}
+              hitSlop={12}
+              disabled={!canSkipPrevious}
+              style={({ pressed }) => [pressed && styles.pressed, !canSkipPrevious && styles.disabled]}
+            >
+              <Ionicons
+                name="play-back"
+                size={m.transportIcon}
+                color={canSkipPrevious ? colors.textPrimary : colors.textSecondary}
+              />
+            </GHPressable>
+
+            <GHPressable
+              onPress={togglePlayPause}
+              style={({ pressed }) => [
+                styles.playPauseButton,
+                { width: m.playButton, height: m.playButton, borderRadius: m.playButton / 2, backgroundColor: colors.textPrimary },
+                pressed && styles.playPausePressed,
+              ]}
+            >
+              {isBuffering ? (
+                <ActivityIndicator size="small" color={colors.background} />
+              ) : (
+                <Ionicons
+                  name={isPlaying ? 'pause' : 'play'}
+                  size={m.playIcon}
+                  color={colors.background}
+                  style={!isPlaying ? styles.playIcon : undefined}
+                />
+              )}
+            </GHPressable>
+
+            <GHPressable
+              onPress={skipToNext}
+              hitSlop={12}
+              disabled={!canSkipNext}
+              style={({ pressed }) => [pressed && styles.pressed, !canSkipNext && styles.disabled]}
+            >
+              <Ionicons
+                name="play-forward"
+                size={m.transportIcon}
+                color={canSkipNext ? colors.textPrimary : colors.textSecondary}
+              />
+            </GHPressable>
+          </View>
+
+          {/* Repeat toggle */}
+          <View style={styles.controlSideRight}>
+            <RepeatButton size={m.sideIcon} />
+          </View>
+        </View>
+
+        {/* Secondary controls row */}
+        {m.showSecondaryRow && (
+          <>
+            <View style={styles.playerSpacer} />
+            <View style={styles.secondaryControls}>
+              <View style={[styles.controlSideLeft, styles.secondaryLeftInset]}>
+                {showSleepTimer && <SleepTimerButton />}
+              </View>
+              <View style={[styles.secondaryCenterRow, { width: secondaryCenterWidth }]}>
+                {showSkipInterval && (
+                  <SkipIntervalButton direction="backward" size={32} />
+                )}
+                <View style={styles.secondaryRateSlot}>
+                  <PlaybackRateButton />
+                </View>
+                {showSkipInterval && (
+                  <SkipIntervalButton direction="forward" size={32} />
+                )}
+              </View>
+              <View style={styles.controlSideRight}>
+                <BookmarkButton style={styles.favoriteButton} />
+              </View>
+            </View>
+          </>
+        )}
+
+        <View style={styles.playerSpacer} />
+      </Animated.View>
     </View>
   );
 });
