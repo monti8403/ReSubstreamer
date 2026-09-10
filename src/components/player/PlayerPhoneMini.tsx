@@ -4,7 +4,8 @@ import { useRouter } from 'expo-router';
 import { useCallback, useMemo } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import Animated, { useAnimatedStyle } from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, { runOnJS, useAnimatedStyle } from 'react-native-reanimated';
 
 import { CachedImage } from '@/components/CachedImage';
 import { MarqueeText } from '@/components/MarqueeText';
@@ -12,7 +13,7 @@ import WaveformLogo from '@/components/WaveformLogo';
 import { useImagePalette } from '@/hooks/useImagePalette';
 import { useSongCoverArt } from '@/hooks/useSongCoverArt';
 import { useTheme } from '@/hooks/useTheme';
-import { skipToNext, togglePlayPause } from '@/services/playerService';
+import { skipToNext, skipToPrevious, togglePlayPause } from '@/services/playerService';
 import { playbackSettingsStore } from '@/store/playbackSettingsStore';
 import { playerStore } from '@/store/playerStore';
 
@@ -44,6 +45,9 @@ export function PlayerPhoneMini() {
   const canSkipNext =
     currentTrackIndex != null &&
     (currentTrackIndex < queue.length - 1 || repeatMode !== 'off');
+  const canSkipPrevious =
+    currentTrackIndex != null &&
+    (currentTrackIndex > 0 || repeatMode !== 'off' || position > 3);
 
   const handleSkipNext = useCallback(() => {
     if (canSkipNext) skipToNext();
@@ -65,6 +69,48 @@ export function PlayerPhoneMini() {
   // --- Full player navigation ---
   const router = useRouter();
   const openPlayer = useCallback(() => router.push('/player'), [router]);
+
+  // Gestures for mini player: Swipe up to expand, swipe left/right to change track, tap to open
+  const miniPanGesture = useMemo(() => {
+    return Gesture.Pan()
+      .activeOffsetX([-15, 15])
+      .activeOffsetY([-15, 15])
+      .cancelsTouchesInView(false)
+      .onEnd((event) => {
+        'worklet';
+        const absX = Math.abs(event.translationX);
+        const absY = Math.abs(event.translationY);
+
+        // Vertical swipe up -> open full player
+        if (event.translationY < -25 || event.velocityY < -300) {
+          runOnJS(openPlayer)();
+          return;
+        }
+
+        // Horizontal swipe -> change track
+        if (absX > absY) {
+          if ((event.translationX < -30 || event.velocityX < -250) && canSkipNext) {
+            runOnJS(skipToNext)();
+            return;
+          }
+          if ((event.translationX > 30 || event.velocityX > 250) && canSkipPrevious) {
+            runOnJS(skipToPrevious)();
+            return;
+          }
+        }
+      });
+  }, [openPlayer, canSkipNext, canSkipPrevious]);
+
+  const miniTapGesture = useMemo(() => {
+    return Gesture.Tap().onEnd(() => {
+      'worklet';
+      runOnJS(openPlayer)();
+    });
+  }, [openPlayer]);
+
+  const miniGesture = useMemo(() => {
+    return Gesture.Exclusive(miniPanGesture, miniTapGesture);
+  }, [miniPanGesture, miniTapGesture]);
 
   if (!currentTrack) return null;
 
@@ -111,37 +157,36 @@ export function PlayerPhoneMini() {
         />
       </Animated.View>
 
-      {/* Tappable area: cover art + track info */}
-      <Pressable
-        onPress={openPlayer}
-        style={({ pressed }) => [styles.touchable, pressed && styles.pressed]}
-      >
-        {/* Cover art (or placeholder while loading) */}
-        {queueLoading ? (
-          <View style={[styles.cover, styles.coverPlaceholder, { backgroundColor: 'rgba(150,150,150,0.25)' }]}>
-            <WaveformLogo size={16} color="rgba(150,150,150,1)" />
-          </View>
-        ) : (
-          <CachedImage
-            coverArtId={songCoverArtId}
-            size={300}
-            style={styles.cover}
-            resizeMode="cover"
-          />
-        )}
-
-        {/* Track info */}
-        <View style={styles.info}>
-          <MarqueeText style={marqueeStyle}>
-            {queueLoading ? t('loading') : currentTrack.title}
-          </MarqueeText>
-          {!queueLoading && (
-            <Text style={[styles.artist, { color: colors.textSecondary }]} numberOfLines={1}>
-              {currentTrack.artist ?? t('unknownArtist')}
-            </Text>
+      {/* Tappable and swipeable area: cover art + track info */}
+      <GestureDetector gesture={miniGesture}>
+        <View style={styles.touchable}>
+          {/* Cover art (or placeholder while loading) */}
+          {queueLoading ? (
+            <View style={[styles.cover, styles.coverPlaceholder, { backgroundColor: 'rgba(150,150,150,0.25)' }]}>
+              <WaveformLogo size={16} color="rgba(150,150,150,1)" />
+            </View>
+          ) : (
+            <CachedImage
+              coverArtId={songCoverArtId}
+              size={300}
+              style={styles.cover}
+              resizeMode="cover"
+            />
           )}
+
+          {/* Track info */}
+          <View style={styles.info}>
+            <MarqueeText style={marqueeStyle}>
+              {queueLoading ? t('loading') : currentTrack.title}
+            </MarqueeText>
+            {!queueLoading && (
+              <Text style={[styles.artist, { color: colors.textSecondary }]} numberOfLines={1}>
+                {currentTrack.artist ?? t('unknownArtist')}
+              </Text>
+            )}
+          </View>
         </View>
-      </Pressable>
+      </GestureDetector>
 
       {/* Transport controls */}
       <View style={styles.controls}>

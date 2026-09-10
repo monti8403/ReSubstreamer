@@ -158,11 +158,13 @@ export function PlayerPhonePortrait() {
   const infoOpacity = useSharedValue(0);
   const lyricsOpacity = useSharedValue(0);
 
-  // Screen-level vertical swipe up: opens queue from ANYWHERE on player screen
+  // Screen-level vertical swipe up: opens queue from upper part of player screen
   const screenSwipeUpGesture = useMemo(() => {
     return Gesture.Pan()
-      .activeOffsetY([-10, 0])
-      .failOffsetX([-30, 30])
+      .activeOffsetY([-20, -10])
+      .failOffsetX([-35, 35])
+      .failOffsetY([0, 20])
+      .cancelsTouchesInView(false)
       .onStart(() => {
         'worklet';
         runOnJS(ensureQueueMounted)();
@@ -180,7 +182,7 @@ export function PlayerPhonePortrait() {
       })
       .onEnd((event) => {
         'worklet';
-        if (event.translationY < -60 || event.velocityY < -450) {
+        if (event.translationY < -50 || event.velocityY < -350) {
           queueTranslateY.value = withTiming(
             0,
             { duration: 240, easing: Easing.out(Easing.cubic) },
@@ -444,19 +446,18 @@ export function PlayerPhonePortrait() {
             ]}
             pointerEvents={activeTab === 'player' ? 'auto' : 'none'}
           >
-            <GestureDetector gesture={screenSwipeUpGesture}>
-              <View style={{ flex: 1 }}>
-                <PlayerContent
-                  currentTrack={currentTrack}
-                  colors={colors}
-                  queueLoading={queueLoading}
-                  handleSeek={handleSeek}
-                  handleShuffle={handleShuffle}
-                  shuffling={shuffling}
-                  onSwitchToQueue={() => setActiveTab('queue')}
-                />
-              </View>
-            </GestureDetector>
+            <View style={{ flex: 1 }}>
+              <PlayerContent
+                currentTrack={currentTrack}
+                colors={colors}
+                queueLoading={queueLoading}
+                handleSeek={handleSeek}
+                handleShuffle={handleShuffle}
+                shuffling={shuffling}
+                onSwitchToQueue={() => setActiveTab('queue')}
+                screenSwipeUpGesture={screenSwipeUpGesture}
+              />
+            </View>
           </Animated.View>
 
           {/* Queue tab — below header, slides up as sheet */}
@@ -551,6 +552,7 @@ interface PlayerContentProps {
   shuffling: boolean;
   /** Called when user swipes up on the player area to open the queue. */
   onSwitchToQueue: () => void;
+  screenSwipeUpGesture?: any;
 }
 
 const CAROUSEL_GAP = 22;
@@ -562,6 +564,7 @@ const PlayerContent = memo(function PlayerContent({
   handleSeek,
   handleShuffle,
   shuffling,
+  screenSwipeUpGesture,
 }: PlayerContentProps) {
   const { t } = useTranslation();
   const songCoverArtId = useSongCoverArt(currentTrack);
@@ -632,8 +635,8 @@ const PlayerContent = memo(function PlayerContent({
 
   const heroPanGesture = useMemo(() => {
     return Gesture.Pan()
-      .activeOffsetX([-10, 10])
-      .failOffsetY([-15, 15])
+      .activeOffsetX([-12, 12])
+      .cancelsTouchesInView(false)
       .onStart(() => {
         'worklet';
         contextX.value = heroTranslateX.value;
@@ -650,11 +653,11 @@ const PlayerContent = memo(function PlayerContent({
       })
       .onEnd((event) => {
         'worklet';
-        const threshold = stepDistance * 0.22;
+        const threshold = Math.min(stepDistance * 0.16, 50);
         const velocity = event.velocityX;
 
         // Swipe Left -> Next Track
-        if ((event.translationX < -threshold || velocity < -450) && canSkipNext) {
+        if ((event.translationX < -threshold || velocity < -280) && canSkipNext) {
           heroTranslateX.value = withTiming(
             -stepDistance,
             { duration: 180, easing: Easing.bezier(0.25, 0.1, 0.25, 1) },
@@ -669,7 +672,7 @@ const PlayerContent = memo(function PlayerContent({
         }
 
         // Swipe Right -> Previous Track
-        if ((event.translationX > threshold || velocity > 450) && canSkipPrevious) {
+        if ((event.translationX > threshold || velocity > 280) && canSkipPrevious) {
           heroTranslateX.value = withTiming(
             stepDistance,
             { duration: 180, easing: Easing.bezier(0.25, 0.1, 0.25, 1) },
@@ -713,101 +716,197 @@ const PlayerContent = memo(function PlayerContent({
 
   return (
     <View style={styles.playerContentContainer}>
-      {/* On iOS the panel extends behind the transparent header,
-          so use a fixed spacer to clear it. On Android the panel is
-          already offset via top: headerTopPadding. */}
-      {Platform.OS === 'ios' && <View style={{ height: insets.top + HEADER_BAR_HEIGHT }} />}
-      {/* Hero cover art carousel */}
-      <View style={[styles.hero, { paddingBottom: m.heroPadBottom }]}>
-        <GestureDetector gesture={heroPanGesture}>
-          <View style={{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }}>
-            <Animated.View style={[{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }, heroAnimatedStyle]}>
-              {/* Previous track preview */}
-              {prevTrack && (
-                <View
-                  style={[
-                    styles.heroImageWrap,
-                    styles.previewHeroImageWrap,
-                    {
-                      position: 'absolute',
-                      left: -(heroSize + CAROUSEL_GAP),
-                      width: heroSize,
-                      height: heroSize,
-                    },
-                  ]}
-                  pointerEvents="none"
-                >
-                  <CachedImage
-                    coverArtId={prevCoverArtId}
-                    size={HERO_COVER_SIZE}
-                    style={styles.heroImage}
-                    resizeMode="cover"
-                  />
-                </View>
-              )}
+      {/* Upper area (Hero carousel + Track info) with swipe up gesture to open queue */}
+      {screenSwipeUpGesture ? (
+        <GestureDetector gesture={screenSwipeUpGesture}>
+          <View>
+            {Platform.OS === 'ios' && <View style={{ height: insets.top + HEADER_BAR_HEIGHT }} />}
+            {/* Hero cover art carousel */}
+            <View style={[styles.hero, { paddingBottom: m.heroPadBottom }]}>
+              <GestureDetector gesture={heroPanGesture}>
+                <View style={{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }}>
+                  <Animated.View style={[{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }, heroAnimatedStyle]}>
+                    {/* Previous track preview */}
+                    {prevTrack && (
+                      <View
+                        style={[
+                          styles.heroImageWrap,
+                          styles.previewHeroImageWrap,
+                          {
+                            position: 'absolute',
+                            left: -(heroSize + CAROUSEL_GAP),
+                            width: heroSize,
+                            height: heroSize,
+                          },
+                        ]}
+                        pointerEvents="none"
+                      >
+                        <CachedImage
+                          coverArtId={prevCoverArtId}
+                          size={HERO_COVER_SIZE}
+                          style={styles.heroImage}
+                          resizeMode="cover"
+                        />
+                      </View>
+                    )}
 
-              {/* Current track */}
-              <View style={[styles.heroImageWrap, { width: heroSize, height: heroSize }]}>
-                <CachedImage
-                  coverArtId={songCoverArtId}
-                  size={HERO_COVER_SIZE}
-                  style={styles.heroImage}
-                  resizeMode="cover"
-                />
-                <View style={styles.sleepCapsuleOverlay} pointerEvents="box-none">
-                  <SleepTimerCapsule />
+                    {/* Current track */}
+                    <View style={[styles.heroImageWrap, { width: heroSize, height: heroSize }]}>
+                      <CachedImage
+                        coverArtId={songCoverArtId}
+                        size={HERO_COVER_SIZE}
+                        style={styles.heroImage}
+                        resizeMode="cover"
+                      />
+                      <View style={styles.sleepCapsuleOverlay} pointerEvents="box-none">
+                        <SleepTimerCapsule />
+                      </View>
+                      <View style={styles.sourceBadgeOverlay} pointerEvents="none">
+                        <PlaybackSourceBadge />
+                      </View>
+                    </View>
+
+                    {/* Next track preview */}
+                    {nextTrack && (
+                      <View
+                        style={[
+                          styles.heroImageWrap,
+                          styles.previewHeroImageWrap,
+                          {
+                            position: 'absolute',
+                            left: heroSize + CAROUSEL_GAP,
+                            width: heroSize,
+                            height: heroSize,
+                          },
+                        ]}
+                        pointerEvents="none"
+                      >
+                        <CachedImage
+                          coverArtId={nextCoverArtId}
+                          size={HERO_COVER_SIZE}
+                          style={styles.heroImage}
+                          resizeMode="cover"
+                        />
+                      </View>
+                    )}
+                  </Animated.View>
                 </View>
-                <View style={styles.sourceBadgeOverlay} pointerEvents="none">
-                  <PlaybackSourceBadge />
+              </GestureDetector>
+            </View>
+
+            {/* Track info */}
+            <View style={[styles.trackInfo, { marginBottom: m.infoMarginBottom }]}>
+              <View style={styles.trackInfoRow}>
+                <View style={styles.trackInfoText}>
+                  <MarqueeText style={marqueeStyle}>
+                    {currentTrack.title}
+                  </MarqueeText>
+                  <Text
+                    style={[styles.trackArtist, { color: colors.textSecondary, fontSize: m.artistFont }]}
+                    numberOfLines={1}
+                  >
+                    {currentTrack.artist ?? t('unknownArtist')}
+                  </Text>
+                  <CastButton />
                 </View>
+                <FavoriteButton trackId={currentTrack.id} style={styles.favoriteButton} />
               </View>
-
-              {/* Next track preview */}
-              {nextTrack && (
-                <View
-                  style={[
-                    styles.heroImageWrap,
-                    styles.previewHeroImageWrap,
-                    {
-                      position: 'absolute',
-                      left: heroSize + CAROUSEL_GAP,
-                      width: heroSize,
-                      height: heroSize,
-                    },
-                  ]}
-                  pointerEvents="none"
-                >
-                  <CachedImage
-                    coverArtId={nextCoverArtId}
-                    size={HERO_COVER_SIZE}
-                    style={styles.heroImage}
-                    resizeMode="cover"
-                  />
-                </View>
-              )}
-            </Animated.View>
+            </View>
           </View>
         </GestureDetector>
-      </View>
+      ) : (
+        <View>
+          {Platform.OS === 'ios' && <View style={{ height: insets.top + HEADER_BAR_HEIGHT }} />}
+          {/* Hero cover art carousel */}
+          <View style={[styles.hero, { paddingBottom: m.heroPadBottom }]}>
+            <GestureDetector gesture={heroPanGesture}>
+              <View style={{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }}>
+                <Animated.View style={[{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }, heroAnimatedStyle]}>
+                  {prevTrack && (
+                    <View
+                      style={[
+                        styles.heroImageWrap,
+                        styles.previewHeroImageWrap,
+                        {
+                          position: 'absolute',
+                          left: -(heroSize + CAROUSEL_GAP),
+                          width: heroSize,
+                          height: heroSize,
+                        },
+                      ]}
+                      pointerEvents="none"
+                    >
+                      <CachedImage
+                        coverArtId={prevCoverArtId}
+                        size={HERO_COVER_SIZE}
+                        style={styles.heroImage}
+                        resizeMode="cover"
+                      />
+                    </View>
+                  )}
 
-      {/* Track info */}
-      <View style={[styles.trackInfo, { marginBottom: m.infoMarginBottom }]}>
-        <View style={styles.trackInfoRow}>
-          <View style={styles.trackInfoText}>
-            <MarqueeText style={marqueeStyle}>
-              {currentTrack.title}
-            </MarqueeText>
-            <Text
-              style={[styles.trackArtist, { color: colors.textSecondary, fontSize: m.artistFont }]}
-              numberOfLines={1}
-            >
-              {currentTrack.artist ?? t('unknownArtist')}
-            </Text>
-            <CastButton />
+                  <View style={[styles.heroImageWrap, { width: heroSize, height: heroSize }]}>
+                    <CachedImage
+                      coverArtId={songCoverArtId}
+                      size={HERO_COVER_SIZE}
+                      style={styles.heroImage}
+                      resizeMode="cover"
+                    />
+                    <View style={styles.sleepCapsuleOverlay} pointerEvents="box-none">
+                      <SleepTimerCapsule />
+                    </View>
+                    <View style={styles.sourceBadgeOverlay} pointerEvents="none">
+                      <PlaybackSourceBadge />
+                    </View>
+                  </View>
+
+                  {nextTrack && (
+                    <View
+                      style={[
+                        styles.heroImageWrap,
+                        styles.previewHeroImageWrap,
+                        {
+                          position: 'absolute',
+                          left: heroSize + CAROUSEL_GAP,
+                          width: heroSize,
+                          height: heroSize,
+                        },
+                      ]}
+                      pointerEvents="none"
+                    >
+                      <CachedImage
+                        coverArtId={nextCoverArtId}
+                        size={HERO_COVER_SIZE}
+                        style={styles.heroImage}
+                        resizeMode="cover"
+                      />
+                    </View>
+                  )}
+                </Animated.View>
+              </View>
+            </GestureDetector>
           </View>
-          <FavoriteButton trackId={currentTrack.id} style={styles.favoriteButton} />
+
+          {/* Track info */}
+          <View style={[styles.trackInfo, { marginBottom: m.infoMarginBottom }]}>
+            <View style={styles.trackInfoRow}>
+              <View style={styles.trackInfoText}>
+                <MarqueeText style={marqueeStyle}>
+                  {currentTrack.title}
+                </MarqueeText>
+                <Text
+                  style={[styles.trackArtist, { color: colors.textSecondary, fontSize: m.artistFont }]}
+                  numberOfLines={1}
+                >
+                  {currentTrack.artist ?? t('unknownArtist')}
+                </Text>
+                <CastButton />
+              </View>
+              <FavoriteButton trackId={currentTrack.id} style={styles.favoriteButton} />
+            </View>
+          </View>
         </View>
-      </View>
+      )}
 
       {/* Progress bar */}
       <View style={[styles.progressSection, { marginBottom: m.progressMarginBottom }]}>
@@ -824,10 +923,7 @@ const PlayerContent = memo(function PlayerContent({
         />
       </View>
 
-      {/* Three equal flex spacers (above the primary row, between the rows,
-          and below the secondary row) evenly distribute the controls in the
-          space under the progress bar — this centers the primary row between
-          the progress bar and the secondary row. */}
+      {/* Three equal flex spacers */}
       <View style={styles.playerSpacer} />
 
       {/* Playback controls */}
@@ -843,7 +939,7 @@ const PlayerContent = memo(function PlayerContent({
 
         {/* Transport controls */}
         <View style={[styles.transportControls, { width: transportWidth }]}>
-          <Pressable
+          <GHPressable
             onPress={skipToPrevious}
             hitSlop={12}
             disabled={!canSkipPrevious}
@@ -854,9 +950,9 @@ const PlayerContent = memo(function PlayerContent({
               size={m.transportIcon}
               color={canSkipPrevious ? colors.textPrimary : colors.textSecondary}
             />
-          </Pressable>
+          </GHPressable>
 
-          <Pressable
+          <GHPressable
             onPress={togglePlayPause}
             style={({ pressed }) => [
               styles.playPauseButton,
@@ -874,9 +970,9 @@ const PlayerContent = memo(function PlayerContent({
                 style={!isPlaying ? styles.playIcon : undefined}
               />
             )}
-          </Pressable>
+          </GHPressable>
 
-          <Pressable
+          <GHPressable
             onPress={skipToNext}
             hitSlop={12}
             disabled={!canSkipNext}
@@ -887,7 +983,7 @@ const PlayerContent = memo(function PlayerContent({
               size={m.transportIcon}
               color={canSkipNext ? colors.textPrimary : colors.textSecondary}
             />
-          </Pressable>
+          </GHPressable>
         </View>
 
         {/* Repeat toggle */}
