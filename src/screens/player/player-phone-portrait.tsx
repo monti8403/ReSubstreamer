@@ -164,12 +164,11 @@ export function PlayerPhonePortrait() {
     setVisibleTabs((prev) => (prev.has('player') ? prev : new Set(prev).add('player')));
   }, []);
 
-  // Screen-level vertical swipe up: opens queue from upper part of player screen
+  // Screen-level vertical swipe up: opens queue from anywhere on player screen
   const screenSwipeUpGesture = useMemo(() => {
     return Gesture.Pan()
-      .activeOffsetY([-20, -10])
-      .failOffsetX([-35, 35])
-      .failOffsetY([0, 20])
+      .activeOffsetY(-14)
+      .failOffsetY(25)
       .cancelsTouchesInView(false)
       .onStart(() => {
         'worklet';
@@ -188,7 +187,7 @@ export function PlayerPhonePortrait() {
       })
       .onEnd((event) => {
         'worklet';
-        if (event.translationY < -45 || event.velocityY < -300) {
+        if (event.translationY < -35 || event.velocityY < -220) {
           queueTranslateY.value = withSpring(
             0,
             { damping: 28, stiffness: 220, mass: 0.8 },
@@ -800,12 +799,17 @@ const PlayerContent = memo(function PlayerContent({
     );
   }
 
+  const heroComposedGesture = useMemo(() => {
+    if (!screenSwipeUpGesture) return heroPanGesture;
+    return Gesture.Simultaneous(heroPanGesture, screenSwipeUpGesture);
+  }, [heroPanGesture, screenSwipeUpGesture]);
+
   const upperContent = (
     <View>
       {Platform.OS === 'ios' && <View style={{ height: insets.top + HEADER_BAR_HEIGHT }} />}
       {/* Hero cover art carousel with synergistic scale, lift, and fade */}
       <Animated.View style={[styles.hero, { paddingBottom: m.heroPadBottom }, heroSynergyStyle]}>
-        <GestureDetector gesture={heroPanGesture}>
+        <GestureDetector gesture={heroComposedGesture}>
           <View style={{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }}>
             <Animated.View style={[{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }, heroAnimatedStyle]}>
               {/* Previous track preview */}
@@ -897,16 +901,9 @@ const PlayerContent = memo(function PlayerContent({
     </View>
   );
 
-  return (
+  const playerContainer = (
     <View style={styles.playerContentContainer}>
-      {/* Upper area (Hero carousel + Track info) with swipe up gesture to open queue */}
-      {screenSwipeUpGesture ? (
-        <GestureDetector gesture={screenSwipeUpGesture}>
-          {upperContent}
-        </GestureDetector>
-      ) : (
-        upperContent
-      )}
+      {upperContent}
 
       {/* Synergistic bottom controls container (slides down and dissolves as queue ascends) */}
       <Animated.View style={[{ flex: 1 }, bottomControlsSynergyStyle]}>
@@ -1023,6 +1020,13 @@ const PlayerContent = memo(function PlayerContent({
         <View style={styles.playerSpacer} />
       </Animated.View>
     </View>
+  );
+
+  if (!screenSwipeUpGesture) return playerContainer;
+  return (
+    <GestureDetector gesture={screenSwipeUpGesture}>
+      {playerContainer}
+    </GestureDetector>
   );
 });
 
