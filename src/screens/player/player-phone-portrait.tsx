@@ -3,15 +3,19 @@ import { FlashList } from '@shopify/flash-list';
 import ReorderableList, { type ReorderableListReorderEvent } from 'react-native-reorderable-list';
 import { Stack, useNavigation, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
+  FlatList,
   Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
   useWindowDimensions,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
 } from 'react-native';
 import Animated, {
   Easing,
@@ -139,11 +143,15 @@ export function PlayerPhonePortrait() {
   /* ---- Tab state ---- */
   const [activeTab, setActiveTab] = useState<PlayerTab>('player');
   const [mountedTabs, setMountedTabs] = useState<Set<PlayerTab>>(() => new Set(['player']));
+  const listRef = useRef<any>(null);
 
   // Ensure tab is mounted when selected
   useEffect(() => {
     if (!mountedTabs.has(activeTab)) {
       setMountedTabs((prev) => new Set(prev).add(activeTab));
+    }
+    if (activeTab === 'queue') {
+      listRef.current?.scrollToOffset?.({ offset: 0, animated: false });
     }
   }, [activeTab, mountedTabs]);
 
@@ -158,25 +166,29 @@ export function PlayerPhonePortrait() {
   const queueTranslateY = useSharedValue(windowHeight);
   const infoOpacity = useSharedValue(0);
   const lyricsOpacity = useSharedValue(0);
+  const isTransitioningQueue = useSharedValue(false);
 
   const ensurePlayerMounted = useCallback(() => {
     setMountedTabs((prev) => (prev.has('player') ? prev : new Set(prev).add('player')));
     setVisibleTabs((prev) => (prev.has('player') ? prev : new Set(prev).add('player')));
   }, []);
 
-  // Screen-level vertical swipe up: opens queue from anywhere on player screen
-  const screenSwipeUpGesture = useMemo(() => {
+  // Screen-level vertical swipe:
+  // - Swipe DOWN anywhere on player -> dismisses player to mini-player (onClose)
+  // - Swipe UP anywhere on player -> opens queue drawer sheet (setActiveTab('queue'))
+  const screenSwipeGesture = useMemo(() => {
     return Gesture.Pan()
-      .activeOffsetY(-14)
-      .failOffsetY(25)
+      .activeOffsetY([-14, 18])
+      .failOffsetX([-35, 35])
       .cancelsTouchesInView(false)
       .onStart(() => {
         'worklet';
-        runOnJS(ensureQueueMounted)();
       })
       .onUpdate((event) => {
         'worklet';
+        if (isTransitioningQueue.value) return;
         if (event.translationY < 0) {
+          runOnJS(ensureQueueMounted)();
           queueTranslateY.value = Math.max(0, windowHeight + event.translationY);
           queueOpacity.value = interpolate(
             queueTranslateY.value,
@@ -187,17 +199,22 @@ export function PlayerPhonePortrait() {
       })
       .onEnd((event) => {
         'worklet';
+        if (isTransitioningQueue.value) return;
         if (event.translationY < -35 || event.velocityY < -220) {
+          isTransitioningQueue.value = true;
           queueTranslateY.value = withSpring(
             0,
             { damping: 28, stiffness: 220, mass: 0.8 },
             (finished) => {
               if (finished) {
                 runOnJS(setActiveTab)('queue');
+                isTransitioningQueue.value = false;
               }
             },
           );
           queueOpacity.value = withTiming(1, { duration: 180 });
+        } else if (event.translationY > 40 || event.velocityY > 240) {
+          runOnJS(onClose)();
         } else {
           queueTranslateY.value = withTiming(windowHeight, {
             duration: 220,
@@ -206,51 +223,72 @@ export function PlayerPhonePortrait() {
           queueOpacity.value = withTiming(0, { duration: 180 });
         }
       });
-  }, [windowHeight, ensureQueueMounted, queueTranslateY, queueOpacity]);
+  }, [windowHeight, ensureQueueMounted, queueTranslateY, queueOpacity, onClose, isTransitioningQueue]);
 
-  // Swipe down gesture to dismiss queue back to player
+  const isQueueAtTop = useSharedValue(true);
+  const handleQueueScroll = useCallback((event: any) => {
+    isQueueAtTop.value = (event.nativeEvent?.contentOffset?.y ?? 0) <= 0;
+  }, [isQueueAtTop]);
+
+  // Swipe down gesture to dismiss queue back to player (active when list is at top or dragging handle)
   const queueSwipeDownGesture = useMemo(() => {
     return Gesture.Pan()
-      .activeOffsetY([0, 10])
-      .failOffsetX([-30, 30])
+      .activeOffsetY(8)
+      .failOffsetY(-12)
+      .failOffsetX([-45, 45])
       .onStart(() => {
         'worklet';
+        if (isTransitioningQueue.value) return;
         runOnJS(ensurePlayerMounted)();
       })
       .onUpdate((event) => {
         'worklet';
-        if (event.translationY > 0) {
+        if (isTransitioningQueue.value) return;
+        if (isQueueAtTop.value && event.translationY > 0) {
           queueTranslateY.value = event.translationY;
           queueOpacity.value = interpolate(
             queueTranslateY.value,
             [0, windowHeight],
-            [1, 0.4],
+            [1, 0.35],
           );
         }
       })
       .onEnd((event) => {
         'worklet';
-        if (event.translationY > 55 || event.velocityY > 300) {
+        if (isTransitioningQueue.value) return;
+        if (isQueueAtTop.value && (event.translationY > 55 || event.velocityY > 240)) {
+          isTransitioningQueue.value = true;
           queueTranslateY.value = withTiming(
             windowHeight,
-            { duration: 250, easing: Easing.bezier(0.25, 1, 0.5, 1) },
+            { duration: 240, easing: Easing.bezier(0.25, 1, 0.5, 1) },
             (finished) => {
               if (finished) {
                 runOnJS(setActiveTab)('player');
+                isTransitioningQueue.value = false;
               }
             },
           );
           queueOpacity.value = withTiming(0, { duration: 200 });
         } else {
           queueTranslateY.value = withSpring(0, {
-            damping: 28,
+            damping: 24,
             stiffness: 220,
             mass: 0.8,
           });
           queueOpacity.value = withTiming(1, { duration: 180 });
         }
       });
-  }, [windowHeight, queueTranslateY, queueOpacity, ensurePlayerMounted]);
+  }, [windowHeight, isQueueAtTop, queueTranslateY, queueOpacity, ensurePlayerMounted, isTransitioningQueue]);
+
+  // Android hardware back button handler: if queue is open, close queue and return to player
+  useEffect(() => {
+    if (activeTab !== 'queue') return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      setActiveTab('player');
+      return true;
+    });
+    return () => subscription.remove();
+  }, [activeTab]);
 
   useEffect(() => {
     const config = { duration: TAB_FADE_DURATION, easing: TAB_FADE_EASING };
@@ -264,6 +302,7 @@ export function PlayerPhonePortrait() {
     lyricsOpacity.value = withTiming(activeTab === 'lyrics' ? 1 : 0, config);
 
     if (activeTab === 'queue') {
+      isTransitioningQueue.value = false;
       queueTranslateY.value = withSpring(0, {
         damping: 28,
         stiffness: 220,
@@ -271,13 +310,14 @@ export function PlayerPhonePortrait() {
       });
       queueOpacity.value = withTiming(1, { duration: 200 });
     } else {
+      isTransitioningQueue.value = false;
       queueTranslateY.value = withTiming(windowHeight, {
         duration: 250,
         easing: Easing.out(Easing.cubic),
       });
       queueOpacity.value = withTiming(0, { duration: 200 });
     }
-  }, [activeTab, windowHeight, playerOpacity, infoOpacity, lyricsOpacity, queueTranslateY, queueOpacity]);
+  }, [activeTab, windowHeight, playerOpacity, infoOpacity, lyricsOpacity, queueTranslateY, queueOpacity, isTransitioningQueue]);
 
   // Track which tabs should be visible in the compositor.
   const [visibleTabs, setVisibleTabs] = useState<Set<PlayerTab>>(
@@ -369,18 +409,45 @@ export function PlayerPhonePortrait() {
     primary: mixHexColors(colors.primary, colors.textPrimary, 0.45),
   }), [colors]);
 
+  const visibleQueue = useMemo(() => {
+    const startIdx = currentTrackIndex ?? 0;
+    return queue.slice(startIdx);
+  }, [queue, currentTrackIndex]);
+
+  const pendingScrollToTopOnSelectRef = useRef(false);
+
+  useEffect(() => {
+    if (pendingScrollToTopOnSelectRef.current) {
+      pendingScrollToTopOnSelectRef.current = false;
+      listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
+    }
+  }, [currentTrack?.id, currentTrackIndex]);
+
+  const onQueueItemPressWithScroll = useCallback(
+    (targetAbsoluteIndex: number) => {
+      if (targetAbsoluteIndex !== currentTrackIndex) {
+        pendingScrollToTopOnSelectRef.current = true;
+      }
+      handleQueueItemPress(targetAbsoluteIndex);
+    },
+    [currentTrackIndex, handleQueueItemPress],
+  );
+
   const renderQueueItem = useCallback(
-    ({ item, index }: { item: Child; index: number }) => (
-      <QueueItemRow
-        track={item}
-        index={index}
-        isActive={index === currentTrackIndex}
-        colors={queueColors}
-        onPress={handleQueueItemPress}
-        onLongPress={handleQueueItemLongPress}
-      />
-    ),
-    [currentTrackIndex, queueColors, handleQueueItemPress, handleQueueItemLongPress],
+    ({ item, index: relativeIndex }: { item: Child; index: number }) => {
+      const absoluteIndex = (currentTrackIndex ?? 0) + relativeIndex;
+      return (
+        <QueueItemRow
+          track={item}
+          index={absoluteIndex}
+          isActive={relativeIndex === 0}
+          colors={queueColors}
+          onPress={onQueueItemPressWithScroll}
+          onLongPress={handleQueueItemLongPress}
+        />
+      );
+    },
+    [currentTrackIndex, queueColors, onQueueItemPressWithScroll, handleQueueItemLongPress],
   );
 
   const keyExtractor = useCallback(
@@ -390,9 +457,10 @@ export function PlayerPhonePortrait() {
 
   const handleReorderQueue = useCallback(
     ({ from, to }: ReorderableListReorderEvent) => {
-      void reorderQueue(from, to);
+      const offset = currentTrackIndex ?? 0;
+      void reorderQueue(offset + from, offset + to);
     },
-    [],
+    [currentTrackIndex],
   );
 
   const queueListHeader = useMemo(
@@ -403,11 +471,11 @@ export function PlayerPhonePortrait() {
         handleShuffle={handleShuffle}
         handleShareQueue={handleShareQueue}
         shuffling={shuffling}
-        queueLength={queue.length}
+        queueLength={visibleQueue.length}
         swipeDownGesture={queueSwipeDownGesture}
       />
     ),
-    [colors, handleClearQueue, handleShuffle, handleShareQueue, shuffling, queue.length, queueSwipeDownGesture],
+    [colors, handleClearQueue, handleShuffle, handleShareQueue, shuffling, visibleQueue.length, queueSwipeDownGesture],
   );
 
   const headerTopPadding = Platform.OS === 'ios'
@@ -477,7 +545,7 @@ export function PlayerPhonePortrait() {
                 handleShuffle={handleShuffle}
                 shuffling={shuffling}
                 onSwitchToQueue={() => setActiveTab('queue')}
-                screenSwipeUpGesture={screenSwipeUpGesture}
+                screenSwipeGesture={screenSwipeGesture}
                 queueTranslateY={queueTranslateY}
               />
             </View>
@@ -506,16 +574,24 @@ export function PlayerPhonePortrait() {
             pointerEvents={activeTab === 'queue' ? 'auto' : 'none'}
           >
             {mountedTabs.has('queue') && (
-              <ReorderableList
-                data={queue}
-                renderItem={renderQueueItem}
-                keyExtractor={keyExtractor}
-                onReorder={handleReorderQueue}
-                ListHeaderComponent={queueListHeader}
-                onScrollBeginDrag={closeOpenRow}
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={QUEUE_CONTENT_CONTAINER_STYLE}
-              />
+              <GestureDetector gesture={queueSwipeDownGesture}>
+                <ReorderableList
+                  ref={listRef}
+                  data={visibleQueue}
+                  renderItem={renderQueueItem}
+                  keyExtractor={keyExtractor}
+                  onReorder={handleReorderQueue}
+                  ListHeaderComponent={queueListHeader}
+                  onScroll={handleQueueScroll}
+                  onScrollBeginDrag={closeOpenRow}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={QUEUE_CONTENT_CONTAINER_STYLE}
+                  windowSize={7}
+                  maxToRenderPerBatch={10}
+                  initialNumToRender={12}
+                  updateCellsBatchingPeriod={50}
+                />
+              </GestureDetector>
             )}
           </Animated.View>
 
@@ -585,13 +661,68 @@ interface PlayerContentProps {
   handleSeek: (seconds: number) => void;
   handleShuffle: () => void;
   shuffling: boolean;
-  /** Called when user swipes up on the player area to open the queue. */
+  /** Called when user swipes on the player area (up for queue, down to dismiss). */
   onSwitchToQueue: () => void;
-  screenSwipeUpGesture?: any;
+  screenSwipeGesture?: any;
   queueTranslateY?: SharedValue<number>;
 }
 
 const CAROUSEL_GAP = 22;
+
+const CarouselCoverItem = memo(
+  ({
+    item,
+    isCurrent,
+    heroSize,
+  }: {
+    item: Child;
+    isCurrent: boolean;
+    heroSize: number;
+  }) => {
+    const coverArtId = useSongCoverArt(item);
+    return (
+      <View
+        style={{
+          width: heroSize,
+          height: heroSize,
+          marginHorizontal: CAROUSEL_GAP / 2,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <View
+          style={[
+            styles.heroImageWrap,
+            {
+              width: heroSize,
+              height: heroSize,
+              opacity: isCurrent ? 1 : 0.8,
+              transform: [{ scale: isCurrent ? 1 : 0.94 }],
+            },
+          ]}
+        >
+          <CachedImage
+            key={item.id}
+            coverArtId={coverArtId}
+            size={HERO_COVER_SIZE}
+            style={styles.heroImage}
+            resizeMode="cover"
+          />
+          {isCurrent && (
+            <>
+              <View style={styles.sleepCapsuleOverlay} pointerEvents="box-none">
+                <SleepTimerCapsule />
+              </View>
+              <View style={styles.sourceBadgeOverlay} pointerEvents="none">
+                <PlaybackSourceBadge />
+              </View>
+            </>
+          )}
+        </View>
+      </View>
+    );
+  },
+);
 
 const PlayerContent = memo(function PlayerContent({
   currentTrack,
@@ -600,11 +731,10 @@ const PlayerContent = memo(function PlayerContent({
   handleSeek,
   handleShuffle,
   shuffling,
-  screenSwipeUpGesture,
+  screenSwipeGesture,
   queueTranslateY,
 }: PlayerContentProps) {
   const { t } = useTranslation();
-  const songCoverArtId = useSongCoverArt(currentTrack);
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const { isPlaying, isBuffering } = usePlaybackState();
@@ -615,13 +745,16 @@ const PlayerContent = memo(function PlayerContent({
   const currentTrackIndex = playerStore((s) => s.currentTrackIndex);
   const { canSkipNext, canSkipPrevious } = useCanSkip();
 
-  // Active track index and adjacent track previews
-  const activeIndex = currentTrackIndex ?? 0;
-  const prevTrack = activeIndex > 0 ? queue[activeIndex - 1] : null;
-  const nextTrack = activeIndex < queue.length - 1 ? queue[activeIndex + 1] : null;
+  const carouselTracks = useMemo(() => {
+    if (!currentTrack) return [];
+    return queue;
+  }, [queue, currentTrack]);
 
-  const prevCoverArtId = useSongCoverArt(prevTrack);
-  const nextCoverArtId = useSongCoverArt(nextTrack);
+  const currentIndex = currentTrackIndex ?? 0;
+  const flatListRef = useRef<FlatList<Child>>(null);
+  const isUserScrollingRef = useRef(false);
+  const lastScrolledIndexRef = useRef(-1);
+  const isSkippingRef = useRef(false);
 
   const error = playerStore((s) => s.error);
   const retrying = playerStore((s) => s.retrying);
@@ -657,89 +790,110 @@ const PlayerContent = memo(function PlayerContent({
   }, [windowHeight, windowWidth, insets.top, insets.bottom, m.reserved, m.heroFloor]);
 
   const stepDistance = heroSize + CAROUSEL_GAP;
+  const sidePadding = Math.max(0, (windowWidth - heroSize) / 2 - CAROUSEL_GAP / 2);
 
-  // Shared values for hero carousel swipe
-  const heroTranslateX = useSharedValue(0);
-  const contextX = useSharedValue(0);
+  const triggerCarouselSkip = useCallback(
+    (targetIndex: number) => {
+      if (isSkippingRef.current) return;
+      if (targetIndex > currentIndex) {
+        isSkippingRef.current = true;
+        lastScrolledIndexRef.current = targetIndex;
+        void skipToNext();
+      } else if (targetIndex < currentIndex) {
+        isSkippingRef.current = true;
+        lastScrolledIndexRef.current = targetIndex;
+        void skipToPrevious();
+      }
+    },
+    [currentIndex],
+  );
 
-  const skipTrack = useCallback((direction: 'next' | 'prev') => {
-    if (direction === 'next') {
-      void skipToNext();
-    } else {
-      void skipToPrevious();
-    }
-  }, []);
+  const handleMomentumScrollEnd = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      isUserScrollingRef.current = false;
+      const offsetX = event.nativeEvent.contentOffset.x;
+      const targetIndex = Math.round(offsetX / stepDistance);
+      triggerCarouselSkip(targetIndex);
+    },
+    [stepDistance, triggerCarouselSkip],
+  );
 
-  const heroPanGesture = useMemo(() => {
-    return Gesture.Pan()
-      .activeOffsetX([-12, 12])
-      .cancelsTouchesInView(false)
-      .onStart(() => {
-        'worklet';
-        contextX.value = heroTranslateX.value;
-      })
-      .onUpdate((event) => {
-        'worklet';
-        let delta = event.translationX;
-        if (delta > 0 && !canSkipPrevious) {
-          delta *= 0.2;
-        } else if (delta < 0 && !canSkipNext) {
-          delta *= 0.2;
-        }
-        heroTranslateX.value = contextX.value + delta;
-      })
-      .onEnd((event) => {
-        'worklet';
-        const threshold = Math.min(stepDistance * 0.16, 50);
-        const velocity = event.velocityX;
+  const handleScrollEndDrag = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const velocityX = event.nativeEvent.velocity?.x ?? 0;
+      if (Math.abs(velocityX) < 0.1) {
+        isUserScrollingRef.current = false;
+        const offsetX = event.nativeEvent.contentOffset.x;
+        const targetIndex = Math.round(offsetX / stepDistance);
+        triggerCarouselSkip(targetIndex);
+      }
+    },
+    [stepDistance, triggerCarouselSkip],
+  );
 
-        // Swipe Left -> Next Track
-        if ((event.translationX < -threshold || velocity < -280) && canSkipNext) {
-          heroTranslateX.value = withTiming(
-            -stepDistance,
-            { duration: 180, easing: Easing.bezier(0.25, 0.1, 0.25, 1) },
-            (finished) => {
-              if (finished) {
-                runOnJS(skipTrack)('next');
-                heroTranslateX.value = 0;
-              }
-            },
-          );
-          return;
-        }
-
-        // Swipe Right -> Previous Track
-        if ((event.translationX > threshold || velocity > 280) && canSkipPrevious) {
-          heroTranslateX.value = withTiming(
-            stepDistance,
-            { duration: 180, easing: Easing.bezier(0.25, 0.1, 0.25, 1) },
-            (finished) => {
-              if (finished) {
-                runOnJS(skipTrack)('prev');
-                heroTranslateX.value = 0;
-              }
-            },
-          );
-          return;
-        }
-
-        // Return cleanly to 0 without bouncing
-        heroTranslateX.value = withTiming(0, {
-          duration: 180,
-          easing: Easing.out(Easing.cubic),
-        });
+  useEffect(() => {
+    isSkippingRef.current = false;
+    if (flatListRef.current && !isUserScrollingRef.current && carouselTracks.length > 0) {
+      if (lastScrolledIndexRef.current === currentIndex) {
+        lastScrolledIndexRef.current = -1;
+        return;
+      }
+      lastScrolledIndexRef.current = -1;
+      flatListRef.current.scrollToOffset({
+        offset: currentIndex * stepDistance,
+        animated: true,
       });
-  }, [stepDistance, canSkipNext, canSkipPrevious, skipTrack, contextX, heroTranslateX]);
+    }
+  }, [currentIndex, stepDistance, carouselTracks.length]);
 
-  const heroAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: heroTranslateX.value }],
-  }));
+  const onListLayout = useCallback(() => {
+    flatListRef.current?.scrollToOffset({
+      offset: currentIndex * stepDistance,
+      animated: false,
+    });
+  }, [currentIndex, stepDistance]);
+
+  const onScrollToIndexFailed = useCallback(
+    (info: { index: number }) => {
+      setTimeout(() => {
+        flatListRef.current?.scrollToOffset({
+          offset: info.index * stepDistance,
+          animated: false,
+        });
+      }, 50);
+    },
+    [stepDistance],
+  );
+
+  const getItemLayout = useCallback(
+    (_: any, index: number) => ({
+      length: stepDistance,
+      offset: stepDistance * index,
+      index,
+    }),
+    [stepDistance],
+  );
+
+  const carouselKeyExtractor = useCallback(
+    (item: Child, index: number) => (item as any)._queueKey || `${item.id}-${index}`,
+    [],
+  );
+
+  const renderCarouselItem = useCallback(
+    ({ item, index }: { item: Child; index: number }) => (
+      <CarouselCoverItem
+        item={item}
+        isCurrent={index === currentIndex}
+        heroSize={heroSize}
+      />
+    ),
+    [currentIndex, heroSize],
+  );
 
   // Synergistic cover art, info, and controls movement as queue rises/falls
   const heroSynergyStyle = useAnimatedStyle(() => {
     if (!queueTranslateY) return {};
     const ty = queueTranslateY.value;
-    // progress: 0 when queue is closed, 1 when queue is fully open
     const progress = interpolate(ty, [0, windowHeight], [1, 0], 'clamp');
 
     const scale = interpolate(progress, [0, 1], [1, 0.78], 'clamp');
@@ -799,85 +953,38 @@ const PlayerContent = memo(function PlayerContent({
     );
   }
 
-  const heroComposedGesture = useMemo(() => {
-    if (!screenSwipeUpGesture) return heroPanGesture;
-    return Gesture.Simultaneous(heroPanGesture, screenSwipeUpGesture);
-  }, [heroPanGesture, screenSwipeUpGesture]);
-
   const upperContent = (
     <View>
       {Platform.OS === 'ios' && <View style={{ height: insets.top + HEADER_BAR_HEIGHT }} />}
       {/* Hero cover art carousel with synergistic scale, lift, and fade */}
       <Animated.View style={[styles.hero, { paddingBottom: m.heroPadBottom }, heroSynergyStyle]}>
-        <GestureDetector gesture={heroComposedGesture}>
-          <View style={{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }}>
-            <Animated.View style={[{ width: heroSize, height: heroSize, alignItems: 'center', justifyContent: 'center' }, heroAnimatedStyle]}>
-              {/* Previous track preview */}
-              {prevTrack && (
-                <View
-                  style={[
-                    styles.heroImageWrap,
-                    styles.previewHeroImageWrap,
-                    {
-                      position: 'absolute',
-                      left: -(heroSize + CAROUSEL_GAP),
-                      width: heroSize,
-                      height: heroSize,
-                    },
-                  ]}
-                  pointerEvents="none"
-                >
-                  <CachedImage
-                    coverArtId={prevCoverArtId}
-                    size={HERO_COVER_SIZE}
-                    style={styles.heroImage}
-                    resizeMode="cover"
-                  />
-                </View>
-              )}
-
-              {/* Current track */}
-              <View style={[styles.heroImageWrap, { width: heroSize, height: heroSize }]}>
-                <CachedImage
-                  coverArtId={songCoverArtId}
-                  size={HERO_COVER_SIZE}
-                  style={styles.heroImage}
-                  resizeMode="cover"
-                />
-                <View style={styles.sleepCapsuleOverlay} pointerEvents="box-none">
-                  <SleepTimerCapsule />
-                </View>
-                <View style={styles.sourceBadgeOverlay} pointerEvents="none">
-                  <PlaybackSourceBadge />
-                </View>
-              </View>
-
-              {/* Next track preview */}
-              {nextTrack && (
-                <View
-                  style={[
-                    styles.heroImageWrap,
-                    styles.previewHeroImageWrap,
-                    {
-                      position: 'absolute',
-                      left: heroSize + CAROUSEL_GAP,
-                      width: heroSize,
-                      height: heroSize,
-                    },
-                  ]}
-                  pointerEvents="none"
-                >
-                  <CachedImage
-                    coverArtId={nextCoverArtId}
-                    size={HERO_COVER_SIZE}
-                    style={styles.heroImage}
-                    resizeMode="cover"
-                  />
-                </View>
-              )}
-            </Animated.View>
-          </View>
-        </GestureDetector>
+        <View style={{ width: windowWidth, height: heroSize + 16, alignItems: 'center' }}>
+          <FlatList
+            ref={flatListRef}
+            data={carouselTracks}
+            renderItem={renderCarouselItem}
+            keyExtractor={carouselKeyExtractor}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            snapToInterval={stepDistance}
+            snapToAlignment="start"
+            decelerationRate="fast"
+            disableIntervalMomentum={true}
+            contentContainerStyle={{ paddingHorizontal: sidePadding }}
+            getItemLayout={getItemLayout}
+            onScrollBeginDrag={() => {
+              isUserScrollingRef.current = true;
+              isSkippingRef.current = false;
+            }}
+            onMomentumScrollEnd={handleMomentumScrollEnd}
+            onScrollEndDrag={handleScrollEndDrag}
+            onLayout={onListLayout}
+            onScrollToIndexFailed={onScrollToIndexFailed}
+            initialNumToRender={3}
+            maxToRenderPerBatch={3}
+            windowSize={5}
+          />
+        </View>
       </Animated.View>
 
       {/* Track info */}
@@ -1022,9 +1129,9 @@ const PlayerContent = memo(function PlayerContent({
     </View>
   );
 
-  if (!screenSwipeUpGesture) return playerContainer;
+  if (!screenSwipeGesture) return playerContainer;
   return (
-    <GestureDetector gesture={screenSwipeUpGesture}>
+    <GestureDetector gesture={screenSwipeGesture}>
       {playerContainer}
     </GestureDetector>
   );
@@ -1228,9 +1335,7 @@ const styles = StyleSheet.create({
   },
   hero: {
     width: '100%',
-    maxWidth: 464,
     alignSelf: 'center',
-    paddingHorizontal: HERO_PADDING,
     paddingTop: 8,
     paddingBottom: 24,
     alignItems: 'center',
@@ -1246,10 +1351,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 16,
     elevation: 12,
-  },
-  previewHeroImageWrap: {
-    opacity: 0.75,
-    transform: [{ scale: 0.92 }],
   },
   dragHandleContainer: {
     width: '100%',

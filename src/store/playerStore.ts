@@ -45,6 +45,8 @@ export interface PlayerState {
   queueFormats: Record<string, EffectiveFormat>;
   /** Where the active track is playing from: local file, lookahead cache, or live stream. */
   trackSource: TrackSource | null;
+  /** History of recently played tracks that were removed from the active queue. */
+  playbackHistory: Child[];
 
   /* ---- Setters (called by playerService) ---- */
   setCurrentTrack: (track: Child | null, index?: number | null) => void;
@@ -58,6 +60,15 @@ export interface PlayerState {
   addQueueFormat: (songId: string, fmt: EffectiveFormat) => void;
   clearQueueFormats: () => void;
   setTrackSource: (source: TrackSource | null) => void;
+  addToHistory: (track: Child) => void;
+  popFromHistory: () => Child | null;
+  clearHistory: () => void;
+  consumeQueueTracks: (
+    tracksToHistory: Child[],
+    newQueue: Child[],
+    currentTrack: Child | null,
+    currentTrackIndex?: number | null,
+  ) => void;
 }
 
 let _queueKeySeq = 0;
@@ -111,4 +122,35 @@ export const playerStore = create<PlayerState>()((set) => ({
     set((state) => ({ queueFormats: { ...state.queueFormats, [songId]: fmt } })),
   clearQueueFormats: () => set({ queueFormats: {} }),
   setTrackSource: (trackSource) => set({ trackSource }),
+  playbackHistory: [],
+  addToHistory: (track) =>
+    set((state) => {
+      if (!track) return state;
+      const next = [track, ...state.playbackHistory.filter((t) => t.id !== track.id)].slice(0, 30);
+      return { playbackHistory: next };
+    }),
+  popFromHistory: () => {
+    let popped: Child | null = null;
+    set((state) => {
+      if (state.playbackHistory.length === 0) return state;
+      popped = state.playbackHistory[0] ?? null;
+      return { playbackHistory: state.playbackHistory.slice(1) };
+    });
+    return popped;
+  },
+  clearHistory: () => set({ playbackHistory: [] }),
+  consumeQueueTracks: (tracksToHistory, newQueue, currentTrack, currentTrackIndex = 0) =>
+    set((state) => {
+      let nextHistory = state.playbackHistory;
+      for (const track of tracksToHistory) {
+        if (!track) continue;
+        nextHistory = [track, ...nextHistory.filter((t) => t.id !== track.id)].slice(0, 30);
+      }
+      return {
+        playbackHistory: nextHistory,
+        queue: newQueue,
+        currentTrack,
+        currentTrackIndex,
+      };
+    }),
 }));

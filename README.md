@@ -91,8 +91,9 @@ ReSubstreamer connects with any media server implementing the standard **Subsoni
 
 Download the latest standalone `.apk` directly from the [GitHub Releases](https://github.com/monti8403/ReSubstreamer/releases/latest) page:
 
-1. Download `ReSubstreamer-vX.X.X.apk` onto your Android device.
-2. Open the file and allow **"Install from unknown sources"** when prompted by your browser/file manager.
+1. Download the **Release APK** (`ReSubstreamer-vX.X.X.apk` or `app-release.apk`) onto your Android device.  
+   > **Important:** Always install the **Release** build for everyday listening. Release builds include full Hermes AOT bytecode precompilation and R8 optimizations for an ultra-smooth 60fps experience. Avoid using Debug APKs for daily use, as Debug mode runs developmental validations, unoptimized lists, and requires an active Metro dev session.
+2. Open the file and allow **"Install from unknown sources"** when prompted by your browser/file manager (or select *"Non inviare"* if prompted by Google Play Protect for unsigned local APKs).
 3. Launch ReSubstreamer, enter your server URL (e.g., `https://music.yourdomain.com`), username, and password/app token.
 
 ---
@@ -114,15 +115,17 @@ cd ReSubstreamer
 # Install dependencies
 npm install
 
-# Compile the standalone debug/release APK
+# Compile the standalone Release APK (recommended for full 60fps performance)
 cd android
-./gradlew app:assembleDebug
-# or for release:
-# ./gradlew app:assembleRelease
+./gradlew app:assembleRelease
+
+# Or for local development with Metro bundler and Fast Refresh:
+# ./gradlew app:assembleDebug
 ```
 
 The compiled APK will be available in:  
-`android/app/build/outputs/apk/debug/app-debug.apk`
+- **Release (recommended):** `android/app/build/outputs/apk/release/app-release.apk`  
+- **Debug:** `android/app/build/outputs/apk/debug/app-debug.apk`
 
 ---
 

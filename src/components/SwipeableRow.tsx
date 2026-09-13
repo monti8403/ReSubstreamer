@@ -298,8 +298,8 @@ export const SwipeableRow = memo(function SwipeableRow({
 
   const hasFullSwipe =
     (enableFullSwipeRight && hasRight) || (enableFullSwipeLeft && hasLeft);
-  const effectiveFriction = hasFullSwipe ? 1.5 : 2;
-  const effectiveOvershootFriction = hasFullSwipe ? 1 : 8;
+  const effectiveFriction = hasFullSwipe ? 1.15 : 1.35;
+  const effectiveOvershootFriction = hasFullSwipe ? 1 : 4;
 
   // renderLeftActions = shown when swiping RIGHT = our rightActions
   // Outermost action is index 0 (left edge of screen).
@@ -365,8 +365,10 @@ export const SwipeableRow = memo(function SwipeableRow({
       hitSlop={{ left: -EDGE_BACK_GESTURE_WIDTH }}
       friction={effectiveFriction}
       overshootFriction={effectiveOvershootFriction}
-      leftThreshold={40}
-      rightThreshold={40}
+      dragOffsetFromLeftEdge={6}
+      dragOffsetFromRightEdge={6}
+      leftThreshold={32}
+      rightThreshold={32}
       overshootLeft={hasRight}
       overshootRight={hasLeft}
       renderLeftActions={hasRight && !disabled ? renderLeftPanel : undefined}

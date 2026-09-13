@@ -53,6 +53,24 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ back: jest.fn() }),
 }));
 
+jest.mock('react-native-reorderable-list', () => {
+  const { View } = require('react-native');
+  const ReorderableList = ({ data, renderItem, ListHeaderComponent }: any) => (
+    <View testID="reorderable-list">
+      {ListHeaderComponent}
+      {data?.map((item: any, index: number) => (
+        <View key={item.id || index}>{renderItem({ item, index })}</View>
+      ))}
+    </View>
+  );
+  return {
+    __esModule: true,
+    default: ReorderableList,
+    ReorderableListItem: ({ children }: { children: React.ReactNode }) => <View>{children}</View>,
+    useReorderableDrag: () => jest.fn(),
+  };
+});
+
 jest.mock('expo-linear-gradient', () => {
   const { View } = require('react-native');
   return { LinearGradient: (props: object) => <View {...props} /> };
@@ -62,7 +80,10 @@ jest.mock('react-native-reanimated', () => {
   const { View } = require('react-native');
   return {
     __esModule: true,
-    default: { View },
+    default: {
+      View,
+      createAnimatedComponent: (c: unknown) => c,
+    },
     useSharedValue: (init: number) => ({ value: init }),
     useAnimatedStyle: (fn: () => object) => fn(),
     withTiming: (val: number) => val,
@@ -71,8 +92,20 @@ jest.mock('react-native-reanimated', () => {
     cancelAnimation: jest.fn(),
     interpolate: (val: number, _input: number[], output: number[]) =>
       val === 0 ? output[0] : output[1],
-    Easing: { out: (e: unknown) => e, cubic: (t: number) => t, linear: (t: number) => t },
+    Easing: {
+      in: (e: unknown) => e,
+      out: (e: unknown) => e,
+      inOut: (e: unknown) => e,
+      cubic: (t: number) => t,
+      linear: (t: number) => t,
+      bezier: () => (t: number) => t,
+    },
     runOnJS: (fn: Function) => fn,
+    useAnimatedRef: () => ({ current: null }),
+    useDerivedValue: (fn: Function) => ({ value: fn() }),
+    useAnimatedReaction: jest.fn(),
+    useAnimatedScrollHandler: () => jest.fn(),
+    useComposedEventHandler: () => jest.fn(),
   };
 });
 
@@ -83,6 +116,7 @@ jest.mock('react-native-gesture-handler', () => {
     const g: Record<string, () => unknown> = {};
     const methods = [
       'enabled', 'activeOffsetY', 'failOffsetY', 'activeOffsetX', 'failOffsetX',
+      'cancelsTouchesInView',
       'onBegin', 'onStart', 'onUpdate', 'onChange', 'onEnd', 'onFinalize',
       'simultaneousWithExternalGesture', 'requireExternalGestureToFail',
     ];
@@ -92,7 +126,13 @@ jest.mock('react-native-gesture-handler', () => {
   return {
     Pressable,
     GestureDetector: ({ children }: { children: React.ReactNode }) => children,
-    Gesture: { Pan: makeChainable },
+    Gesture: {
+      Pan: makeChainable,
+      Native: makeChainable,
+      Tap: makeChainable,
+      Simultaneous: (..._args: any[]) => makeChainable(),
+    },
+    State: { UNDETERMINED: 0, FAILED: 1, BEGAN: 2, CANCELLED: 3, ACTIVE: 4, END: 5 },
   };
 });
 

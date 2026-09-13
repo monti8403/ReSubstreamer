@@ -141,6 +141,13 @@ export type ReplayGainModeSetting = (typeof REPLAY_GAIN_MODES)[number];
  */
 export const LOOKAHEAD_MAX_CACHE_MB = 512;
 
+/**
+ * Behavior of the skip-previous action:
+ * - 'always-previous': Always goes to the previous track (even if playing > 3s).
+ * - 'restart-or-previous': Restarts current track if playing > 3s, else previous track.
+ */
+export type SkipPreviousBehavior = 'always-previous' | 'restart-or-previous';
+
 export interface PlaybackSettingsState {
   /** Maximum bitrate for streaming (legacy/fallback). null = no limit (server default). */
   maxBitRate: MaxBitRate;
@@ -193,6 +200,8 @@ export interface PlaybackSettingsState {
 
   /** ReplayGain loudness normalisation: off / track / album. */
   replayGainMode: ReplayGainModeSetting;
+  /** Whether Previous button always goes to previous track or restarts if >3s. */
+  skipPreviousBehavior: SkipPreviousBehavior;
 
   setMaxBitRate: (bitRate: MaxBitRate) => void;
   setMaxBitRateWifi: (bitRate: MaxBitRate) => void;
@@ -216,6 +225,7 @@ export interface PlaybackSettingsState {
   setPlaybackMode: (mode: PlaybackModeSetting) => void;
   setCrossfadeDurationMs: (ms: CrossfadeDurationMs) => void;
   setReplayGainMode: (mode: ReplayGainModeSetting) => void;
+  setSkipPreviousBehavior: (behavior: SkipPreviousBehavior) => void;
 }
 
 const PERSIST_KEY = 'substreamer-playback-settings';
@@ -263,6 +273,7 @@ export const playbackSettingsStore = create<PlaybackSettingsState>()(
       playbackMode: 'gapless',
       crossfadeDurationMs: 5000,
       replayGainMode: 'off',
+      skipPreviousBehavior: 'always-previous',
 
       setMaxBitRate: (maxBitRate) => set({ maxBitRate, maxBitRateWifi: maxBitRate }),
       setMaxBitRateWifi: (maxBitRateWifi) => set({ maxBitRateWifi, maxBitRate: maxBitRateWifi }),
@@ -286,6 +297,7 @@ export const playbackSettingsStore = create<PlaybackSettingsState>()(
       setPlaybackMode: (playbackMode) => set({ playbackMode }),
       setCrossfadeDurationMs: (crossfadeDurationMs) => set({ crossfadeDurationMs }),
       setReplayGainMode: (replayGainMode) => set({ replayGainMode }),
+      setSkipPreviousBehavior: (skipPreviousBehavior) => set({ skipPreviousBehavior }),
     }),
     {
       name: PERSIST_KEY,
@@ -315,6 +327,7 @@ export const playbackSettingsStore = create<PlaybackSettingsState>()(
         playbackMode: state.playbackMode,
         crossfadeDurationMs: state.crossfadeDurationMs,
         replayGainMode: state.replayGainMode,
+        skipPreviousBehavior: state.skipPreviousBehavior,
       }),
     }
   )

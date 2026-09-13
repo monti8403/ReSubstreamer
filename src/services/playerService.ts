@@ -170,7 +170,6 @@ export async function initPlayer(): Promise<void> {
     }
   });
 
-  // --- Active-track change → store + now-playing scrobble + persist ---
   tp.onTrackChange((track, index, reason) => {
     // Completion fallback: a natural auto-advance means the OUTGOING track
     // finished — report it if the configured milestone was missed (e.g. a seek
@@ -178,6 +177,7 @@ export async function initPlayer(): Promise<void> {
     if (reason === 'auto-advance' && activeScrobbleIndex != null) {
       reportPlay(activeScrobbleIndex);
     }
+
     if (track?.id) {
       const child = currentChildQueue.find((c) => c.id === track.id) ?? null;
       playerStore.getState().setCurrentTrack(child, index ?? null);
@@ -557,12 +557,25 @@ export async function togglePlayPause(): Promise<void> {
 export async function skipToNext(): Promise<void> {
   await awaitHydration();
   await tp.skipToNext();
+  await tp.play();
 }
 
 /** Skip to the previous track in the queue. */
 export async function skipToPrevious(): Promise<void> {
   await awaitHydration();
+  const { position } = playerStore.getState();
+  const { skipPreviousBehavior } = playbackSettingsStore.getState();
+
+  // If user enabled restart-or-previous and track played > 3 seconds, restart it
+  if (skipPreviousBehavior === 'restart-or-previous' && position > 3) {
+    await tp.seekTo(0);
+    const store = playerStore.getState();
+    store.setProgress(0, store.duration, store.bufferedPosition);
+    return;
+  }
+
   await tp.skipToPrevious();
+  await tp.play();
 }
 
 /** Whether skip-to-previous is possible (native restarts the current track if

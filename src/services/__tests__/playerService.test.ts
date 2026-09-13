@@ -19,6 +19,15 @@ const mockAddQueueFormat = jest.fn();
 const mockClearQueueFormats = jest.fn();
 const mockSetTrackSource = jest.fn();
 const mockPlayerStoreSetState = jest.fn();
+const mockConsumeQueueTracks = jest.fn(
+  (_history: unknown, newQueue: unknown, currentTrack: unknown, currentTrackIndex: unknown) => {
+    mockSetCurrentTrack(currentTrack, currentTrackIndex);
+    mockSetQueue(newQueue);
+  },
+);
+const mockAddToHistory = jest.fn();
+const mockPopFromHistory = jest.fn();
+const mockClearHistory = jest.fn();
 
 jest.mock('../../store/playerStore', () => ({
   playerStore: {
@@ -43,6 +52,10 @@ jest.mock('../../store/playerStore', () => ({
       addQueueFormat: mockAddQueueFormat,
       clearQueueFormats: mockClearQueueFormats,
       setTrackSource: mockSetTrackSource,
+      addToHistory: mockAddToHistory,
+      popFromHistory: mockPopFromHistory,
+      clearHistory: mockClearHistory,
+      consumeQueueTracks: mockConsumeQueueTracks,
     })),
     setState: (...args: unknown[]) => mockPlayerStoreSetState(...args),
   },
@@ -166,6 +179,7 @@ const defaultPlayerState = () => ({
   error: null,
   retrying: false,
   playbackState: 'idle',
+  playbackHistory: [],
   setCurrentTrack: mockSetCurrentTrack,
   setPlaybackState: mockSetPlaybackState,
   setQueue: mockSetQueue,
@@ -177,6 +191,10 @@ const defaultPlayerState = () => ({
   addQueueFormat: mockAddQueueFormat,
   clearQueueFormats: mockClearQueueFormats,
   setTrackSource: mockSetTrackSource,
+  addToHistory: mockAddToHistory,
+  popFromHistory: mockPopFromHistory,
+  clearHistory: mockClearHistory,
+  consumeQueueTracks: mockConsumeQueueTracks,
 });
 
 beforeAll(async () => {

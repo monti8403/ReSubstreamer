@@ -5,7 +5,7 @@ import { useCallback, useMemo } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, { runOnJS, useAnimatedStyle } from 'react-native-reanimated';
+import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
 import { CachedImage } from '@/components/CachedImage';
 import { MarqueeText } from '@/components/MarqueeText';
@@ -33,6 +33,7 @@ export function PlayerPhoneMini() {
   const queueLoading = playerStore((s) => s.queueLoading);
   const currentTrackIndex = playerStore((s) => s.currentTrackIndex);
   const queue = playerStore((s) => s.queue);
+  const playbackHistory = playerStore((s) => s.playbackHistory);
   const repeatMode = playbackSettingsStore((s) => s.repeatMode);
 
   // Rendered synchronously from the store each re-render — same contract as
@@ -46,12 +47,18 @@ export function PlayerPhoneMini() {
     currentTrackIndex != null &&
     (currentTrackIndex < queue.length - 1 || repeatMode !== 'off');
   const canSkipPrevious =
-    currentTrackIndex != null &&
-    (currentTrackIndex > 0 || repeatMode !== 'off' || position > 3);
+    (currentTrackIndex != null && currentTrackIndex > 0) ||
+    playbackHistory.length > 0 ||
+    repeatMode !== 'off' ||
+    position > 3;
 
   const handleSkipNext = useCallback(() => {
     if (canSkipNext) skipToNext();
   }, [canSkipNext]);
+
+  const handleSkipPrevious = useCallback(() => {
+    if (canSkipPrevious) skipToPrevious();
+  }, [canSkipPrevious]);
 
   const marqueeStyle = useMemo(
     () => [styles.title, { color: queueLoading ? colors.textSecondary : colors.textPrimary }],
@@ -73,9 +80,9 @@ export function PlayerPhoneMini() {
   // Gestures for mini player: Swipe up to expand, swipe left/right to change track, tap to open
   const miniPanGesture = useMemo(() => {
     return Gesture.Pan()
-      .activeOffsetX([-15, 15])
-      .activeOffsetY([-15, 15])
-      .cancelsTouchesInView(false)
+      .activeOffsetX([-20, 20])
+      .activeOffsetY([-20, 20])
+      .cancelsTouchesInView(true)
       .onEnd((event) => {
         'worklet';
         const absX = Math.abs(event.translationX);
@@ -87,13 +94,13 @@ export function PlayerPhoneMini() {
           return;
         }
 
-        // Horizontal swipe -> change track
-        if (absX > absY) {
-          if ((event.translationX < -30 || event.velocityX < -250) && canSkipNext) {
+        // Horizontal swipe -> change track (left = next, right = prev)
+        if (absX > absY && absX > 30) {
+          if ((event.translationX < -35 || event.velocityX < -280) && canSkipNext) {
             runOnJS(skipToNext)();
             return;
           }
-          if ((event.translationX > 30 || event.velocityX > 250) && canSkipPrevious) {
+          if ((event.translationX > 35 || event.velocityX > 280) && canSkipPrevious) {
             runOnJS(skipToPrevious)();
             return;
           }
@@ -190,10 +197,25 @@ export function PlayerPhoneMini() {
 
       {/* Transport controls */}
       <View style={styles.controls}>
+        {/* Skip to previous */}
+        <Pressable
+          onPress={handleSkipPrevious}
+          hitSlop={8}
+          disabled={!canSkipPrevious}
+          style={({ pressed }) => [styles.skipButton, pressed && canSkipPrevious && styles.pressed]}
+        >
+          <Ionicons
+            name="play-back"
+            size={22}
+            color={colors.textPrimary}
+            style={!canSkipPrevious ? { opacity: 0.35 } : undefined}
+          />
+        </Pressable>
+
         {/* Play / Pause / Buffering */}
         <Pressable
           onPress={togglePlayPause}
-          hitSlop={12}
+          hitSlop={8}
           style={({ pressed }) => [styles.playButton, pressed && styles.pressed]}
         >
           {(isBuffering || queueLoading) ? (
@@ -210,7 +232,7 @@ export function PlayerPhoneMini() {
         {/* Skip to next */}
         <Pressable
           onPress={handleSkipNext}
-          hitSlop={12}
+          hitSlop={8}
           disabled={!canSkipNext}
           style={({ pressed }) => [styles.skipButton, pressed && canSkipNext && styles.pressed]}
         >
@@ -280,9 +302,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+    zIndex: 10,
+    elevation: 4,
   },
   playButton: {
-    marginLeft: 8,
     padding: 4,
   },
   skipButton: {

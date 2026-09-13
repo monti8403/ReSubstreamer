@@ -99,6 +99,8 @@ export interface CachedImageProps extends Omit<ImageProps, 'source'> {
   fallbackUri?: string;
   /** Optional colour for the placeholder waveform bars. */
   placeholderColor?: string;
+  /** When true, preserves the previous image until the new one resolves, preventing black/empty flashes. */
+  keepPreviousUntilLoaded?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -121,6 +123,7 @@ export const CachedImage = memo(function CachedImage({
   style,
   placeholderColor,
   resizeMode,
+  keepPreviousUntilLoaded = false,
 }: CachedImageProps) {
   // Sentinel cover ids resolve to bundled assets — the cache service
   // never sees them. Map the id to `undefined` so the rest of the
@@ -158,8 +161,10 @@ export const CachedImage = memo(function CachedImage({
     localErroredRef.current = false;
     // Reset synchronously (React's "adjust state during render" pattern) so a
     // recycled FlashList cell never shows the previous cover while the new one
-    // resolves.
-    setResolved(null);
+    // resolves, unless keepPreviousUntilLoaded is true (e.g. hero player cover).
+    if (!keepPreviousUntilLoaded) {
+      setResolved(null);
+    }
   }
 
   const remoteFailed = coverArtId ? isRemoteFailed(coverArtId) : false;
@@ -283,7 +288,7 @@ export const CachedImage = memo(function CachedImage({
           // Glide (Android) / SDWebImage (iOS), NOT Fresco — sidesteps the
           // PipelineDraweeController recycle/re-attach crashes. Both fetch via
           // our trusted OkHttp / URLSession, so self-signed servers still load.
-          transition={0}
+          transition={keepPreviousUntilLoaded ? 180 : 0}
           // id+size for FlashList recycling; resolveToken forces a reload when
           // reportBadCache re-downloads the same file:// path (expo-image has
           // no per-key memory eviction).
