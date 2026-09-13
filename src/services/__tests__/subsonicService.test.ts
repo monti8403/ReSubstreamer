@@ -31,7 +31,7 @@ jest.mock('../../store/playbackSettingsStore', () => ({
 }));
 
 import { authStore } from '../../store/authStore';
-import { playbackSettingsStore } from '../../store/playbackSettingsStore';
+import { playbackSettingsStore, getStreamingMaxBitRate } from '../../store/playbackSettingsStore';
 import {
   clearApiCache,
   ensureCoverArtAuth,
@@ -42,9 +42,11 @@ import {
 
 const mockAuthStore = authStore as jest.Mocked<typeof authStore>;
 const mockPlaybackSettingsStore = playbackSettingsStore as jest.Mocked<typeof playbackSettingsStore>;
+const mockGetStreamingMaxBitRate = getStreamingMaxBitRate as jest.Mock;
 
 beforeEach(() => {
   clearApiCache();
+  mockGetStreamingMaxBitRate.mockReturnValue(null);
   mockAuthStore.getState.mockReturnValue({
     isLoggedIn: true,
     serverUrl: 'https://music.example.com',
@@ -228,6 +230,7 @@ describe('format/bitrate URL building (FORMAT_PRESETS)', () => {
 
   it('mp3 with explicit bitrate honors the user choice', async () => {
     await ensureCoverArtAuth();
+    mockGetStreamingMaxBitRate.mockReturnValue(128);
     mockPlaybackSettingsStore.getState.mockReturnValue({
       maxBitRate: 128,
       streamFormat: 'mp3' as const,
