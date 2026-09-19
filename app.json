@@ -2,7 +2,7 @@
   "expo": {
     "name": "ReSubstreamer",
     "slug": "substreamer",
-    "version": "8.0.91",
+    "version": "8.0.92",
     "scheme": "resubstreamer",
     "platforms": [
       "android",
@@ -13,7 +13,7 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.resubstreamer",
-      "buildNumber": "176",
+      "buildNumber": "177",
       "supportsTablet": true,
       "infoPlist": {
         "UIBackgroundModes": [
@@ -55,7 +55,7 @@
         "POST_NOTIFICATIONS"
       ],
       "predictiveBackGestureEnabled": false,
-      "versionCode": 80000176,
+      "versionCode": 80000177,
       "package": "com.resubstreamer"
     },
     "web": {

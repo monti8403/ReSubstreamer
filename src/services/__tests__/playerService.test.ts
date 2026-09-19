@@ -130,6 +130,10 @@ import {
   retryPlayback,
   clearQueue,
   addToQueue,
+  addSongToUserQueue,
+  getUserQueueInsertIndex,
+  getUserQueueTrackIds,
+  moveQueueItemToPlayNext,
   removeFromQueue,
   cycleRepeatMode,
   applyPlaybackRate,
@@ -499,6 +503,82 @@ describe('playSongNext', () => {
     await playSongNext(makeChild('next'));
     expect(mockTP.setQueue).not.toHaveBeenCalled();
     expect(mockTP.play).not.toHaveBeenCalled();
+  });
+
+  it('prepends to user queue so subsequent user additions queue after it', async () => {
+    const queue = [makeChild('t0'), makeChild('t1'), makeChild('t2')];
+    await playTrack(queue[0], queue);
+
+    await playSongNext(makeChild('urgent'));
+    mockTP.addToQueue.mockClear();
+
+    await addSongToUserQueue(makeChild('afterUrgent'));
+    expect(mockTP.addToQueue.mock.calls[0][1]).toBe(2);
+  });
+});
+
+describe('addSongToUserQueue', () => {
+  it('starts playback when queue is empty', async () => {
+    await clearQueue();
+    mockTP.setQueue.mockClear();
+    await addSongToUserQueue(makeChild('song1'));
+    expect(mockTP.setQueue).toHaveBeenCalled();
+    expect(mockTP.play).toHaveBeenCalled();
+  });
+
+  it('inserts sequentially: first at currentIndex + 1, second at currentIndex + 2, third at currentIndex + 3', async () => {
+    const queue = [makeChild('base0'), makeChild('base1'), makeChild('base2')];
+    await playTrack(queue[0], queue);
+    mockTP.addToQueue.mockClear();
+
+    await addSongToUserQueue(makeChild('userA'));
+    expect(mockTP.addToQueue).toHaveBeenCalledTimes(1);
+    expect(mockTP.addToQueue.mock.calls[0][0][0].id).toBe('userA');
+    expect(mockTP.addToQueue.mock.calls[0][1]).toBe(1);
+
+    mockTP.addToQueue.mockClear();
+    await addSongToUserQueue(makeChild('userB'));
+    expect(mockTP.addToQueue).toHaveBeenCalledTimes(1);
+    expect(mockTP.addToQueue.mock.calls[0][0][0].id).toBe('userB');
+    expect(mockTP.addToQueue.mock.calls[0][1]).toBe(2);
+
+    mockTP.addToQueue.mockClear();
+    await addSongToUserQueue(makeChild('userC'));
+    expect(mockTP.addToQueue).toHaveBeenCalledTimes(1);
+    expect(mockTP.addToQueue.mock.calls[0][0][0].id).toBe('userC');
+    expect(mockTP.addToQueue.mock.calls[0][1]).toBe(3);
+  });
+});
+
+describe('moveQueueItemToPlayNext', () => {
+  it('moves a downstream queue item to right after current track if no user queue exists', async () => {
+    const queue = [makeChild('t0'), makeChild('t1'), makeChild('t2'), makeChild('t3')];
+    await playTrack(queue[0], queue);
+    mockTP.addToQueue.mockClear();
+    mockTP.removeFromQueue.mockClear();
+
+    await moveQueueItemToPlayNext(3);
+    expect(mockTP.removeFromQueue).toHaveBeenCalledWith([3]);
+    expect(mockTP.addToQueue).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ id: 't3' })]),
+      1,
+    );
+  });
+
+  it('moves a downstream queue item after previously added user queue items', async () => {
+    const queue = [makeChild('t0'), makeChild('t1'), makeChild('t2'), makeChild('t3')];
+    await playTrack(queue[0], queue);
+
+    await addSongToUserQueue(makeChild('u1'));
+    mockTP.addToQueue.mockClear();
+    mockTP.removeFromQueue.mockClear();
+
+    await moveQueueItemToPlayNext(4);
+    expect(mockTP.removeFromQueue).toHaveBeenCalledWith([4]);
+    expect(mockTP.addToQueue).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ id: 't3' })]),
+      2,
+    );
   });
 });
 

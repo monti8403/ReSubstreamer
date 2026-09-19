@@ -341,32 +341,32 @@ export function MoreOptionsSheet() {
     }
   }, [entity]);
 
-  const handleSaveTopSongsPlaylist = useCallback(() => {
+  const handleSaveTopSongsPlaylist = useCallback(async () => {
     if (!entity || entity.type !== 'artist') return;
-    handleClose();
+    await moreOptionsStore.getState().hideAndAwait();
     saveArtistTopSongsPlaylist(entity.item);
-  }, [entity, handleClose]);
+  }, [entity]);
 
-  const handlePlayMoreLikeThis = useCallback(() => {
+  const handlePlayMoreLikeThis = useCallback(async () => {
     if (!entity || entity.type !== 'song') return;
-    handleClose();
+    await moreOptionsStore.getState().hideAndAwait();
     playMoreLikeThis(entity.item as Child);
-  }, [entity, handleClose]);
+  }, [entity]);
 
-  const handlePlaySimilarArtistsMix = useCallback(() => {
+  const handlePlaySimilarArtistsMix = useCallback(async () => {
     if (!entity || entity.type !== 'artist') return;
-    handleClose();
+    await moreOptionsStore.getState().hideAndAwait();
     playSimilarArtistsMix(entity.item);
-  }, [entity, handleClose]);
+  }, [entity]);
 
-  const handlePlayMoreByArtist = useCallback(() => {
+  const handlePlayMoreByArtist = useCallback(async () => {
     if (!entity) return;
     const artistId = entity.type === 'artist' ? entity.item.id : (entity.item as Child | AlbumID3).artistId;
     const artistName = entity.type === 'artist' ? entity.item.name : (entity.item as Child | AlbumID3).artist;
     if (!artistId || !artistName) return;
-    handleClose();
+    await moreOptionsStore.getState().hideAndAwait();
     playMoreByArtist(artistId, artistName);
-  }, [entity, handleClose]);
+  }, [entity]);
 
   const handleSetMbid = useCallback(async () => {
     if (!entity) return;

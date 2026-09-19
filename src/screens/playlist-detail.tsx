@@ -3,6 +3,8 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
+  Keyboard,
   Platform,
   Pressable,
   RefreshControl,
@@ -10,6 +12,7 @@ import {
   Switch,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import Ionicons from "@react-native-vector-icons/ionicons/static";
@@ -46,6 +49,7 @@ import { enqueuePlaylistDownload, syncCachedPlaylistTracks } from '../services/m
 import { playTrack } from '../services/playerService';
 import { updatePlaylistDetails, updatePlaylistOrder } from '../services/subsonicService';
 import { shuffleArray } from '../utils/arrayHelpers';
+import { foldAccents } from '../utils/sortHelpers';
 import { authStore } from '../store/authStore';
 import { moreOptionsStore } from '../store/moreOptionsStore';
 import { musicCacheStore } from '../store/musicCacheStore';
@@ -64,6 +68,7 @@ const HERO_PADDING = 24;
 const HERO_COVER_SIZE = 600;
 const HEADER_BAR_HEIGHT = 44;
 const EDIT_ROW_HEIGHT = 64;
+const SEARCH_HEADER_HEIGHT = 52;
 
 const EditTrackRow = memo(function EditTrackRow({
   item,
@@ -292,9 +297,48 @@ export function PlaylistDetailScreen() {
 
   const tracks = useMemo(() => playlist?.entry ?? [], [playlist?.entry]);
 
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef<TextInput>(null);
+
+  const toggleSearch = useCallback(() => {
+    setSearchOpen((prev) => {
+      if (prev) setSearchQuery('');
+      return !prev;
+    });
+  }, []);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery('');
+    Keyboard.dismiss();
+  }, []);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      closeSearch();
+      return true;
+    });
+    return () => sub.remove();
+  }, [searchOpen, closeSearch]);
+
+  const filteredTracks = useMemo(() => {
+    const q = foldAccents(searchQuery.trim()).toLowerCase();
+    if (!searchOpen || !q) return tracks;
+    return tracks.filter((t) => {
+      const title = foldAccents(t.title ?? '').toLowerCase();
+      const artist = foldAccents(t.artist ?? '').toLowerCase();
+      const album = foldAccents(t.album ?? '').toLowerCase();
+      return title.includes(q) || artist.includes(q) || album.includes(q);
+    });
+  }, [tracks, searchOpen, searchQuery]);
+
   /* ---- Edit mode handlers ---- */
 
   const handleStartEdit = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery('');
     setEditedTracks([...tracks]);
     nameRef.current = playlist?.name ?? '';
     commentRef.current = playlist?.comment ?? '';
@@ -417,8 +461,16 @@ export function PlaylistDetailScreen() {
     if (Platform.OS === 'ios') return;
     if (!playlist || !id) return;
 
+    if (searchOpen) {
+      navigation.setOptions({
+        headerShown: false,
+      });
+      return;
+    }
+
     if (editing) {
       navigation.setOptions({
+        headerShown: true,
         headerLeft: () => (
           <Pressable onPress={handleCancelEdit} hitSlop={8}>
             <Text style={[styles.headerButtonText, { color: colors.textPrimary }]}>
@@ -445,9 +497,23 @@ export function PlaylistDetailScreen() {
       });
     } else {
       navigation.setOptions({
+        headerShown: true,
         headerLeft: undefined,
         headerRight: () => (
           <View style={styles.headerRight}>
+            <Pressable
+              testID="playlist-search-button"
+              onPress={toggleSearch}
+              hitSlop={8}
+              style={styles.headerIcon}
+              accessibilityLabel={t('searchInPlaylist')}
+            >
+              <Ionicons
+                name="search-outline"
+                size={22}
+                color={colors.textPrimary}
+              />
+            </Pressable>
             {canEdit && (
               <Pressable onPress={handleStartEdit} hitSlop={8} style={styles.headerIcon}>
                 <Ionicons name="pencil-outline" size={22} color={colors.textPrimary} />
@@ -474,12 +540,28 @@ export function PlaylistDetailScreen() {
     saving,
     offlineMode,
     canEdit,
+    searchOpen,
+    toggleSearch,
     handleStartEdit,
     handleCancelEdit,
     handleSave,
+    t,
   ]);
 
   /* ---- Normal-mode renderItem ---- */
+
+  const handleTrackPress = useCallback(
+    (item: Child) => {
+      const fullIndex = tracks.findIndex((t) => t.id === item.id);
+      const others =
+        fullIndex !== -1
+          ? tracks.filter((_, idx) => idx !== fullIndex)
+          : tracks.filter((t) => t.id !== item.id);
+      const queue = [item, ...shuffleArray(others)];
+      playTrack(item, queue, id);
+    },
+    [tracks, id],
+  );
 
   const renderItem = useCallback(
     ({ item }: { item: Child; index: number }) => (
@@ -492,13 +574,14 @@ export function PlaylistDetailScreen() {
           colors={colors}
           songs={tracks}
           playlistId={id}
+          onPress={() => handleTrackPress(item)}
           showCoverArt
           showAlbumName
           optionsSource="playlist-detail"
         />
       </View>
     ),
-    [colors, tracks],
+    [colors, tracks, id, handleTrackPress],
   );
 
   /* ---- Edit-mode renderItem ---- */
@@ -629,8 +712,28 @@ export function PlaylistDetailScreen() {
     );
   }, [playlist, colors, tracks, editing, editedTracks, editedPublic, isOwn, t]);
 
-  const listEmpty = useMemo(
-    () => (
+  const listEmpty = useMemo(() => {
+    if (searchOpen && !editing) {
+      return (
+        <View style={styles.emptyTracks}>
+          <Ionicons
+            name="search-outline"
+            size={44}
+            color={colors.textSecondary}
+            style={{ marginBottom: 12, opacity: 0.6 }}
+          />
+          <Text style={[styles.emptyTracksTitle, { color: colors.textPrimary }]}>
+            {t('noResultsFound')}
+          </Text>
+          {searchQuery ? (
+            <Text style={[styles.emptyTracksSubtitle, { color: colors.textSecondary }]}>
+              {`"${searchQuery}"`}
+            </Text>
+          ) : null}
+        </View>
+      );
+    }
+    return (
       <View style={styles.emptyTracks}>
         <Text style={[styles.emptyTracksTitle, { color: colors.textPrimary }]}>
           {t('noTracks')}
@@ -639,9 +742,8 @@ export function PlaylistDetailScreen() {
           {t('noTracksPlaylistSubtitle')}
         </Text>
       </View>
-    ),
-    [colors.textPrimary, colors.textSecondary, t],
-  );
+    );
+  }, [searchOpen, editing, searchQuery, colors.textPrimary, colors.textSecondary, t]);
 
   if (loading || !transitionComplete) {
     return (
@@ -668,14 +770,20 @@ export function PlaylistDetailScreen() {
   // recycled instance, leaving the hero partly scrolled off the top.
   // See album-detail.tsx.
   const listContentStyle = {
-    paddingTop: insets.top + HEADER_BAR_HEIGHT,
+    paddingTop:
+      insets.top +
+      (searchOpen && !editing ? SEARCH_HEADER_HEIGHT + 8 : HEADER_BAR_HEIGHT),
     paddingBottom: 32,
   };
 
   return (
     <>
-      {Platform.OS === 'ios' && !editing && playlist && id && (
+      {Platform.OS === 'ios' && !editing && !searchOpen && playlist && id && (
         <Stack.Toolbar placement="right">
+          <Stack.Toolbar.Button
+            icon="magnifyingglass"
+            onPress={toggleSearch}
+          />
           {canEdit && (
             <Stack.Toolbar.Button icon="pencil" onPress={handleStartEdit} />
           )}
@@ -708,6 +816,72 @@ export function PlaylistDetailScreen() {
       <View style={styles.container}>
         <DetailScreenBackground coverArt={playlist?.coverArt} isWide={isWide} />
 
+        {searchOpen && !editing && (
+          <View
+            style={[
+              styles.searchHeaderOverlay,
+              {
+                paddingTop: insets.top,
+                height: insets.top + SEARCH_HEADER_HEIGHT,
+                backgroundColor: colors.background,
+                borderBottomColor: colors.border,
+              },
+            ]}
+          >
+            <View style={styles.searchHeaderRow}>
+              <View
+                style={[
+                  styles.searchPill,
+                  {
+                    backgroundColor: colors.inputBg,
+                    borderColor: colors.border,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="search"
+                  size={17}
+                  color={colors.textSecondary}
+                  style={styles.searchIcon}
+                />
+                <TextInput
+                  ref={searchInputRef}
+                  style={[styles.searchInput, { color: colors.textPrimary }]}
+                  placeholder={t('searchInPlaylist')}
+                  placeholderTextColor={colors.textSecondary}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  autoFocus
+                  returnKeyType="search"
+                  clearButtonMode="never"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                {searchQuery.length > 0 && (
+                  <Pressable
+                    onPress={() => setSearchQuery('')}
+                    hitSlop={8}
+                    style={styles.clearSearchButton}
+                    accessibilityLabel={t('clear')}
+                  >
+                    <Ionicons name="close-circle" size={18} color={colors.textSecondary} />
+                  </Pressable>
+                )}
+              </View>
+              <TouchableOpacity
+                onPress={closeSearch}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={styles.cancelSearchButton}
+                testID="playlist-search-cancel-button"
+              >
+                <Text style={[styles.cancelSearchText, { color: colors.primary }]}>
+                  {t('cancel')}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
       {editing ? (
         <ReorderableList
           data={editedTracks}
@@ -723,17 +897,18 @@ export function PlaylistDetailScreen() {
         />
       ) : (
         <FlashList
-          data={tracks}
+          data={searchOpen && !editing ? filteredTracks : tracks}
           renderItem={renderItem}
           keyExtractor={keyExtractor}
           drawDistance={LIST_DRAW_DISTANCE}
-          ListHeaderComponent={listHeader}
+          ListHeaderComponent={searchOpen && !editing ? null : listHeader}
           ListEmptyComponent={listEmpty}
           onScrollBeginDrag={closeOpenRow}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={listContentStyle}
+          keyboardShouldPersistTaps="handled"
           refreshControl={
-            offlineMode ? undefined : (
+            offlineMode || searchOpen ? undefined : (
               <RefreshControl
                 key={refreshControlKey}
                 refreshing={refreshing}
@@ -932,5 +1107,50 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  searchHeaderOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 100,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
+  },
+  searchHeaderRow: {
+    height: SEARCH_HEADER_HEIGHT,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+  },
+  searchPill: {
+    flex: 1,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+  },
+  searchIcon: {
+    marginRight: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    paddingVertical: 0,
+  },
+  clearSearchButton: {
+    padding: 2,
+    marginLeft: 4,
+  },
+  cancelSearchButton: {
+    marginLeft: 12,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+  },
+  cancelSearchText: {
+    fontSize: 16,
+    fontWeight: '500',
   },
 });

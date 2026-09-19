@@ -1,7 +1,7 @@
 import Ionicons from "@react-native-vector-icons/ionicons/static";
 import MaterialCommunityIcons from "@react-native-vector-icons/material-design-icons/static";
 import { Stack, useNavigation, useRouter } from 'expo-router';
-import { LinearGradient } from 'expo-linear-gradient';
+
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -36,7 +36,7 @@ import { PlayerModeContent, type PlayerMode } from '@/components/player/PlayerMo
 import { CastButton } from '@/components/RoutePicker';
 import { type ThemeColors } from '@/constants/theme';
 import { useCanSkip } from '@/hooks/useCanSkip';
-import { useCoverGradient } from '@/hooks/useCoverGradient';
+import { PlayerCoverGradient } from '@/components/player/PlayerCoverGradient';
 import { useSongCoverArt } from '@/hooks/useSongCoverArt';
 import { usePlayerActions } from '@/hooks/usePlayerActions';
 import { usePlaybackState } from '@/hooks/usePlaybackState';
@@ -122,14 +122,7 @@ export function PlayerTabletPortrait() {
     }
   }, [currentTrack, wasPopulated, onClose]);
 
-  const { gradientColors, gradientLocations, gradientOpacity } = useCoverGradient(
-    songCoverArtId,
-    colors.background,
-  );
 
-  const gradientAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: gradientOpacity.value,
-  }));
 
   /* ---- Header: dismiss + more options ---- */
   useEffect(() => {
@@ -204,9 +197,10 @@ export function PlayerTabletPortrait() {
       <View style={[styles.container, { backgroundColor: colors.background }]}>
         {/* Single page-wide gradient background */}
         <View style={[absoluteFill, { backgroundColor: colors.background }]} />
-        <Animated.View style={[absoluteFill, gradientAnimatedStyle]} pointerEvents="none">
-          <LinearGradient colors={gradientColors} locations={gradientLocations} style={absoluteFill} />
-        </Animated.View>
+        <PlayerCoverGradient
+          coverArtId={songCoverArtId}
+          endColor={colors.background}
+        />
 
         <View style={[styles.content, { paddingTop: headerSpace, paddingBottom: insets.bottom }]}>
           {/* Top band: cover art (left) + info/progress/controls (right). */}

@@ -1,7 +1,7 @@
 import Ionicons from "@react-native-vector-icons/ionicons/static";
 import MaterialCommunityIcons from "@react-native-vector-icons/material-design-icons/static";
 import { FlashList } from '@shopify/flash-list';
-import { LinearGradient } from 'expo-linear-gradient';
+
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -38,7 +38,7 @@ import { SleepTimerButton } from '@/components/SleepTimerButton';
 import { SleepTimerCapsule } from '@/components/SleepTimerCapsule';
 import { closeOpenRow } from '@/components/SwipeableRow';
 import { useCanSkip } from '@/hooks/useCanSkip';
-import { useCoverGradient } from '@/hooks/useCoverGradient';
+import { PlayerCoverGradient } from './PlayerCoverGradient';
 import { useSongCoverArt } from '@/hooks/useSongCoverArt';
 import { mixHexColors } from '@/utils/colors';
 import { usePlayerActions } from '@/hooks/usePlayerActions';
@@ -100,8 +100,7 @@ export function PlayerTabletLandscape({
   // darkening call is no longer necessary — we just use the hook output.
   // Slightly-darkened theme background as the gradient's lower stop.
   const backgroundEnd = mixHexColors(colors.background, '#000000', 0.15);
-  const { gradientColors, gradientLocations, gradientOpacity: extractedGradientOpacity } =
-    useCoverGradient(songCoverArtId, backgroundEnd);
+
 
   // Right panel mode: queue (default), lyrics, or album info
   const [rightPanelMode, setRightPanelMode] = useState<'queue' | 'lyrics' | 'info'>('queue');
@@ -158,8 +157,7 @@ export function PlayerTabletLandscape({
   }));
 
   const gradientAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(expandProgress.value, [0, 0.5], [0, 1], Extrapolation.CLAMP)
-      * extractedGradientOpacity.value,
+    opacity: interpolate(expandProgress.value, [0, 0.5], [0, 1], Extrapolation.CLAMP),
   }));
 
   const coverStyle = useAnimatedStyle(() => ({
@@ -256,18 +254,13 @@ export function PlayerTabletLandscape({
     <Animated.View style={[StyleSheet.absoluteFill, overlayStyle]}>
       <View style={[styles.container, { backgroundColor: colors.background }]}>
         {/* Gradient background — emanates from the left (art side) */}
-        <Animated.View
-          style={[absoluteFill, gradientAnimatedStyle]}
-          pointerEvents="none"
-        >
-          <LinearGradient
-            colors={gradientColors}
-            locations={gradientLocations}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0.6 }}
-            style={absoluteFill}
-          />
-        </Animated.View>
+        <PlayerCoverGradient
+          coverArtId={songCoverArtId}
+          endColor={backgroundEnd}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0.6 }}
+          containerAnimatedStyle={gradientAnimatedStyle}
+        />
 
         {/* Content */}
         <View style={[styles.content, {

@@ -14,7 +14,7 @@
  */
 
 import Constants from 'expo-constants';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
 
 import { useCachedCoverArt } from './useCachedCoverArt';
@@ -38,6 +38,7 @@ export function useImagePalette(coverArtId: string | undefined): ImagePaletteRes
   const cachedUri = useCachedCoverArt(skip ? undefined : coverArtId, 300);
   const { theme } = useTheme();
   const [palette, setPalette] = useState<Palette | null>(null);
+  const hadPaletteRef = useRef(false);
   const gradientOpacity = useSharedValue(0);
 
   useEffect(() => {
@@ -73,10 +74,18 @@ export function useImagePalette(coverArtId: string | undefined): ImagePaletteRes
 
   useEffect(() => {
     if (palette) {
-      gradientOpacity.value = 0;
-      gradientOpacity.value = withTiming(1, { duration: 400 });
+      if (!hadPaletteRef.current) {
+        // Initial transition from no palette to visible palette
+        gradientOpacity.value = 0;
+        gradientOpacity.value = withTiming(1, { duration: 400 });
+      } else {
+        // Keep visible at 1 so transitions between covers do not flash black
+        gradientOpacity.value = 1;
+      }
+      hadPaletteRef.current = true;
     } else {
       gradientOpacity.value = withTiming(0, { duration: 300 });
+      hadPaletteRef.current = false;
     }
   }, [palette, gradientOpacity]);
 

@@ -1,1 +1,1 @@
-fix: downloaded album details lost after last update (hotfix)
+Live in-playlist search, improved play similar queueing, fluid album artwork & background transitions

@@ -70,6 +70,14 @@ Set independent audio streaming profiles based on connectivity:
 - High-priority background audio playback service with Android media notification controls.
 - Optimized local database indexing and caching layer for faster library rendering on large collections (>50,000 tracks).
 
+### 5. In-Playlist Live Search & Smart Queueing
+- **In-Playlist Search:** Instantly filter songs by title, artist, or album in large playlists with a responsive collapsible search bar, real-time match counter, and keyboard dismissal.
+- **Smart Similar Tracks Playback:** Queueing similar songs immediately starts playback from the selected seed track, followed smoothly by generated recommendations.
+
+### 6. Seamless Visual Transitions & Artwork Animation
+- **Dual-Layer Background Crossfade:** Ambient palette colors smoothly dissolve into each other without black flashes or harsh color cuts between tracks.
+- **Fluid Album Artwork Spring Transitions:** Album covers transition dynamically with gentle physics-based spring animations and image cache persistence.
+
 ---
 
 ## Server Compatibility

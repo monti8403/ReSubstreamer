@@ -2,7 +2,7 @@ import Ionicons from "@react-native-vector-icons/ionicons/static";
 import { FlashList } from '@shopify/flash-list';
 import ReorderableList, { type ReorderableListReorderEvent } from 'react-native-reorderable-list';
 import { Stack, useNavigation, useRouter } from 'expo-router';
-import { LinearGradient } from 'expo-linear-gradient';
+
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -54,7 +54,7 @@ import { QueueItemRow } from '@/components/QueueItemRow';
 import { closeOpenRow } from '@/components/SwipeableRow';
 import { type ThemeColors } from '@/constants/theme';
 import { useCanSkip } from '@/hooks/useCanSkip';
-import { useCoverGradient } from '@/hooks/useCoverGradient';
+import { PlayerCoverGradient } from '@/components/player/PlayerCoverGradient';
 import { useSongCoverArt } from '@/hooks/useSongCoverArt';
 import { usePlayerActions } from '@/hooks/usePlayerActions';
 import { usePlaybackState } from '@/hooks/usePlaybackState';
@@ -119,10 +119,7 @@ export function PlayerPhonePortrait() {
     }
   }, [currentTrack, wasPopulated, onClose]);
 
-  const { gradientColors, gradientLocations, gradientOpacity } = useCoverGradient(
-    songCoverArtId,
-    colors.background,
-  );
+
 
   const offlineMode = offlineModeStore((s) => s.offlineMode);
 
@@ -399,9 +396,7 @@ export function PlayerPhonePortrait() {
     spinStyle,
   } = useShuffleOverlay();
 
-  const gradientAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: gradientOpacity.value,
-  }));
+
 
   // Muted primary for active queue item highlight
   const queueColors = useMemo(() => ({
@@ -513,16 +508,10 @@ export function PlayerPhonePortrait() {
       <View style={[styles.container, { backgroundColor: colors.background }]}>
         {/* Gradient background */}
         <View style={[absoluteFill, { backgroundColor: colors.background }]} />
-        <Animated.View
-          style={[absoluteFill, gradientAnimatedStyle]}
-          pointerEvents="none"
-        >
-          <LinearGradient
-            colors={gradientColors}
-            locations={gradientLocations}
-            style={absoluteFill}
-          />
-        </Animated.View>
+        <PlayerCoverGradient
+          coverArtId={songCoverArtId}
+          endColor={colors.background}
+        />
 
         {/* Content area with tab switching */}
         <View style={styles.contentArea}>
@@ -680,6 +669,26 @@ const CarouselCoverItem = memo(
     heroSize: number;
   }) => {
     const coverArtId = useSongCoverArt(item);
+    const scale = useSharedValue(isCurrent ? 1 : 0.94);
+    const opacity = useSharedValue(isCurrent ? 1 : 0.8);
+
+    useEffect(() => {
+      scale.value = withSpring(isCurrent ? 1 : 0.94, {
+        damping: 18,
+        stiffness: 130,
+        mass: 0.8,
+      });
+      opacity.value = withTiming(isCurrent ? 1 : 0.8, {
+        duration: 300,
+        easing: Easing.out(Easing.quad),
+      });
+    }, [isCurrent, scale, opacity]);
+
+    const animatedCardStyle = useAnimatedStyle(() => ({
+      opacity: opacity.value,
+      transform: [{ scale: scale.value }],
+    }));
+
     return (
       <View
         style={{
@@ -690,15 +699,14 @@ const CarouselCoverItem = memo(
           justifyContent: 'center',
         }}
       >
-        <View
+        <Animated.View
           style={[
             styles.heroImageWrap,
             {
               width: heroSize,
               height: heroSize,
-              opacity: isCurrent ? 1 : 0.8,
-              transform: [{ scale: isCurrent ? 1 : 0.94 }],
             },
+            animatedCardStyle,
           ]}
         >
           <CachedImage
@@ -707,6 +715,7 @@ const CarouselCoverItem = memo(
             size={HERO_COVER_SIZE}
             style={styles.heroImage}
             resizeMode="cover"
+            keepPreviousUntilLoaded={true}
           />
           {isCurrent && (
             <>
@@ -718,7 +727,7 @@ const CarouselCoverItem = memo(
               </View>
             </>
           )}
-        </View>
+        </Animated.View>
       </View>
     );
   },

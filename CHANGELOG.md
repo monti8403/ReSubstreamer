@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.0.92] - 2026-09-19
+
+- feat(playlist): live in-playlist search and filtering with smooth reveal animation
+- feat(player): play similar songs starts from the selected seed song followed by recommendations
+- feat(player): dual-layer ambient background crossfade eliminating black flashes between tracks
+- feat(player): smooth spring-animated album artwork transitions on track changes
+
 ## [8.0.91] - 2026-07-23
 
 - chore: deps

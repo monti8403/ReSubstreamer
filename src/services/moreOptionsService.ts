@@ -21,7 +21,15 @@ import {
   enqueueSongDownload as enqueueSongDownloadService,
   removeCachedAlbumSong as removeCachedAlbumSongService,
 } from './musicCacheService';
-import { addToQueue, moveQueueItemToPlayNext as _moveQueueItemToPlayNext, playSongNext, playTrack, removeFromQueue, reorderQueue as _reorderQueue } from './playerService';
+import {
+  addSongToUserQueue,
+  addToQueue,
+  moveQueueItemToPlayNext as _moveQueueItemToPlayNext,
+  playSongNext,
+  playTrack,
+  removeFromQueue,
+  reorderQueue as _reorderQueue,
+} from './playerService';
 import {
   createNewPlaylist,
   getAlbum,
@@ -112,10 +120,10 @@ export async function toggleStar(
 /* ------------------------------------------------------------------ */
 
 /**
- * Add a single song / track to the end of the play queue.
+ * Add a single song / track to the user play queue (plays next or after existing queued tracks).
  */
 export async function addSongToQueue(song: Child): Promise<void> {
-  await addToQueue([song]);
+  await addSongToUserQueue(song);
 }
 
 /**
@@ -255,7 +263,8 @@ export async function playMoreLikeThis(song: Child): Promise<void> {
       return;
     }
 
-    await playTrack(tracks[0], tracks);
+    const queue = [song, ...tracks];
+    await playTrack(song, queue);
     processingOverlayStore.getState().showSuccess(i18n.t('playingSimilarSongs'));
   } catch {
     processingOverlayStore.getState().showError(i18n.t('failedToLoadSimilarSongs'));
