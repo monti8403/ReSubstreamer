@@ -6,7 +6,12 @@ Drop-in operating instructions for coding agents. Read this file before every ta
 
 This file follows the [AGENTS.md](https://agents.md) open standard (Linux Foundation / Agentic AI Foundation). Claude Code, Codex, Cursor, Windsurf, Copilot, Aider, Devin and Amp read it natively.
 
-**This is the only rules file.** `CLAUDE.md`, `.cursor/rules/`, `.github/copilot-instructions.md` and `.github/instructions/*.instructions.md` were all retired on 2026-08-06 — every tool reads AGENTS.md now. Do not reintroduce a per-tool copy: two rules files drift, and the stale one is always the one that gets read. (The retired Copilot files had gone stale exactly that way — none of them knew the data model existed.)
+**Core Directives & Documentation:**
+- Leggi sempre la documentazione di riferimento in `docs/` (`docs/01_project_vision.md`, `docs/02_architecture.md`, `docs/03_ui_guidelines.md`) prima di iniziare.
+- Stack di riferimento: React Native ed Expo v57 con TypeScript.
+- UI 100% custom superiore a Spotify: nessun framework pre-fatto (niente NativeBase, Tamagui, etc.); costruisci i componenti visivi da zero usando `StyleSheet` e Flexbox.
+- I moduli nativi audio (`react-native-queue-player`, Nitro Modules) e il database SQLite (`@op-engineering/op-sqlite` con Drizzle ORM) non vanno alterati in alcun modo se non esplicitamente richiesto.
+- Il file `.cursorrules` è sincronizzato con queste direttive.
 
 ---
 
