@@ -23,8 +23,10 @@ import {
 } from './musicCacheService';
 import {
   addSongToUserQueue,
+  addTracksToUserQueue,
   addToQueue,
   moveQueueItemToPlayNext as _moveQueueItemToPlayNext,
+  moveQueueItemToUserQueue as _moveQueueItemToUserQueue,
   playSongNext,
   playTrack,
   removeFromQueue,
@@ -136,7 +138,7 @@ export async function playSongNextInQueue(song: Child): Promise<void> {
 }
 
 /**
- * Add every song from an album to the end of the play queue.
+ * Add every song from an album to the user play queue (Spotify-style).
  * Uses cached album data when available, otherwise fetches from the API.
  */
 export async function addAlbumToQueue(album: AlbumID3): Promise<void> {
@@ -147,11 +149,11 @@ export async function addAlbumToQueue(album: AlbumID3): Promise<void> {
     songs = full?.song;
   }
   if (!songs?.length) return;
-  await addToQueue(songs);
+  await addTracksToUserQueue(songs);
 }
 
 /**
- * Add every song from a playlist to the end of the play queue.
+ * Add every song from a playlist to the user play queue (Spotify-style).
  * Uses cached playlist data when available, otherwise fetches from the API.
  */
 export async function addPlaylistToQueue(playlist: Playlist): Promise<void> {
@@ -164,7 +166,7 @@ export async function addPlaylistToQueue(playlist: Playlist): Promise<void> {
     entries = full?.entry;
   }
   if (!entries?.length) return;
-  await addToQueue(entries, playlist.id);
+  await addTracksToUserQueue(entries);
 }
 
 /**
@@ -179,6 +181,13 @@ export async function removeItemFromQueue(index: number): Promise<void> {
  */
 export async function moveQueueItemToPlayNext(index: number): Promise<void> {
   await _moveQueueItemToPlayNext(index);
+}
+
+/**
+ * Move a queue item from "Next Up" to the user queue ("Aggiungi alla coda").
+ */
+export async function moveQueueItemToUserQueue(index: number): Promise<void> {
+  await _moveQueueItemToUserQueue(index);
 }
 
 /**

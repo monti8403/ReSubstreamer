@@ -17,8 +17,12 @@ import { getTrackPlayer } from 'react-native-queue-player';
 
 import { errMessage } from '../utils/errorMessage';
 import { installHeadlessMediaService } from './headlessMediaService';
-import { LOOKAHEAD_MAX_CACHE_MB } from '../store/playbackSettingsStore';
+import { LOOKAHEAD_MAX_CACHE_MB, playbackSettingsStore } from '../store/playbackSettingsStore';
 import { ensureNowPlayingPlaceholderUri } from './nowPlayingPlaceholder';
+import { setNativeSkipPreviousBehavior } from 'expo-move-to-back';
+
+const initialSkipPrevious = playbackSettingsStore.getState().skipPreviousBehavior;
+setNativeSkipPreviousBehavior(initialSkipPrevious);
 
 // The lookahead-cache disk budget AND eviction policy are fixed here at
 // configure() — Android's Media3 SimpleCache is built at the right size (it
@@ -29,11 +33,8 @@ void getTrackPlayer()
   .configure({
     audioContentType: 'music',
     userAgent: 'substreamer8',
-    // Standard music-player skip-back: restart the current track if past the
-    // fixed ~3s threshold, else go to the previous track. Restores the
-    // pre-RNQP-migration fork behaviour; with this, Previous never greys out
-    // (at index 0, past the threshold it restarts) — matches useCanSkip.
-    skipToPreviousBehavior: 'restart-or-previous',
+    // Skip-back behavior respects user setting: 'restart-or-previous' or 'previous'.
+    skipToPreviousBehavior: initialSkipPrevious === 'restart-or-previous' ? 'restart-or-previous' : 'previous',
     // Our mild gray-waveform placeholder (matches the in-app cover-art
     // placeholder) in place of RNQP's built-in. Needs a local file:// URI.
     placeholderArtworkUri: ensureNowPlayingPlaceholderUri(),

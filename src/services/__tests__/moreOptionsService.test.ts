@@ -1,6 +1,9 @@
 jest.mock('../playerService', () => ({
   addSongToUserQueue: jest.fn().mockResolvedValue(undefined),
+  addTracksToUserQueue: jest.fn().mockResolvedValue(undefined),
   addToQueue: jest.fn().mockResolvedValue(undefined),
+  moveQueueItemToPlayNext: jest.fn().mockResolvedValue(undefined),
+  moveQueueItemToUserQueue: jest.fn().mockResolvedValue(undefined),
   playTrack: jest.fn().mockResolvedValue(undefined),
   removeFromQueue: jest.fn().mockResolvedValue(undefined),
 }));
@@ -112,7 +115,7 @@ jest.mock('../../store/processingOverlayStore', () => ({
   },
 }));
 
-import { addSongToUserQueue, addToQueue, playTrack, removeFromQueue } from '../playerService';
+import { addSongToUserQueue, addTracksToUserQueue, addToQueue, playTrack, removeFromQueue } from '../playerService';
 import {
   enqueueSongDownload as mockEnqueueSongDownload,
   deleteCachedItem as mockDeleteCachedItem,
@@ -167,6 +170,7 @@ const mockGetTopSongs = getTopSongs as jest.Mock;
 const mockCreateNewPlaylist = createNewPlaylist as jest.Mock;
 const mockAddToQueue = addToQueue as jest.Mock;
 const mockAddSongToUserQueue = addSongToUserQueue as jest.Mock;
+const mockAddTracksToUserQueue = addTracksToUserQueue as jest.Mock;
 const mockPlayTrack = playTrack as jest.Mock;
 
 /** Seed the real music-cache store; `cachedSongs` rows are promoted-column shaped. */
@@ -298,7 +302,7 @@ describe('addAlbumToQueue', () => {
     await addAlbumToQueue({ id: 'a1' } as any);
 
     expect(mockGetAlbum).not.toHaveBeenCalled();
-    expect(mockAddToQueue).toHaveBeenCalledWith(songs);
+    expect(mockAddTracksToUserQueue).toHaveBeenCalledWith(songs);
   });
 
   it('fetches from API when not cached', async () => {
@@ -309,21 +313,21 @@ describe('addAlbumToQueue', () => {
     await addAlbumToQueue({ id: 'a1' } as any);
 
     expect(mockGetAlbum).toHaveBeenCalledWith('a1');
-    expect(mockAddToQueue).toHaveBeenCalledWith(songs);
+    expect(mockAddTracksToUserQueue).toHaveBeenCalledWith(songs);
   });
 
   it('does nothing when album has no songs', async () => {
     mockAlbumDetails = {};
     mockGetAlbum.mockResolvedValue({ song: [] });
     await addAlbumToQueue({ id: 'a1' } as any);
-    expect(mockAddToQueue).not.toHaveBeenCalled();
+    expect(mockAddTracksToUserQueue).not.toHaveBeenCalled();
   });
 
   it('does nothing when API returns null', async () => {
     mockAlbumDetails = {};
     mockGetAlbum.mockResolvedValue(null);
     await addAlbumToQueue({ id: 'a1' } as any);
-    expect(mockAddToQueue).not.toHaveBeenCalled();
+    expect(mockAddTracksToUserQueue).not.toHaveBeenCalled();
   });
 });
 
@@ -335,7 +339,7 @@ describe('addPlaylistToQueue', () => {
     await addPlaylistToQueue({ id: 'p1' } as any);
 
     expect(mockGetPlaylist).not.toHaveBeenCalled();
-    expect(mockAddToQueue).toHaveBeenCalledWith(entries, 'p1');
+    expect(mockAddTracksToUserQueue).toHaveBeenCalledWith(entries);
   });
 
   it('fetches from API when not cached', async () => {
@@ -346,14 +350,14 @@ describe('addPlaylistToQueue', () => {
     await addPlaylistToQueue({ id: 'p1' } as any);
 
     expect(mockGetPlaylist).toHaveBeenCalledWith('p1');
-    expect(mockAddToQueue).toHaveBeenCalledWith(entries, 'p1');
+    expect(mockAddTracksToUserQueue).toHaveBeenCalledWith(entries);
   });
 
   it('does nothing when playlist has no entries', async () => {
     mockPlaylistDetails = {};
     mockGetPlaylist.mockResolvedValue({ entry: [] });
     await addPlaylistToQueue({ id: 'p1' } as any);
-    expect(mockAddToQueue).not.toHaveBeenCalled();
+    expect(mockAddTracksToUserQueue).not.toHaveBeenCalled();
   });
 });
 

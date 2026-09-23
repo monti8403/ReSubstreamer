@@ -8,11 +8,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AlbumInfoContent } from '@/components/AlbumInfoContent';
 import { LyricsContent } from '@/components/LyricsContent';
 import { QueueItemRow } from '@/components/QueueItemRow';
+import { QueueSectionHeader } from './QueueSectionHeader';
 import { closeOpenRow } from '@/components/SwipeableRow';
 import { type ThemeColors } from '@/constants/theme';
 import { usePlayerAlbumInfo } from '@/hooks/usePlayerAlbumInfo';
 import { usePlayerLyrics } from '@/hooks/usePlayerLyrics';
+import { clearUserQueue } from '@/services/playerService';
 import { type Child } from '@/services/subsonicService';
+import { playerStore } from '@/store/playerStore';
 import { sanitizeBiographyText } from '@/utils/formatters';
 
 export type PlayerMode = 'queue' | 'info' | 'lyrics';
@@ -87,18 +90,81 @@ export const PlayerModeContent = memo(function PlayerModeContent({
     handleRetry: handleRetryLyrics,
   } = usePlayerLyrics(trackId, currentTrack.artist, currentTrack.title, true);
 
+  const userQueueTrackIds = playerStore((s) => s.userQueueTrackIds);
+
+  const userQueueCount = useMemo(() => {
+    const curIdx = currentTrackIndex ?? 0;
+    const upcoming = queue.slice(curIdx + 1);
+    return upcoming.filter((item) => userQueueTrackIds.includes(item.id)).length;
+  }, [queue, currentTrackIndex, userQueueTrackIds]);
+
+  const handleClearUserQueue = useCallback(() => {
+    void clearUserQueue();
+  }, []);
+
   const renderQueueItem = useCallback(
-    ({ item, index }: { item: Child; index: number }) => (
-      <QueueItemRow
-        track={item}
-        index={index}
-        isActive={index === currentTrackIndex}
-        colors={queueColors}
-        onPress={onQueueItemPress}
-        onLongPress={onQueueItemLongPress}
-      />
-    ),
-    [currentTrackIndex, queueColors, onQueueItemPress, onQueueItemLongPress],
+    ({ item, index }: { item: Child; index: number }) => {
+      const curIdx = currentTrackIndex ?? 0;
+      const isNowPlayingHeader = index === curIdx;
+      const isCurrentItemInUserQueue = userQueueTrackIds.includes(item.id);
+      const prevItem = index > curIdx ? queue[index - 1] : null;
+      const isPrevInUserQueue = prevItem ? userQueueTrackIds.includes(prevItem.id) : false;
+
+      const isUserQueueHeader =
+        index > curIdx &&
+        isCurrentItemInUserQueue &&
+        (index === curIdx + 1 || !isPrevInUserQueue);
+
+      const isContextQueueHeader =
+        index > curIdx &&
+        !isCurrentItemInUserQueue &&
+        (index === curIdx + 1 || isPrevInUserQueue);
+
+      return (
+        <View>
+          {isNowPlayingHeader && (
+            <QueueSectionHeader
+              title={t('nowPlayingHeader')}
+              colors={colors}
+            />
+          )}
+          {isUserQueueHeader && (
+            <QueueSectionHeader
+              title={t('userQueue')}
+              count={userQueueCount}
+              onClear={handleClearUserQueue}
+              colors={colors}
+            />
+          )}
+          {isContextQueueHeader && (
+            <QueueSectionHeader
+              title={t('nextUp')}
+              colors={colors}
+            />
+          )}
+          <QueueItemRow
+            track={item}
+            index={index}
+            isActive={index === currentTrackIndex}
+            colors={queueColors}
+            onPress={onQueueItemPress}
+            onLongPress={onQueueItemLongPress}
+          />
+        </View>
+      );
+    },
+    [
+      currentTrackIndex,
+      userQueueTrackIds,
+      userQueueCount,
+      queue,
+      queueColors,
+      colors,
+      onQueueItemPress,
+      onQueueItemLongPress,
+      handleClearUserQueue,
+      t,
+    ],
   );
 
   const keyExtractor = useCallback(

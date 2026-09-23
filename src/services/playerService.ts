@@ -184,6 +184,10 @@ export async function initPlayer(): Promise<void> {
       const child = currentChildQueue.find((c) => c.id === track.id) ?? null;
       playerStore.getState().setCurrentTrack(child, index ?? null);
       if (child) sendNowPlaying(child, trackPlaylistMap.get(child.id));
+      if (userQueueTrackIds.includes(track.id)) {
+        userQueueTrackIds = userQueueTrackIds.filter((id) => id !== track.id);
+        playerStore.getState().removeUserQueueTrackIds?.([track.id]);
+      }
       // The queue is unchanged here — only the cursor moved, so this is one UPDATE.
       if (index != null && index >= 0) persistCurrentIndex(index);
     } else {
@@ -504,6 +508,7 @@ export async function playTrack(
   maybePromptFireBackgroundPlayback();
   pendingResumePosition = null;
   userQueueTrackIds = [];
+  playerStore.getState().clearUserQueueTrackIds?.();
   playerStore.getState().setQueueLoading(true);
 
   try {
@@ -764,6 +769,7 @@ async function clearPlayerStateInternal(): Promise<void> {
   const store = playerStore.getState();
   store.setCurrentTrack(null);
   store.setQueue([]);
+  store.clearUserQueueTrackIds?.();
   store.setPlaybackState('idle');
   store.setProgress(0, 0, 0);
   store.setError(null);
@@ -881,23 +887,23 @@ export function getUserQueueTrackIds(): readonly string[] {
 }
 
 /**
- * Insert a single song into the user queue (Spotify-style).
- * The first song added is placed immediately after the current track (plays next).
- * Subsequent songs are queued sequentially after previously added user-queue songs.
- * When the queue is empty, behaves like `playTrack`.
+ * Insert multiple songs into the user queue (Spotify-style).
+ * The songs are placed after previously queued user-queue songs, before the rest
+ * of the playlist/album context. When the queue is empty, behaves like `playTrack`.
  */
-export async function addSongToUserQueue(song: Child): Promise<void> {
+export async function addTracksToUserQueue(tracks: Child[]): Promise<void> {
+  if (tracks.length === 0) return;
   await awaitHydration();
 
   if (currentChildQueue.length === 0) {
-    await playTrack(song, [song]);
+    await playTrack(tracks[0], tracks);
     return;
   }
 
   await waitForTrackMapsReady();
   await ensureCoverArtAuth();
 
-  const { rnTracks, filteredQueue: playable } = await buildPlayableQueue([song]);
+  const { rnTracks, filteredQueue: playable } = await buildPlayableQueue(tracks);
   if (rnTracks.length === 0) {
     playbackToastStore.getState().fail();
     return;
@@ -916,10 +922,22 @@ export async function addSongToUserQueue(song: Child): Promise<void> {
   newQueue.splice(insertBefore, 0, ...playable);
   currentChildQueue = newQueue;
 
-  userQueueTrackIds = [...userQueueTrackIds.filter((id) => id !== song.id), song.id];
+  const newIds = playable.map((c) => c.id);
+  userQueueTrackIds = [...userQueueTrackIds.filter((id) => !newIds.includes(id)), ...newIds];
+  playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
 
   playerStore.getState().setQueue(currentChildQueue);
   persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0);
+}
+
+/**
+ * Insert a single song into the user queue (Spotify-style).
+ * The first song added is placed immediately after the current track (plays next).
+ * Subsequent songs are queued sequentially after previously added user-queue songs.
+ * When the queue is empty, behaves like `playTrack`.
+ */
+export async function addSongToUserQueue(song: Child): Promise<void> {
+  await addTracksToUserQueue([song]);
 }
 
 /**
@@ -961,9 +979,49 @@ export async function playSongNext(song: Child): Promise<void> {
 
   // Place at head of user queue
   userQueueTrackIds = [song.id, ...userQueueTrackIds.filter((id) => id !== song.id)];
+  playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
 
   playerStore.getState().setQueue(currentChildQueue);
   // Re-read the index AFTER the awaited add in case an auto-advance moved it.
+  persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0);
+}
+
+/**
+ * Clear only user-queued songs from the active queue.
+ * Leaves currently playing track and the upcoming context playlist/album songs intact.
+ */
+export async function clearUserQueue(): Promise<void> {
+  await awaitHydration();
+  const currentIndex = playerStore.getState().currentTrackIndex ?? 0;
+  if (currentChildQueue.length === 0 || userQueueTrackIds.length === 0) return;
+
+  const indicesToRemove: number[] = [];
+  for (let i = currentChildQueue.length - 1; i > currentIndex; i--) {
+    if (userQueueTrackIds.includes(currentChildQueue[i].id)) {
+      indicesToRemove.push(i);
+    }
+  }
+
+  if (indicesToRemove.length === 0) {
+    userQueueTrackIds = [];
+    playerStore.getState().clearUserQueueTrackIds?.();
+    return;
+  }
+
+  for (const idx of indicesToRemove) {
+    await tp.removeFromQueue([idx]);
+  }
+
+  currentChildQueue = currentChildQueue.filter((_, i) => !indicesToRemove.includes(i));
+  userQueueTrackIds = [];
+  playerStore.getState().clearUserQueueTrackIds?.();
+  playerStore.getState().setQueue(currentChildQueue);
+
+  const nativeIndex = tp.getCurrentTrackIndex();
+  playerStore.getState().setCurrentTrack(
+    playerStore.getState().currentTrack,
+    nativeIndex >= 0 ? nativeIndex : currentIndex,
+  );
   persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0);
 }
 
@@ -984,6 +1042,7 @@ export async function removeFromQueue(index: number): Promise<void> {
   const removedChild = currentChildQueue[index];
   if (removedChild) {
     userQueueTrackIds = userQueueTrackIds.filter((id) => id !== removedChild.id);
+    playerStore.getState().removeUserQueueTrackIds?.([removedChild.id]);
   }
   await tp.removeFromQueue([index]);
 
@@ -1001,28 +1060,23 @@ export async function removeFromQueue(index: number): Promise<void> {
 }
 
 /**
- * Move a track from its current queue index to the user queue (plays next or
- * after previously queued songs). No-op when the track is already at that target position.
+ * Move a track from "Next Up" (or anywhere in queue) to the user queue
+ * ("Aggiungi alla coda" - placed after previously queued user tracks).
  */
-export async function moveQueueItemToPlayNext(fromIndex: number): Promise<void> {
+export async function moveQueueItemToUserQueue(fromIndex: number): Promise<void> {
   await awaitHydration();
   if (fromIndex < 0 || fromIndex >= currentChildQueue.length) return;
   if (currentChildQueue.length <= 1) return;
 
   const child = currentChildQueue[fromIndex];
-
-  // Remove child from userQueueTrackIds first to accurately compute target insertion index
-  userQueueTrackIds = userQueueTrackIds.filter((id) => id !== child.id);
+  if (userQueueTrackIds.includes(child.id)) return;
 
   const targetPosition = getUserQueueInsertIndex();
 
-  // If already at target position, nothing to move
-  const isAlreadyAtTarget =
-    fromIndex === targetPosition ||
-    (fromIndex < targetPosition && fromIndex === targetPosition - 1);
-
-  if (isAlreadyAtTarget) {
-    userQueueTrackIds.push(child.id);
+  // If already at target position (e.g. first item of nextUp), simply promote to user queue
+  if (fromIndex === targetPosition) {
+    userQueueTrackIds = [...userQueueTrackIds, child.id];
+    playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
     return;
   }
 
@@ -1035,8 +1089,9 @@ export async function moveQueueItemToPlayNext(fromIndex: number): Promise<void> 
   );
   newQueue.splice(newInsertBefore, 0, moved);
   currentChildQueue = newQueue;
-  userQueueTrackIds.push(child.id);
+  userQueueTrackIds = [...userQueueTrackIds, child.id];
   playerStore.getState().setQueue(currentChildQueue);
+  playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
 
   // Sync with native player in background
   await tp.removeFromQueue([fromIndex]);
@@ -1052,6 +1107,13 @@ export async function moveQueueItemToPlayNext(fromIndex: number): Promise<void> 
 
   const finalIndex = tp.getCurrentTrackIndex();
   persistQueue(currentChildQueue, finalIndex >= 0 ? finalIndex : 0);
+}
+
+/**
+ * Move a track from its current queue index to the user queue.
+ */
+export async function moveQueueItemToPlayNext(fromIndex: number): Promise<void> {
+  await moveQueueItemToUserQueue(fromIndex);
 }
 
 /**

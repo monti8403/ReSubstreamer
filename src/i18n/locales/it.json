@@ -1026,5 +1026,9 @@
   "backupBookmarkCount_one": "{{count}} bookmark",
   "backupBookmarkCount_few": "{{count}} bookmarks",
   "backupBookmarkCount_many": "{{count}} bookmarks",
-  "backupBookmarkCount_other": "Segnalibri {{count}}"
+  "backupBookmarkCount_other": "Segnalibri {{count}}",
+  "userQueue": "In coda",
+  "clearUserQueue": "Svuota coda",
+  "nextUp": "Prossimi brani",
+  "nowPlayingHeader": "In riproduzione"
 }

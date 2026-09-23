@@ -1,0 +1,53 @@
+diff --git a/node_modules/react-native-queue-player/android/src/main/java/com/margelo/nitro/queueplayer/TrackPlayer.kt b/node_modules/react-native-queue-player/android/src/main/java/com/margelo/nitro/queueplayer/TrackPlayer.kt
+index b85ed0e3..929f2054 100644
+--- a/node_modules/react-native-queue-player/android/src/main/java/com/margelo/nitro/queueplayer/TrackPlayer.kt
++++ b/node_modules/react-native-queue-player/android/src/main/java/com/margelo/nitro/queueplayer/TrackPlayer.kt
+@@ -2157,6 +2157,7 @@ class TrackPlayer : HybridTrackPlayerSpec(), PlaybackEngineDelegate {
+     pendingTrackChangeReason = TrackChangeReason.USER_SKIP_NEXT
+     if (next < p.mediaItemCount) {
+       serviceBinder?.engine?.seekTo(next, 0L)
++      serviceBinder?.engine?.play()
+     }
+     rescheduleLookahead()
+     recomputeCapabilities()
+@@ -2195,6 +2196,7 @@ class TrackPlayer : HybridTrackPlayerSpec(), PlaybackEngineDelegate {
+         pendingTrackChangeReason = TrackChangeReason.USER_SKIP_PREVIOUS
+         if (prev < p.mediaItemCount) {
+           serviceBinder?.engine?.seekTo(prev, 0L)
++          serviceBinder?.engine?.play()
+         }
+         rescheduleLookahead()
+         recomputeCapabilities()
+@@ -2207,6 +2209,7 @@ class TrackPlayer : HybridTrackPlayerSpec(), PlaybackEngineDelegate {
+         // into the next real skip).
+         if (currentTrackIndex in 0 until p.mediaItemCount) {
+           serviceBinder?.engine?.seekTo(currentTrackIndex, 0L)
++          serviceBinder?.engine?.play()
+         }
+       }
+       QueueSkipArithmetic.SkipToPreviousAction.NoOp -> return
+@@ -2245,10 +2248,21 @@ class TrackPlayer : HybridTrackPlayerSpec(), PlaybackEngineDelegate {
+   /**
+    * Whether skip-to-previous restarts the current track past the threshold
+    * (`PlayerConfig.skipToPreviousBehavior == RESTART_OR_PREVIOUS`). Read live
+-   * from the current config at each skip + capability recompute.
++   * from the current config at each skip + capability recompute, checking
++   * substreamer_settings SharedPreferences when available.
+    */
+-  private fun skipRestartEnabled(): Boolean =
+-    config.skipToPreviousBehavior == SkipToPreviousBehavior.RESTART_OR_PREVIOUS
++  private fun skipRestartEnabled(): Boolean {
++    try {
++      val ctx = boundContext ?: NitroModules.applicationContext
++      val sp = ctx?.getSharedPreferences("substreamer_settings", Context.MODE_PRIVATE)
++      if (sp != null && sp.contains("skip_previous_behavior")) {
++        return sp.getString("skip_previous_behavior", "always-previous") == "restart-or-previous"
++      }
++    } catch (_: Throwable) {
++      // Fall through to config
++    }
++    return config.skipToPreviousBehavior == SkipToPreviousBehavior.RESTART_OR_PREVIOUS
++  }
+ 
+   /**
+    * Recompute [cachedSkipCapability] from

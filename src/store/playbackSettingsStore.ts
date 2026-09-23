@@ -4,6 +4,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 
 import { connectivityStore } from './connectivityStore';
 import { kvStorage } from './persistence';
+import { setNativeSkipPreviousBehavior } from 'expo-move-to-back';
 import { type StreamFormat, type MaxBitRate } from '../types/audio';
 
 export type { StreamFormat, MaxBitRate } from '../types/audio';
@@ -299,13 +300,21 @@ export const playbackSettingsStore = create<PlaybackSettingsState>()(
       setPlaybackMode: (playbackMode) => set({ playbackMode }),
       setCrossfadeDurationMs: (crossfadeDurationMs) => set({ crossfadeDurationMs }),
       setReplayGainMode: (replayGainMode) => set({ replayGainMode }),
-      setSkipPreviousBehavior: (skipPreviousBehavior) => set({ skipPreviousBehavior }),
+      setSkipPreviousBehavior: (skipPreviousBehavior) => {
+        set({ skipPreviousBehavior });
+        setNativeSkipPreviousBehavior(skipPreviousBehavior);
+      },
     }),
     {
       name: PERSIST_KEY,
       version: 1,
       migrate: migratePlaybackSettings,
       storage: createJSONStorage(() => kvStorage),
+      onRehydrateStorage: () => (state) => {
+        if (state?.skipPreviousBehavior) {
+          setNativeSkipPreviousBehavior(state.skipPreviousBehavior);
+        }
+      },
       partialize: (state) => ({
         maxBitRate: state.maxBitRate,
         maxBitRateWifi: state.maxBitRateWifi,

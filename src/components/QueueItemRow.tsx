@@ -12,9 +12,10 @@ import { useDownloadStatus } from '../hooks/useDownloadStatus';
 import { useIsStarred } from '../hooks/useIsStarred';
 import { useRating } from '../hooks/useRating';
 import { useSongCoverArt } from '../hooks/useSongCoverArt';
-import { moveQueueItemToPlayNext, removeItemFromQueue } from '../services/moreOptionsService';
+import { moveQueueItemToUserQueue, removeItemFromQueue } from '../services/moreOptionsService';
 import { type Child } from '../services/subsonicService';
 import { offlineModeStore } from '../store/offlineModeStore';
+import { playerStore } from '../store/playerStore';
 import { formatTrackDuration } from '../utils/formatters';
 
 import type { ThemeColors } from '../constants/theme';
@@ -67,13 +68,14 @@ export const QueueItemRow = memo(function QueueItemRow({
   const downloadStatus = useDownloadStatus('song', track.id);
   const rating = useRating(track.id, track.userRating);
   const offlineMode = offlineModeStore((s) => s.offlineMode);
+  const isInUserQueue = playerStore((s) => s.userQueueTrackIds.includes(track.id));
 
   const handleRemove = useCallback(() => {
     removeItemFromQueue(index);
   }, [index]);
 
-  const handlePlayNext = useCallback(() => {
-    void moveQueueItemToPlayNext(index);
+  const handleAddToUserQueue = useCallback(() => {
+    void moveQueueItemToUserQueue(index);
   }, [index]);
 
   const titleColor = isActive ? colors.primary : colors.textPrimary;
@@ -81,20 +83,21 @@ export const QueueItemRow = memo(function QueueItemRow({
   const durationText =
     track.duration != null ? formatTrackDuration(track.duration) : '—';
 
-  // Swipe RIGHT → Play Next (green, shows after current track)
+  // Swipe RIGHT → Add to user queue (only on Next Up tracks; hidden on active track and items already in user queue)
   const rightActions: SwipeAction[] = useMemo(
     () =>
-      isActive
+      isActive || isInUserQueue
         ? []
         : [
             {
-              icon: 'play-skip-forward-outline' as const,
-              color: colors.green,
-              label: t('playNext', { defaultValue: 'Play next' }),
-              onPress: handlePlayNext,
+              icon: 'playlist-play',
+              iconFamily: 'mdi' as const,
+              color: colors.primary,
+              label: t('queue'),
+              onPress: handleAddToUserQueue,
             },
           ],
-    [isActive, handlePlayNext, colors.green, t],
+    [isActive, isInUserQueue, handleAddToUserQueue, colors.primary, t],
   );
 
   // Swipe LEFT → Remove from queue (red)
@@ -115,7 +118,7 @@ export const QueueItemRow = memo(function QueueItemRow({
     <SwipeableRow
       rightActions={rightActions}
       leftActions={leftActions}
-      enableFullSwipeRight={!isActive}
+      enableFullSwipeRight={!isActive && !isInUserQueue}
       enableFullSwipeLeft
       restingBackgroundColor="transparent"
       onPress={handlePress}

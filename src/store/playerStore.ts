@@ -47,11 +47,17 @@ export interface PlayerState {
   trackSource: TrackSource | null;
   /** History of recently played tracks that were removed from the active queue. */
   playbackHistory: Child[];
+  /** Track IDs explicitly added to the queue by the user. */
+  userQueueTrackIds: string[];
 
   /* ---- Setters (called by playerService) ---- */
   setCurrentTrack: (track: Child | null, index?: number | null) => void;
   setPlaybackState: (state: PlaybackStatus) => void;
   setQueue: (queue: Child[]) => void;
+  setUserQueueTrackIds: (ids: string[]) => void;
+  addUserQueueTrackIds: (ids: string[]) => void;
+  removeUserQueueTrackIds: (ids: string[]) => void;
+  clearUserQueueTrackIds: () => void;
   setProgress: (position: number, duration: number, buffered: number) => void;
   setError: (error: string | null) => void;
   setRetrying: (retrying: boolean) => void;
@@ -86,6 +92,7 @@ export const playerStore = create<PlayerState>()((set) => ({
   currentTrackIndex: null,
   playbackState: 'idle',
   queue: [],
+  userQueueTrackIds: [],
   position: 0,
   duration: 0,
   bufferedPosition: 0,
@@ -108,6 +115,17 @@ export const playerStore = create<PlayerState>()((set) => ({
     }
     set({ queue });
   },
+  setUserQueueTrackIds: (userQueueTrackIds) => set({ userQueueTrackIds }),
+  addUserQueueTrackIds: (ids) =>
+    set((state) => {
+      const filtered = state.userQueueTrackIds.filter((id) => !ids.includes(id));
+      return { userQueueTrackIds: [...filtered, ...ids] };
+    }),
+  removeUserQueueTrackIds: (ids) =>
+    set((state) => ({
+      userQueueTrackIds: state.userQueueTrackIds.filter((id) => !ids.includes(id)),
+    })),
+  clearUserQueueTrackIds: () => set({ userQueueTrackIds: [] }),
   setProgress: (position, duration, buffered) =>
     set((state) => ({
       position,

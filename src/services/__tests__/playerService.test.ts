@@ -28,6 +28,10 @@ const mockConsumeQueueTracks = jest.fn(
 const mockAddToHistory = jest.fn();
 const mockPopFromHistory = jest.fn();
 const mockClearHistory = jest.fn();
+const mockSetUserQueueTrackIds = jest.fn();
+const mockAddUserQueueTrackIds = jest.fn();
+const mockRemoveUserQueueTrackIds = jest.fn();
+const mockClearUserQueueTrackIds = jest.fn();
 
 jest.mock('../../store/playerStore', () => ({
   playerStore: {
@@ -41,6 +45,7 @@ jest.mock('../../store/playerStore', () => ({
       error: null,
       retrying: false,
       playbackState: 'idle',
+      userQueueTrackIds: [],
       setCurrentTrack: mockSetCurrentTrack,
       setPlaybackState: mockSetPlaybackState,
       setQueue: mockSetQueue,
@@ -56,6 +61,10 @@ jest.mock('../../store/playerStore', () => ({
       popFromHistory: mockPopFromHistory,
       clearHistory: mockClearHistory,
       consumeQueueTracks: mockConsumeQueueTracks,
+      setUserQueueTrackIds: mockSetUserQueueTrackIds,
+      addUserQueueTrackIds: mockAddUserQueueTrackIds,
+      removeUserQueueTrackIds: mockRemoveUserQueueTrackIds,
+      clearUserQueueTrackIds: mockClearUserQueueTrackIds,
     })),
     setState: (...args: unknown[]) => mockPlayerStoreSetState(...args),
   },
@@ -131,9 +140,12 @@ import {
   clearQueue,
   addToQueue,
   addSongToUserQueue,
+  addTracksToUserQueue,
+  clearUserQueue,
   getUserQueueInsertIndex,
   getUserQueueTrackIds,
   moveQueueItemToPlayNext,
+  moveQueueItemToUserQueue,
   removeFromQueue,
   cycleRepeatMode,
   applyPlaybackRate,
@@ -168,8 +180,8 @@ const makeChild = (id: string, overrides?: Partial<Child>): Child => ({
   title: `Song ${id}`,
   artist: 'Test Artist',
   album: 'Test Album',
-  coverArt: `cover-${id}`,
-  duration: 200,
+  duration: 180,
+  isDir: false,
   ...overrides,
 } as Child);
 
@@ -184,6 +196,7 @@ const defaultPlayerState = () => ({
   retrying: false,
   playbackState: 'idle',
   playbackHistory: [],
+  userQueueTrackIds: [],
   setCurrentTrack: mockSetCurrentTrack,
   setPlaybackState: mockSetPlaybackState,
   setQueue: mockSetQueue,
@@ -199,6 +212,10 @@ const defaultPlayerState = () => ({
   popFromHistory: mockPopFromHistory,
   clearHistory: mockClearHistory,
   consumeQueueTracks: mockConsumeQueueTracks,
+  setUserQueueTrackIds: mockSetUserQueueTrackIds,
+  addUserQueueTrackIds: mockAddUserQueueTrackIds,
+  removeUserQueueTrackIds: mockRemoveUserQueueTrackIds,
+  clearUserQueueTrackIds: mockClearUserQueueTrackIds,
 });
 
 beforeAll(async () => {
@@ -1011,5 +1028,130 @@ describe('equalizer wrappers', () => {
     expect(equalizerSettingsStore.getState().presetName).toBe('Mine');
     await deleteEqualizerPreset('Mine');
     expect(mockEq.deleteCustomPreset).toHaveBeenCalledWith('Mine');
+  });
+});
+
+describe('User Queue & Next Up separation', () => {
+  beforeEach(async () => {
+    await clearQueue();
+    jest.clearAllMocks();
+  });
+
+  it('addSongToUserQueue queues after current song and records userQueueTrackIds', async () => {
+    const s0 = makeChild('s0');
+    const s1 = makeChild('s1');
+    const s2 = makeChild('s2');
+    await playTrack(s0, [s0, s1, s2]);
+
+    const u1 = makeChild('u1');
+    await addSongToUserQueue(u1);
+
+    expect(mockTP.addToQueue).toHaveBeenCalledWith(
+      expect.any(Array),
+      1,
+    );
+    expect(getUserQueueTrackIds()).toEqual(['u1']);
+
+    const u2 = makeChild('u2');
+    await addSongToUserQueue(u2);
+
+    expect(getUserQueueInsertIndex()).toBe(3);
+    expect(getUserQueueTrackIds()).toEqual(['u1', 'u2']);
+  });
+
+  it('playSongNext places track at head of user queue (index 1)', async () => {
+    const s0 = makeChild('s0');
+    const s1 = makeChild('s1');
+    await playTrack(s0, [s0, s1]);
+
+    const u1 = makeChild('u1');
+    await addSongToUserQueue(u1);
+
+    const nextSong = makeChild('next');
+    await playSongNext(nextSong);
+
+    expect(mockTP.addToQueue).toHaveBeenLastCalledWith(
+      expect.any(Array),
+      1,
+    );
+    expect(getUserQueueTrackIds()).toEqual(['next', 'u1']);
+  });
+
+  it('addTracksToUserQueue adds multiple tracks in sequence to user queue', async () => {
+    const s0 = makeChild('s0');
+    const s1 = makeChild('s1');
+    await playTrack(s0, [s0, s1]);
+
+    const u1 = makeChild('u1');
+    await addSongToUserQueue(u1);
+
+    const albumTracks = [makeChild('alb1'), makeChild('alb2')];
+    await addTracksToUserQueue(albumTracks);
+
+    expect(getUserQueueTrackIds()).toEqual(['u1', 'alb1', 'alb2']);
+  });
+
+  it('clearUserQueue removes only user-queued songs without touching active or source songs', async () => {
+    const s0 = makeChild('s0');
+    const s1 = makeChild('s1');
+    await playTrack(s0, [s0, s1]);
+
+    const u1 = makeChild('u1');
+    const u2 = makeChild('u2');
+    await addSongToUserQueue(u1);
+    await addSongToUserQueue(u2);
+
+    expect(getUserQueueTrackIds()).toEqual(['u1', 'u2']);
+
+    mockTP.removeFromQueue.mockClear();
+    await clearUserQueue();
+
+    expect(mockTP.removeFromQueue).toHaveBeenCalled();
+    expect(getUserQueueTrackIds()).toEqual([]);
+  });
+
+  it('removeFromQueue removes track id from userQueueTrackIds when a user queue track is removed', async () => {
+    const s0 = makeChild('s0');
+    await playTrack(s0, [s0]);
+
+    const u1 = makeChild('u1');
+    await addSongToUserQueue(u1);
+    expect(getUserQueueTrackIds()).toEqual(['u1']);
+
+    await removeFromQueue(1);
+    expect(getUserQueueTrackIds()).toEqual([]);
+  });
+
+  it('moveQueueItemToUserQueue promotes Next Up song to user queue and notifies store', async () => {
+    const s0 = makeChild('s0');
+    const s1 = makeChild('s1');
+    const s2 = makeChild('s2');
+    await playTrack(s0, [s0, s1, s2]);
+
+    // Current queue: [s0 (playing), s1, s2]. userQueueTrackIds is empty.
+    // Swiping on s1 (index 1 = targetPosition):
+    await moveQueueItemToUserQueue(1);
+    expect(getUserQueueTrackIds()).toEqual(['s1']);
+    expect(mockSetUserQueueTrackIds).toHaveBeenCalledWith(['s1']);
+
+    // Now swiping on s2 (index 2 = next in Next Up, targetPosition is 2):
+    await moveQueueItemToUserQueue(2);
+    expect(getUserQueueTrackIds()).toEqual(['s1', 's2']);
+    expect(mockSetUserQueueTrackIds).toHaveBeenCalledWith(['s1', 's2']);
+  });
+
+  it('moveQueueItemToUserQueue reorders deeper Next Up song into end of user queue', async () => {
+    const s0 = makeChild('s0');
+    const s1 = makeChild('s1');
+    const s2 = makeChild('s2');
+    const s3 = makeChild('s3');
+    await playTrack(s0, [s0, s1, s2, s3]);
+
+    // Move s3 directly to user queue before s1/s2
+    await moveQueueItemToUserQueue(3);
+    expect(getUserQueueTrackIds()).toEqual(['s3']);
+    expect(mockSetUserQueueTrackIds).toHaveBeenCalledWith(['s3']);
+    expect(mockTP.removeFromQueue).toHaveBeenCalledWith([3]);
+    expect(mockTP.addToQueue).toHaveBeenCalledWith(expect.any(Array), 1);
   });
 });

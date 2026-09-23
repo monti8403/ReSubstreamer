@@ -1,5 +1,6 @@
 package expo.modules.movetoback
 
+import android.content.Context
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -17,6 +18,12 @@ class ExpoMoveToBackModule : Module() {
             appContext.currentActivity?.let { activity ->
                 activity.runOnUiThread { activity.moveTaskToBack(true) }
             }
+        }
+
+        Function("setSkipPreviousBehavior") { behavior: String ->
+            val context = appContext.reactContext ?: appContext.currentActivity?.applicationContext
+            val sp = context?.getSharedPreferences("substreamer_settings", Context.MODE_PRIVATE)
+            sp?.edit()?.putString("skip_previous_behavior", behavior)?.apply()
         }
     }
 }

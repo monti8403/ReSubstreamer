@@ -2,6 +2,7 @@ import { requireNativeModule } from 'expo-modules-core';
 
 interface ExpoMoveToBackInterface {
   moveToBack: () => void;
+  setSkipPreviousBehavior?: (behavior: string) => void;
 }
 
 let module: ExpoMoveToBackInterface;
@@ -16,6 +17,7 @@ try {
 
   module = {
     moveToBack: () => {},
+    setSkipPreviousBehavior: () => {},
   };
 }
 

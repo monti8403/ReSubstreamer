@@ -52,9 +52,14 @@ const mockSetQueueLoading = jest.fn();
 const mockSetQueueFormats = jest.fn();
 const mockClearQueueFormats = jest.fn();
 const mockAddQueueFormat = jest.fn();
+const mockClearUserQueueTrackIds = jest.fn();
+const mockSetUserQueueTrackIds = jest.fn();
+const mockAddUserQueueTrackIds = jest.fn();
+const mockRemoveUserQueueTrackIds = jest.fn();
 
 const buildPlayerState = () => ({
   ...playerStoreState,
+  userQueueTrackIds: [],
   setCurrentTrack: mockSetCurrentTrack,
   setPlaybackState: mockSetPlaybackState,
   setQueue: mockSetQueue,
@@ -65,6 +70,10 @@ const buildPlayerState = () => ({
   setQueueFormats: mockSetQueueFormats,
   addQueueFormat: mockAddQueueFormat,
   clearQueueFormats: mockClearQueueFormats,
+  clearUserQueueTrackIds: mockClearUserQueueTrackIds,
+  setUserQueueTrackIds: mockSetUserQueueTrackIds,
+  addUserQueueTrackIds: mockAddUserQueueTrackIds,
+  removeUserQueueTrackIds: mockRemoveUserQueueTrackIds,
 });
 
 jest.mock('../../store/playerStore', () => ({

@@ -51,6 +51,7 @@ import { SleepTimerButton } from '@/components/SleepTimerButton';
 import { SleepTimerCapsule } from '@/components/SleepTimerCapsule';
 import { PlaybackSourceBadge } from '@/components/PlaybackSourceBadge';
 import { QueueItemRow } from '@/components/QueueItemRow';
+import { QueueSectionHeader } from '@/components/player/QueueSectionHeader';
 import { closeOpenRow } from '@/components/SwipeableRow';
 import { type ThemeColors } from '@/constants/theme';
 import { useCanSkip } from '@/hooks/useCanSkip';
@@ -64,6 +65,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { offlineModeStore } from '@/store/offlineModeStore';
 import {
   clearQueue,
+  clearUserQueue,
   retryPlayback,
   skipToNext,
   skipToPrevious,
@@ -404,10 +406,21 @@ export function PlayerPhonePortrait() {
     primary: mixHexColors(colors.primary, colors.textPrimary, 0.45),
   }), [colors]);
 
+  const userQueueTrackIds = playerStore((s) => s.userQueueTrackIds);
+
   const visibleQueue = useMemo(() => {
     const startIdx = currentTrackIndex ?? 0;
     return queue.slice(startIdx);
   }, [queue, currentTrackIndex]);
+
+  const userQueueCount = useMemo(() => {
+    const upcoming = visibleQueue.slice(1);
+    return upcoming.filter((item) => userQueueTrackIds.includes(item.id)).length;
+  }, [visibleQueue, userQueueTrackIds]);
+
+  const handleClearUserQueue = useCallback(() => {
+    void clearUserQueue();
+  }, []);
 
   const pendingScrollToTopOnSelectRef = useRef(false);
 
@@ -431,18 +444,66 @@ export function PlayerPhonePortrait() {
   const renderQueueItem = useCallback(
     ({ item, index: relativeIndex }: { item: Child; index: number }) => {
       const absoluteIndex = (currentTrackIndex ?? 0) + relativeIndex;
+      const isNowPlayingHeader = relativeIndex === 0;
+      const isCurrentItemInUserQueue = userQueueTrackIds.includes(item.id);
+      const prevItem = relativeIndex > 0 ? visibleQueue[relativeIndex - 1] : null;
+      const isPrevInUserQueue = prevItem ? userQueueTrackIds.includes(prevItem.id) : false;
+
+      const isUserQueueHeader =
+        relativeIndex > 0 &&
+        isCurrentItemInUserQueue &&
+        (relativeIndex === 1 || !isPrevInUserQueue);
+
+      const isContextQueueHeader =
+        relativeIndex > 0 &&
+        !isCurrentItemInUserQueue &&
+        (relativeIndex === 1 || isPrevInUserQueue);
+
       return (
-        <QueueItemRow
-          track={item}
-          index={absoluteIndex}
-          isActive={relativeIndex === 0}
-          colors={queueColors}
-          onPress={onQueueItemPressWithScroll}
-          onLongPress={handleQueueItemLongPress}
-        />
+        <View>
+          {isNowPlayingHeader && (
+            <QueueSectionHeader
+              title={t('nowPlayingHeader')}
+              colors={colors}
+            />
+          )}
+          {isUserQueueHeader && (
+            <QueueSectionHeader
+              title={t('userQueue')}
+              count={userQueueCount}
+              onClear={handleClearUserQueue}
+              colors={colors}
+            />
+          )}
+          {isContextQueueHeader && (
+            <QueueSectionHeader
+              title={t('nextUp')}
+              colors={colors}
+            />
+          )}
+          <QueueItemRow
+            track={item}
+            index={absoluteIndex}
+            isActive={relativeIndex === 0}
+            colors={queueColors}
+            onPress={onQueueItemPressWithScroll}
+            onLongPress={handleQueueItemLongPress}
+          />
+        </View>
       );
     },
-    [currentTrackIndex, queueColors, onQueueItemPressWithScroll, handleQueueItemLongPress],
+    [
+      currentTrackIndex,
+      userQueueTrackIds,
+      userQueueCount,
+      visibleQueue,
+      queueColors,
+      colors,
+      onQueueItemPressWithScroll,
+      handleQueueItemLongPress,
+      handleClearUserQueue,
+      t,
+    ],
   );
 
   const keyExtractor = useCallback(
@@ -819,6 +880,7 @@ const PlayerContent = memo(function PlayerContent({
 
   const handleMomentumScrollEnd = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (!isUserScrollingRef.current) return;
       isUserScrollingRef.current = false;
       const offsetX = event.nativeEvent.contentOffset.x;
       const targetIndex = Math.round(offsetX / stepDistance);
@@ -829,6 +891,7 @@ const PlayerContent = memo(function PlayerContent({
 
   const handleScrollEndDrag = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (!isUserScrollingRef.current) return;
       const velocityX = event.nativeEvent.velocity?.x ?? 0;
       if (Math.abs(velocityX) < 0.1) {
         isUserScrollingRef.current = false;
@@ -981,6 +1044,7 @@ const PlayerContent = memo(function PlayerContent({
             disableIntervalMomentum={true}
             contentContainerStyle={{ paddingHorizontal: sidePadding }}
             getItemLayout={getItemLayout}
+            initialScrollIndex={currentIndex > 0 && currentIndex < carouselTracks.length ? currentIndex : undefined}
             onScrollBeginDrag={() => {
               isUserScrollingRef.current = true;
               isSkippingRef.current = false;
