@@ -4,7 +4,11 @@ jest.mock('../playerService', () => ({
   addToQueue: jest.fn().mockResolvedValue(undefined),
   moveQueueItemToPlayNext: jest.fn().mockResolvedValue(undefined),
   moveQueueItemToUserQueue: jest.fn().mockResolvedValue(undefined),
-  playTrack: jest.fn().mockResolvedValue(undefined),
+  playTrack: jest.fn().mockImplementation((track: any) => {
+    const { playerStore } = require('../../store/playerStore');
+    playerStore.setState({ currentTrack: track });
+    return Promise.resolve();
+  }),
   removeFromQueue: jest.fn().mockResolvedValue(undefined),
 }));
 
@@ -139,6 +143,7 @@ import {
 import { favoritesStore } from '../../store/favoritesStore';
 import { offlineModeStore } from '../../store/offlineModeStore';
 import { musicCacheStore } from '../../store/musicCacheStore';
+import { playerStore } from '../../store/playerStore';
 import {
   toggleStar,
   addSongToQueue,
@@ -373,45 +378,53 @@ describe('playMoreLikeThis', () => {
     mockGetSimilarSongs2.mockResolvedValue([]);
     mockGetRandomSongsFiltered.mockResolvedValue([]);
     mockGetTopSongs.mockResolvedValue([]);
+    mockAddToQueue.mockClear();
+    mockPlayTrack.mockClear();
   });
 
-  it('plays similar songs on success', async () => {
+  it('plays similar songs on success (play-first, fetch-later)', async () => {
     const tracks = Array.from({ length: 20 }, (_, i) => ({ id: `t${i}` })) as any[];
     mockGetSimilarSongs.mockResolvedValue(tracks);
 
     const source = { id: 's1' } as any;
     await playMoreLikeThis(source);
 
-    expect(mockOverlayShow).toHaveBeenCalledWith('Loading…');
+    expect(mockOverlayShow).not.toHaveBeenCalled();
+    expect(mockPlayTrack).toHaveBeenCalledWith(source, [source]);
     expect(mockGetSimilarSongs).toHaveBeenCalledWith('s1', 20);
-    expect(mockPlayTrack).toHaveBeenCalledWith(source, [source, ...tracks]);
-    expect(mockOverlayShowSuccess).toHaveBeenCalledWith('Playing similar songs');
+    expect(mockAddToQueue).toHaveBeenCalledWith(tracks);
+    expect(mockOverlayShowSuccess).not.toHaveBeenCalled();
     // No fallbacks needed — first call returned the full target
     expect(mockGetSimilarSongs2).not.toHaveBeenCalled();
     expect(mockGetRandomSongsFiltered).not.toHaveBeenCalled();
     expect(mockGetTopSongs).not.toHaveBeenCalled();
   });
 
-  it('shows error when no similar songs found via any path', async () => {
+  it('plays the source track and fails silently when no similar songs found', async () => {
     mockGetSimilarSongs.mockResolvedValue([]);
     mockGetSimilarSongs2.mockResolvedValue([]);
     mockGetRandomSongsFiltered.mockResolvedValue([]);
     mockGetTopSongs.mockResolvedValue([]);
 
-    await playMoreLikeThis({
+    const source = {
       id: 's1', artist: 'X', artistId: 'a1', genre: 'Rock',
-    } as any);
+    } as any;
+    await playMoreLikeThis(source);
 
-    expect(mockOverlayShowError).toHaveBeenCalledWith('No similar songs found');
-    expect(mockPlayTrack).not.toHaveBeenCalled();
+    expect(mockOverlayShowError).not.toHaveBeenCalled();
+    expect(mockPlayTrack).toHaveBeenCalledWith(source, [source]);
+    expect(mockAddToQueue).not.toHaveBeenCalled();
   });
 
-  it('shows error on failure', async () => {
+  it('fails silently on error without breaking initial playback', async () => {
     mockGetSimilarSongs.mockRejectedValue(new Error('fail'));
 
-    await playMoreLikeThis({ id: 's1' } as any);
+    const source = { id: 's1' } as any;
+    await playMoreLikeThis(source);
 
-    expect(mockOverlayShowError).toHaveBeenCalledWith('Failed to load similar songs');
+    expect(mockPlayTrack).toHaveBeenCalledWith(source, [source]);
+    expect(mockOverlayShowError).not.toHaveBeenCalled();
+    expect(mockAddToQueue).not.toHaveBeenCalled();
   });
 
   // A thin getSimilarSongs result is topped up via similar2 → same-genre →
@@ -427,11 +440,10 @@ describe('playMoreLikeThis', () => {
     } as any);
 
     expect(mockGetSimilarSongs2).toHaveBeenCalledWith('a1', 20);
-    const queueArg = mockPlayTrack.mock.calls[0][1];
-    expect(queueArg).toHaveLength(21);
-    expect(queueArg[0].id).toBe('s1');
-    expect(queueArg[1].id).toBe('t1');
-    expect(queueArg[2].id).toBe('t2');
+    const addedTracks = mockAddToQueue.mock.calls[0][0];
+    expect(addedTracks).toHaveLength(20);
+    expect(addedTracks[0].id).toBe('t1');
+    expect(addedTracks[1].id).toBe('t2');
     // No need to fall back further
     expect(mockGetRandomSongsFiltered).not.toHaveBeenCalled();
     expect(mockGetTopSongs).not.toHaveBeenCalled();
@@ -449,11 +461,10 @@ describe('playMoreLikeThis', () => {
     } as any);
 
     expect(mockGetRandomSongsFiltered).toHaveBeenCalledWith({ size: 40, genre: 'Rock' });
-    const queueArg = mockPlayTrack.mock.calls[0][1];
-    expect(queueArg).toHaveLength(21);
-    expect(queueArg[0].id).toBe('s1');
-    expect(queueArg[1].id).toBe('t1');
-    expect(queueArg[2].id).toBe('a1');
+    const addedTracks = mockAddToQueue.mock.calls[0][0];
+    expect(addedTracks).toHaveLength(20);
+    expect(addedTracks[0].id).toBe('t1');
+    expect(addedTracks[1].id).toBe('a1');
   });
 
   it('falls through to artist top songs when all upstream layers are thin', async () => {
@@ -469,12 +480,11 @@ describe('playMoreLikeThis', () => {
     } as any);
 
     expect(mockGetTopSongs).toHaveBeenCalledWith('X', 20);
-    const queueArg = mockPlayTrack.mock.calls[0][1];
-    expect(queueArg).toHaveLength(21);
-    expect(queueArg[0].id).toBe('s1');
-    expect(queueArg[1].id).toBe('t1');
-    expect(queueArg[2].id).toBe('a1');
-    expect(queueArg[3].id).toBe('g1');
+    const addedTracks = mockAddToQueue.mock.calls[0][0];
+    expect(addedTracks).toHaveLength(20);
+    expect(addedTracks[0].id).toBe('t1');
+    expect(addedTracks[1].id).toBe('a1');
+    expect(addedTracks[2].id).toBe('g1');
   });
 
   it('dedupes overlaps across layers and prepends the source song', async () => {
@@ -491,13 +501,13 @@ describe('playMoreLikeThis', () => {
       id: 's1', artist: 'X', artistId: 'a1', genre: 'Rock',
     } as any);
 
-    const queueArg = mockPlayTrack.mock.calls[0][1];
-    const ids = queueArg.map((t: any) => t.id);
+    const addedTracks = mockAddToQueue.mock.calls[0][0];
+    const ids = addedTracks.map((t: any) => t.id);
     expect(new Set(ids).size).toBe(ids.length); // no duplicates
-    expect(ids[0]).toBe('s1'); // source prepended
-    expect(ids[1]).toBe('t1');
-    expect(ids[2]).toBe('a1');
-    expect(ids[3]).toBe('a2');
+    expect(ids).not.toContain('s1'); // source is filtered out of added tracks
+    expect(ids[0]).toBe('t1');
+    expect(ids[1]).toBe('a1');
+    expect(ids[2]).toBe('a2');
   });
 
   it('skips layers that need fields the source lacks', async () => {
@@ -510,8 +520,8 @@ describe('playMoreLikeThis', () => {
     expect(mockGetSimilarSongs2).not.toHaveBeenCalled();
     expect(mockGetRandomSongsFiltered).not.toHaveBeenCalled();
     expect(mockGetTopSongs).not.toHaveBeenCalled();
-    const queueArg = mockPlayTrack.mock.calls[0][1];
-    expect(queueArg.map((t: any) => t.id)).toEqual(['s1', 't1', 't2']);
+    const addedTracks = mockAddToQueue.mock.calls[0][0];
+    expect(addedTracks.map((t: any) => t.id)).toEqual(['t1', 't2']);
   });
 
   it('uses genres[0] when the legacy single-genre field is absent', async () => {
@@ -526,6 +536,21 @@ describe('playMoreLikeThis', () => {
     } as any);
 
     expect(mockGetRandomSongsFiltered).toHaveBeenCalledWith({ size: 40, genre: 'Jazz' });
+  });
+
+  it('discards fetched tracks if user switched song before fetch completes', async () => {
+    const tracks = Array.from({ length: 20 }, (_, i) => ({ id: `t${i}` })) as any[];
+    mockGetSimilarSongs.mockImplementation(async () => {
+      // Simulate user switching to another song while fetch is in progress
+      playerStore.setState({ currentTrack: { id: 'other-song' } as any });
+      return tracks;
+    });
+
+    const source = { id: 's1' } as any;
+    await playMoreLikeThis(source);
+
+    expect(mockPlayTrack).toHaveBeenCalledWith(source, [source]);
+    expect(mockAddToQueue).not.toHaveBeenCalled();
   });
 });
 

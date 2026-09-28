@@ -17,6 +17,7 @@ import { RecentSearches } from '../components/RecentSearches';
 import { SongRow } from '../components/SongRow';
 import { useTheme } from '../hooks/useTheme';
 import { getLocalTrackUri } from '../services/musicCacheService';
+import { playMoreLikeThis } from '../services/moreOptionsService';
 import { playTrack } from '../services/playerService';
 import { minDelay } from '../utils/stringHelpers';
 import {
@@ -244,7 +245,7 @@ export function SearchScreen() {
               song={item.data}
               onPress={() => {
                 recordCurrent();
-                playTrack(item.data, [item.data]);
+                void playMoreLikeThis(item.data, { downloadedOnly });
               }}
             />
           );

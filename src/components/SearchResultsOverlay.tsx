@@ -17,12 +17,13 @@ import { useTranslation } from 'react-i18next';
 import { CachedImage } from './CachedImage';
 import { useSongCoverArt } from '../hooks/useSongCoverArt';
 import { useTheme } from '../hooks/useTheme';
-import { playTrack } from '../services/playerService';
+import { playMoreLikeThis } from '../services/moreOptionsService';
 import {
   type AlbumID3,
   type ArtistID3,
   type Child,
 } from '../services/subsonicService';
+import { filterBarStore } from '../store/filterBarStore';
 import { recentSearchStore } from '../store/recentSearchStore';
 import { searchStore } from '../store/searchStore';
 import { overlayStore } from '../store/overlayStore';
@@ -299,7 +300,9 @@ export function SearchResultsOverlay() {
       recordCurrent();
       hideOverlay();
       Keyboard.dismiss();
-      playTrack(song, [song]);
+      void playMoreLikeThis(song, {
+        downloadedOnly: filterBarStore.getState().downloadedOnly,
+      });
     },
     [recordCurrent, hideOverlay]
   );

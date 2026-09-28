@@ -15,6 +15,7 @@ import { refreshPlaylistLibrary } from './normalizedLibrarySync';
 import { getDb } from '../store/persistence/db';
 import { getAlbumDetail, getPlaylistDetail } from '../db/repository/details';
 import { processingOverlayStore } from '../store/processingOverlayStore';
+import { playerStore } from '../store/playerStore';
 import { shuffleArray } from '../utils/arrayHelpers';
 import {
   deleteCachedItem as deleteCachedItemService,
@@ -256,28 +257,125 @@ async function buildMoreLikeThisQueue(
 }
 
 /**
- * Fetch similar songs for a given track and set them as the play queue.
- * Uses processing overlay for progress, success, and error feedback.
- * Falls back through `buildMoreLikeThisQueue` to keep the queue full
- * even when the server returns few per-song matches.
+ * Build a similar-songs queue from locally downloaded songs (`cached_songs` in SQLite).
+ * Used when offline or when filtering by downloaded songs, making 0 network requests.
  */
-export async function playMoreLikeThis(song: Child): Promise<void> {
-  processingOverlayStore.getState().show(i18n.t('loading'));
-
+async function buildDownloadedMoreLikeThisQueue(
+  source: Child,
+  target: number,
+): Promise<Child[]> {
   try {
-    const target = layoutPreferencesStore.getState().listLength;
-    const tracks = await buildMoreLikeThisQueue(song, target);
-    if (tracks.length === 0) {
-      processingOverlayStore.getState().showError(i18n.t('noSimilarSongsFound'));
-      return;
+    const db = getDb();
+    if (!db || !source?.id) return [];
+    const genre = source.genre ?? source.genres?.[0];
+    const artistId = source.artistId;
+    const artist = source.artist;
+
+    const out: Child[] = [];
+    const seen = new Set<string>([source.id]);
+
+    const addRows = (rows: any[]) => {
+      for (const r of rows) {
+        if (out.length >= target) break;
+        const id = r.song_id;
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        out.push({
+          id,
+          title: r.title,
+          artist: r.artist ?? undefined,
+          artistId: r.artist_id ?? undefined,
+          albumId: r.src_album_id || r.album_id,
+          album: r.album ?? undefined,
+          duration: r.duration,
+          coverArt: r.cover_art ?? undefined,
+          genre: r.genre ?? undefined,
+          isDir: false,
+        });
+      }
+    };
+
+    // 1. Same artist or same genre from cached_songs
+    if (artistId || artist || genre) {
+      const conditions: string[] = [];
+      const params: (string | number)[] = [source.id];
+
+      if (artistId) {
+        conditions.push('artist_id = ?');
+        params.push(artistId);
+      } else if (artist) {
+        conditions.push('artist = ?');
+        params.push(artist);
+      }
+      if (genre) {
+        conditions.push('genre = ?');
+        params.push(genre);
+      }
+
+      if (conditions.length > 0) {
+        const sql = `SELECT song_id, title, artist, artist_id, album_id, src_album_id, album, duration, cover_art, genre FROM cached_songs WHERE song_id != ? AND (${conditions.join(' OR ')}) ORDER BY RANDOM() LIMIT ?`;
+        params.push(target);
+        const rows = await db.getAllAsync<any>(sql, params);
+        if (rows?.length) addRows(rows);
+      }
     }
 
-    const queue = [song, ...tracks];
-    await playTrack(song, queue);
-    processingOverlayStore.getState().showSuccess(i18n.t('playingSimilarSongs'));
-  } catch {
-    processingOverlayStore.getState().showError(i18n.t('failedToLoadSimilarSongs'));
+    // 2. If thin, fill up with other random cached_songs
+    if (out.length < target) {
+      const remaining = target - out.length;
+      const placeholders = Array.from(seen).map(() => '?').join(',');
+      const sql = `SELECT song_id, title, artist, artist_id, album_id, src_album_id, album, duration, cover_art, genre FROM cached_songs WHERE song_id NOT IN (${placeholders}) ORDER BY RANDOM() LIMIT ?`;
+      const rows = await db.getAllAsync<any>(sql, [...Array.from(seen), remaining]);
+      if (rows?.length) addRows(rows);
+    }
+
+    return out;
+  } catch (err) {
+    console.warn('[MoreOptions] Failed to build downloaded similar queue:', err);
+    return [];
   }
+}
+
+/**
+ * Fetch similar songs for a given track and set them as the play queue.
+ * Implements the Spotify "Play-First, Fetch-Later" pattern:
+ * 1. Plays the tapped song immediately (zero perceived latency, no blocking overlay).
+ * 2. Fetches similar tracks in the background (via Subsonic API online, or SQLite offline/downloadedOnly).
+ * 3. Race Condition Guard: silently drops results if the user switched songs before the fetch finished.
+ * 4. Silently appends the tracks to the queue using `addToQueue(tracks)`.
+ */
+export async function playMoreLikeThis(
+  song: Child,
+  options?: { downloadedOnly?: boolean },
+): Promise<void> {
+  const playPromise = playTrack(song, [song]);
+
+  const isOffline = offlineModeStore.getState().offlineMode || !!options?.downloadedOnly;
+  const target = layoutPreferencesStore.getState().listLength;
+
+  const backgroundPromise = (async () => {
+    try {
+      const tracks = isOffline
+        ? await buildDownloadedMoreLikeThisQueue(song, target)
+        : await buildMoreLikeThisQueue(song, target);
+
+      if (!tracks || tracks.length === 0) return;
+
+      await playPromise;
+
+      // Race condition guard: verify the user is still playing the song that triggered this queue
+      const currentTrack = playerStore.getState().currentTrack;
+      if (currentTrack?.id !== song.id) {
+        return;
+      }
+
+      await addToQueue(tracks);
+    } catch {
+      // 100% silent in background - the current song continues uninterrupted
+    }
+  })();
+
+  await backgroundPromise;
 }
 
 /* ------------------------------------------------------------------ */

@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { SongListView, type SongLayout } from '../components/SongListView';
 import { useDownloadedSongs } from '../hooks/useDownloadedSongs';
 import { onPullToRefresh } from '../services/dataSyncService';
-import { playTrack } from '../services/playerService';
+import { playMoreLikeThis } from '../services/moreOptionsService';
 import {
   listSongs,
   listSongsBefore,
@@ -38,9 +38,9 @@ const ALL_LETTERS = new Set<string>([
   ...Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i)),
 ]);
 
-/** Play just the tapped song (a bounded keyset window can't be the whole queue). */
+/** Play the tapped song immediately and generate similar queue in background (Spotify-style). */
 const handleSongPress = (song: Child): void => {
-  void playTrack(song, [song]);
+  void playMoreLikeThis(song);
 };
 
 /**
@@ -294,11 +294,18 @@ function FilteredSongList({
     [sortOrder],
   );
 
+  const handleFilteredSongPress = useCallback(
+    (song: Child) => {
+      void playMoreLikeThis(song, { downloadedOnly });
+    },
+    [downloadedOnly],
+  );
+
   const viewProps = {
     layout,
     onRefresh: handleRefresh,
     refreshing,
-    onSongPress: handleSongPress,
+    onSongPress: handleFilteredSongPress,
     showAlphabetScroller: true,
     scrollToTopTrigger: `${downloadedOnly}:${favoritesOnly}`,
     contentInsetTop,

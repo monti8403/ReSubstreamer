@@ -350,8 +350,8 @@ export function MoreOptionsSheet() {
   const handlePlayMoreLikeThis = useCallback(async () => {
     if (!entity || entity.type !== 'song') return;
     await moreOptionsStore.getState().hideAndAwait();
-    playMoreLikeThis(entity.item as Child);
-  }, [entity]);
+    playMoreLikeThis(entity.item as Child, { downloadedOnly: offline });
+  }, [entity, offline]);
 
   const handlePlaySimilarArtistsMix = useCallback(async () => {
     if (!entity || entity.type !== 'artist') return;
@@ -653,7 +653,7 @@ export function MoreOptionsSheet() {
   // Play Next is song-only, and shows wherever Add to Queue does so both
   // "after current" and "at the end" sit side by side.
   const showPlayNext = !isPlayerSource && entity?.type === 'song';
-  const showPlayMoreLikeThis = !offline && canPlayMoreLikeThis(entity);
+  const showPlayMoreLikeThis = canPlayMoreLikeThis(entity);
   const showDetails = hasAlbumDetails(entity);
   const showTrackDetails = hasTrackDetails(entity);
   const showShare = !offline && canShare(entity) && canUserShare();
