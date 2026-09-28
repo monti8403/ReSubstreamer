@@ -333,7 +333,23 @@ describe('restorePersistedQueueAfterBoot — live car-session adoption', () => {
 
     expect(mockSetCurrentTrack).toHaveBeenCalledWith(expect.objectContaining({ id: 'p1' }), 0);
   });
+
+  it('does NOT adopt a paused session if currentChildQueue is empty (e.g. process restart) — falls through to restore', async () => {
+    await clearQueue();
+    mockSetCurrentTrack.mockClear();
+
+    mockTP.getQueue.mockReturnValue([{ id: 'leftover-paused' }]);
+    mockTP.getState.mockReturnValue('paused');
+    mockTP.getCurrentTrackIndex.mockReturnValue(0);
+    mockGetPersistedQueue.mockReturnValue({ queue: [makeChild('persisted-fallback')], currentTrackIndex: 0 });
+
+    restorePersistedQueueAfterBoot();
+    await flush();
+
+    expect(mockSetCurrentTrack).toHaveBeenCalledWith(expect.objectContaining({ id: 'persisted-fallback' }), 0);
+  });
 });
+
 
 describe('playTrack', () => {
   it('loads the queue at the tapped index and plays', async () => {

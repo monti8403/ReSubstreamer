@@ -12,6 +12,7 @@
 import { AppState, Platform } from 'react-native';
 import i18n from '../i18n/i18n';
 import { getTrackPlayer, getEqualizer } from 'react-native-queue-player';
+import { whenPlayerReady } from './playerReadyState';
 
 import { type EffectiveFormat } from '../types/audio';
 import {
@@ -119,6 +120,7 @@ function reportPlay(trackIndex: number): void {
  * both the UI boot AND the headless CarPlay/Siri boot.
  */
 export async function initPlayer(): Promise<void> {
+  await whenPlayerReady;
   if (isPlayerReady) return;
   isPlayerReady = true;
 
@@ -310,6 +312,7 @@ export async function initPlayer(): Promise<void> {
  * non-empty active queue at boot can only be this-process car/Siri.
  */
 function hasLiveEngineSession(): boolean {
+  if (currentChildQueue.length === 0) return false;
   const queue = tp.getQueue();
   const idx = tp.getCurrentTrackIndex();
   if (queue.length === 0 || idx < 0 || idx >= queue.length) return false;
@@ -426,6 +429,7 @@ function restorePersistedQueue(): boolean {
  */
 async function hydrateRestoredQueue(): Promise<void> {
   try {
+    await whenPlayerReady;
     await waitForTrackMapsReady();
     await ensureCoverArtAuth();
     // (iOS) register the self-signed streaming proxy BEFORE building tracks, so
@@ -479,6 +483,7 @@ async function hydrateRestoredQueue(): Promise<void> {
 
 /** Await any in-flight cold-start hydration before touching the native queue. */
 async function awaitHydration(): Promise<void> {
+  await whenPlayerReady;
   if (hydrationPromise) {
     try {
       await hydrationPromise;
@@ -554,11 +559,38 @@ export async function togglePlayPause(): Promise<void> {
   await awaitHydration();
   if (tp.getState() === 'playing') {
     await tp.pause();
-  } else {
-    // Covers a returning user resuming a restored queue via the mini-player.
-    maybePromptFireBackgroundPlayback();
-    await tp.play();
+    return;
   }
+
+  // Covers a returning user resuming a restored queue via the mini-player.
+  maybePromptFireBackgroundPlayback();
+
+  // Self-healing check: if the native engine queue is empty or uninitialized
+  // but the store has tracks (e.g. native service was reclaimed or cold hydration delayed),
+  // re-hydrate the queue and position before firing play.
+  const nativeQueue = tp.getQueue();
+  const storeQueue = playerStore.getState().queue;
+  const currentTrack = playerStore.getState().currentTrack;
+  if (nativeQueue.length === 0 && storeQueue.length > 0 && currentTrack) {
+    currentChildQueue = storeQueue;
+    const pos = playerStore.getState().position;
+    if (pos > 0) {
+      pendingResumePosition = {
+        trackId: currentTrack.id,
+        position: pos,
+      };
+    }
+    hydrationPromise = hydrateRestoredQueue().finally(() => {
+      hydrationPromise = null;
+    });
+    try {
+      await hydrationPromise;
+    } catch {
+      return;
+    }
+  }
+
+  await tp.play();
 }
 
 /** Skip to the next track in the queue. */

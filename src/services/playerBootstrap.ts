@@ -21,6 +21,9 @@ import { LOOKAHEAD_MAX_CACHE_MB, playbackSettingsStore } from '../store/playback
 import { ensureNowPlayingPlaceholderUri } from './nowPlayingPlaceholder';
 import { setNativeSkipPreviousBehavior } from 'expo-move-to-back';
 
+import { markPlayerReady, whenPlayerReady } from './playerReadyState';
+export { whenPlayerReady };
+
 const initialSkipPrevious = playbackSettingsStore.getState().skipPreviousBehavior;
 setNativeSkipPreviousBehavior(initialSkipPrevious);
 
@@ -56,8 +59,11 @@ void getTrackPlayer()
     // idempotent; this covers the cold car / Siri / Assistant wake that runs
     // this bundle before any screen (or login) mounts.
     installHeadlessMediaService();
+    markPlayerReady();
   })
   .catch((e) => {
     // eslint-disable-next-line no-console
     console.warn('[playerBootstrap] configure failed:', errMessage(e));
+    markPlayerReady();
   });
+

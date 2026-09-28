@@ -281,4 +281,29 @@ describe('hydration guard', () => {
     expect(mockTP.setQueue).toHaveBeenCalledTimes(2);
     expect(mockTP.play).toHaveBeenCalled();
   });
+
+  it('self-heals and re-hydrates when native engine queue is empty but store has queue', async () => {
+    const track = makeChild('song-heal-1');
+    const queue = [track];
+    // Store has queue and track
+    playerStoreState.queue = queue;
+    playerStoreState.currentTrack = track;
+    playerStoreState.currentTrackIndex = 0;
+    playerStoreState.position = 42;
+
+    // Native queue is empty and state is idle/paused
+    mockTP.getQueue.mockReturnValue([]);
+    mockTP.getState.mockReturnValue('idle');
+
+    await togglePlayPause();
+
+    // Should have re-hydrated the queue and sought to the resume position
+    expect(mockTP.setQueue).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ id: 'song-heal-1' })]),
+      0,
+    );
+    expect(mockTP.seekTo).toHaveBeenCalledWith(42);
+    expect(mockTP.play).toHaveBeenCalled();
+  });
 });
+
