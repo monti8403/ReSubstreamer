@@ -13,11 +13,12 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import type { StyleProp, ViewStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import Animated, {
+  FadeInDown,
   useAnimatedStyle,
   useSharedValue,
-  withDelay,
   withRepeat,
   withSequence,
   withSpring,
@@ -96,13 +97,9 @@ function useMixCardPlayback(mix: MixDefinition, index: number) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Staggered entrance
-  const opacity = useSharedValue(0);
-  const translateY = useSharedValue(16);
-  useEffect(() => {
-    opacity.value = withDelay(index * 80, withTiming(1, { duration: 400 }));
-    translateY.value = withDelay(index * 80, withTiming(0, { duration: 400 }));
-  }, [index, opacity, translateY]);
+  // `entering`, not a shared value at 0 driven by a mount-only effect: that shape leaves
+  // the view invisible whenever the animation does not fire, and its deps never change so
+  // nothing re-runs it. Same defect fixed in StatCard.
 
   // Press scale
   const scale = useSharedValue(1);
@@ -130,8 +127,7 @@ function useMixCardPlayback(mix: MixDefinition, index: number) {
   }, [loading, gradientOpacity]);
 
   const animatedStyle = useAnimatedStyle(() => ({
-    opacity: opacity.value,
-    transform: [{ translateY: translateY.value }, { scale: scale.value }],
+    transform: [{ scale: scale.value }],
   }));
 
   const gradientAnimatedStyle = useAnimatedStyle(() => ({
@@ -172,6 +168,31 @@ function useMixCardPlayback(mix: MixDefinition, index: number) {
 /*  HeroMixCard                                                        */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Entrance for a mix card. A separate view from the card's own animated style on
+ * purpose: Reanimated warns that a layout animation may overwrite a `transform` set on
+ * the same component, and every card's style carries the press-scale transform.
+ *
+ * Declarative `entering`, never a shared value starting at 0 driven by a mount-only
+ * effect — that shape leaves the card invisible whenever the animation does not fire,
+ * with no dep change to re-run it. Same defect fixed in StatCard.
+ */
+function MixCardEntrance({
+  index,
+  style,
+  children,
+}: {
+  index: number;
+  style?: StyleProp<ViewStyle>;
+  children: React.ReactNode;
+}) {
+  return (
+    <Animated.View entering={FadeInDown.delay(index * 80).duration(400)} style={style}>
+      {children}
+    </Animated.View>
+  );
+}
+
 const HeroMixCard = memo(function HeroMixCard({
   mix,
   index,
@@ -186,44 +207,46 @@ const HeroMixCard = memo(function HeroMixCard({
     useMixCardPlayback(mix, index);
 
   return (
-    <Animated.View style={[animatedStyle, fillHeight && styles.fillFlex]}>
-      <Pressable
-        onPress={handlePress}
-        onPressIn={handlePressIn}
-        onPressOut={handlePressOut}
-        style={[styles.heroOuter, fillHeight && styles.fillFlex]}
-      >
-        <Animated.View style={[styles.heroGradientWrapper, fillHeight && styles.fillFlex, gradientAnimatedStyle]}>
-          <LinearGradient
-            colors={mix.gradientColors}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={[styles.heroGradient, fillHeight && styles.fillFlex]}
-          >
-            {/* Decorative circles */}
-            <View style={styles.heroDecoCircle1} />
-            <View style={styles.heroDecoCircle2} />
+    <MixCardEntrance index={index} style={fillHeight ? styles.fillFlex : undefined}>
+      <Animated.View style={[animatedStyle, fillHeight && styles.fillFlex]}>
+        <Pressable
+          onPress={handlePress}
+          onPressIn={handlePressIn}
+          onPressOut={handlePressOut}
+          style={[styles.heroOuter, fillHeight && styles.fillFlex]}
+        >
+          <Animated.View style={[styles.heroGradientWrapper, fillHeight && styles.fillFlex, gradientAnimatedStyle]}>
+            <LinearGradient
+              colors={mix.gradientColors}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[styles.heroGradient, fillHeight && styles.fillFlex]}
+            >
+              {/* Decorative circles */}
+              <View style={styles.heroDecoCircle1} />
+              <View style={styles.heroDecoCircle2} />
 
-            <View style={styles.heroRow}>
-              <View style={styles.heroIcon}>
-                <Ionicons name={mix.icon} size={22} color="#ffffffDD" />
+              <View style={styles.heroRow}>
+                <View style={styles.heroIcon}>
+                  <Ionicons name={mix.icon} size={22} color="#ffffffDD" />
+                </View>
+                <View style={styles.heroTextCol}>
+                  <Text style={styles.heroTitle} numberOfLines={1}>{mix.name}</Text>
+                  <Text style={styles.heroSubtitle} numberOfLines={2}>{error ?? mix.subtitle}</Text>
+                </View>
+                <View style={styles.heroPlayBtn}>
+                  {loading ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Ionicons name="play" size={22} color="#fff" />
+                  )}
+                </View>
               </View>
-              <View style={styles.heroTextCol}>
-                <Text style={styles.heroTitle} numberOfLines={1}>{mix.name}</Text>
-                <Text style={styles.heroSubtitle} numberOfLines={2}>{error ?? mix.subtitle}</Text>
-              </View>
-              <View style={styles.heroPlayBtn}>
-                {loading ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Ionicons name="play" size={22} color="#fff" />
-                )}
-              </View>
-            </View>
-          </LinearGradient>
-        </Animated.View>
-      </Pressable>
-    </Animated.View>
+            </LinearGradient>
+          </Animated.View>
+        </Pressable>
+      </Animated.View>
+    </MixCardEntrance>
   );
 });
 
@@ -245,40 +268,42 @@ const MediumMixCard = memo(function MediumMixCard({
     useMixCardPlayback(mix, index);
 
   return (
-    <Animated.View style={[styles.mediumFlex, animatedStyle]}>
-      <Pressable
-        onPress={handlePress}
-        onPressIn={handlePressIn}
-        onPressOut={handlePressOut}
-        style={styles.mediumOuter}
-      >
-        <Animated.View style={[styles.mediumGradientWrapper, gradientAnimatedStyle]}>
-          <LinearGradient
-            colors={mix.gradientColors}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={[styles.mediumGradient, fillHeight && styles.fillFlex]}
-          >
-            {/* Small play button top-right */}
-            <View style={styles.mediumPlayCorner}>
-              {loading ? (
-                <ActivityIndicator size="small" color="#ffffffCC" />
-              ) : (
-                <View style={styles.mediumPlayBtn}>
-                  <Ionicons name="play" size={14} color="#fff" />
-                </View>
-              )}
-            </View>
+    <MixCardEntrance index={index} style={styles.mediumFlex}>
+      <Animated.View style={[styles.mediumFlex, animatedStyle]}>
+        <Pressable
+          onPress={handlePress}
+          onPressIn={handlePressIn}
+          onPressOut={handlePressOut}
+          style={styles.mediumOuter}
+        >
+          <Animated.View style={[styles.mediumGradientWrapper, gradientAnimatedStyle]}>
+            <LinearGradient
+              colors={mix.gradientColors}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[styles.mediumGradient, fillHeight && styles.fillFlex]}
+            >
+              {/* Small play button top-right */}
+              <View style={styles.mediumPlayCorner}>
+                {loading ? (
+                  <ActivityIndicator size="small" color="#ffffffCC" />
+                ) : (
+                  <View style={styles.mediumPlayBtn}>
+                    <Ionicons name="play" size={14} color="#fff" />
+                  </View>
+                )}
+              </View>
 
-            <View style={styles.mediumIcon}>
-              <Ionicons name={mix.icon} size={18} color="#ffffffDD" />
-            </View>
-            <Text style={styles.mediumTitle} numberOfLines={1}>{mix.name}</Text>
-            <Text style={styles.mediumSubtitle} numberOfLines={2}>{error ?? mix.subtitle}</Text>
-          </LinearGradient>
-        </Animated.View>
-      </Pressable>
-    </Animated.View>
+              <View style={styles.mediumIcon}>
+                <Ionicons name={mix.icon} size={18} color="#ffffffDD" />
+              </View>
+              <Text style={styles.mediumTitle} numberOfLines={1}>{mix.name}</Text>
+              <Text style={styles.mediumSubtitle} numberOfLines={2}>{error ?? mix.subtitle}</Text>
+            </LinearGradient>
+          </Animated.View>
+        </Pressable>
+      </Animated.View>
+    </MixCardEntrance>
   );
 });
 
@@ -297,40 +322,42 @@ const CompactMixCard = memo(function CompactMixCard({
     useMixCardPlayback(mix, index);
 
   return (
-    <Animated.View style={animatedStyle}>
-      <Pressable
-        onPress={handlePress}
-        onPressIn={handlePressIn}
-        onPressOut={handlePressOut}
-        style={styles.compactOuter}
-      >
-        <Animated.View style={[styles.compactGradientWrapper, gradientAnimatedStyle]}>
-          <LinearGradient
-            colors={mix.gradientColors}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.compactGradient}
-          >
-            <View style={styles.compactIcon}>
-              <Ionicons name={mix.icon} size={18} color="#ffffffDD" />
-            </View>
-            <View style={styles.compactTextCol}>
-              <Text style={styles.compactTitle} numberOfLines={1}>{mix.name}</Text>
-              <Text style={styles.compactSubtitle} numberOfLines={1}>{error ?? mix.subtitle}</Text>
-            </View>
-            <View style={styles.compactAction}>
-              {loading ? (
-                <ActivityIndicator size="small" color="#ffffffCC" />
-              ) : (
-                <View style={styles.compactPlayBtn}>
-                  <Ionicons name="play" size={16} color="#fff" />
-                </View>
-              )}
-            </View>
-          </LinearGradient>
-        </Animated.View>
-      </Pressable>
-    </Animated.View>
+    <MixCardEntrance index={index}>
+      <Animated.View style={animatedStyle}>
+        <Pressable
+          onPress={handlePress}
+          onPressIn={handlePressIn}
+          onPressOut={handlePressOut}
+          style={styles.compactOuter}
+        >
+          <Animated.View style={[styles.compactGradientWrapper, gradientAnimatedStyle]}>
+            <LinearGradient
+              colors={mix.gradientColors}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.compactGradient}
+            >
+              <View style={styles.compactIcon}>
+                <Ionicons name={mix.icon} size={18} color="#ffffffDD" />
+              </View>
+              <View style={styles.compactTextCol}>
+                <Text style={styles.compactTitle} numberOfLines={1}>{mix.name}</Text>
+                <Text style={styles.compactSubtitle} numberOfLines={1}>{error ?? mix.subtitle}</Text>
+              </View>
+              <View style={styles.compactAction}>
+                {loading ? (
+                  <ActivityIndicator size="small" color="#ffffffCC" />
+                ) : (
+                  <View style={styles.compactPlayBtn}>
+                    <Ionicons name="play" size={16} color="#fff" />
+                  </View>
+                )}
+              </View>
+            </LinearGradient>
+          </Animated.View>
+        </Pressable>
+      </Animated.View>
+    </MixCardEntrance>
   );
 });
 
@@ -346,21 +373,11 @@ const BuildMixButton = memo(function BuildMixButton({
   onPress: () => void;
 }) {
   const { t } = useTranslation();
-  // Entrance animation
-  const opacity = useSharedValue(0);
-  const translateY = useSharedValue(16);
-  useEffect(() => {
-    opacity.value = withDelay(400, withTiming(1, { duration: 400 }));
-    translateY.value = withDelay(400, withTiming(0, { duration: 400 }));
-  }, [opacity, translateY]);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    opacity: opacity.value,
-    transform: [{ translateY: translateY.value }],
-  }));
-
+  // `entering`, not a shared value at 0 driven by a mount-only effect: that shape leaves
+  // the view invisible whenever the animation does not fire, and its deps never change so
+  // nothing re-runs it. Same defect fixed in StatCard.
   return (
-    <Animated.View style={animatedStyle}>
+    <Animated.View entering={FadeInDown.delay(400).duration(400)}>
       <Pressable
         onPress={onPress}
         style={({ pressed }) => [

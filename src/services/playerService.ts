@@ -1254,7 +1254,10 @@ export async function removeNonDownloadedTracks(): Promise<void> {
     return;
   }
 
+  // The playing track stays: native won't remove it, and the JS queue must match native.
+  const playingIndex = tp.getCurrentTrackIndex();
   for (const index of indicesToRemove) {
+    if (index === playingIndex) continue;
     await removeFromQueue(index);
   }
 }

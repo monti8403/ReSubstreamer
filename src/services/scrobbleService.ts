@@ -34,7 +34,12 @@ export function registerScrobbleBatchCompletedHook(hook: (() => void) | null): v
 /* ------------------------------------------------------------------ */
 
 let isInitialised = false;
-let isProcessing = false;
+/**
+ * The run in flight, or null. A boolean would only say that one EXISTS; concurrent
+ * callers need something to await, and without it `processScrobbles()` handed them a
+ * promise that resolved while the work was still going. Nothing could sequence on it.
+ */
+let processing: Promise<void> | null = null;
 const PROCESS_INTERVAL_MS = 60_000; // 1 minute
 
 /* ------------------------------------------------------------------ */
@@ -114,15 +119,15 @@ export async function sendNowPlaying(song: Child, playlistId?: string): Promise<
  * and this is the last point before it is written. It also decides the exclusion
  * correctly, which reads `artistId`. In-memory, so no DB round trip on the audio path.
  */
-export function addCompletedScrobble(incoming: Child, playlistId?: string): void {
-  if (!incoming?.id || !incoming.title) return;
+export function addCompletedScrobble(incoming: Child, playlistId?: string): Promise<void> {
+  if (!incoming?.id || !incoming.title) return Promise.resolve();
   const song = completeSongFromCache(incoming);
-  if (isExcluded(song, playlistId)) return;
+  if (isExcluded(song, playlistId)) return Promise.resolve();
   // Bump local play-count + last-played so the UI reflects the play before the
   // server round-trip. Below the exclusion gate, so excluded plays skip it.
   applyLocalPlay(song);
   pendingScrobbleStore.getState().addScrobble(song, Date.now());
-  processScrobbles();
+  return processScrobbles();
 }
 
 /* ------------------------------------------------------------------ */
@@ -138,10 +143,21 @@ export function addCompletedScrobble(incoming: Child, playlistId?: string): void
  *   processing stops and remaining items stay in the queue for the
  *   next cycle (triggered by the periodic timer or a new scrobble).
  */
-async function processScrobbles(): Promise<void> {
-  if (isProcessing) return;
-  isProcessing = true;
+function processScrobbles(): Promise<void> {
+  // Join the run in flight rather than returning as though the work were done.
+  if (processing !== null) return processing;
+  processing = runScrobblePass().finally(() => {
+    processing = null;
+  });
+  return processing;
+}
 
+/** Awaitable handle on the queue drain, for callers that must sequence after it. */
+export function awaitScrobbleProcessing(): Promise<void> {
+  return processing ?? Promise.resolve();
+}
+
+async function runScrobblePass(): Promise<void> {
   try {
     const api = getApi();
     if (!api) return;
@@ -193,6 +209,7 @@ async function processScrobbles(): Promise<void> {
       onBatchCompleted?.();
     }
   } finally {
-    isProcessing = false;
+    // `processing` is cleared by the caller's `.finally`, so a pass that throws still
+    // releases the slot.
   }
 }

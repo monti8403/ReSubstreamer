@@ -169,16 +169,15 @@ function adapt(op: DB): InternalDb {
     },
     async runAtomicBatchAsync(commands: readonly BatchCommand[]): Promise<void> {
       if (commands.length === 0) return;
-      // Issued SYNCHRONOUSLY — nothing may be awaited above this line, or a
-      // pipelining caller (`bulkUpsert`) would derive its next chunk before this one
-      // reaches the pool. op-SQLite's pool has exactly ONE thread and runs tasks FIFO
-      // (`cpp/OPThreadPool.cpp`), so one `executeBatch` is one indivisible task: no
-      // other POOL-queued statement can land between the SAVEPOINT and the RELEASE.
-      // (`executeSync` runs on the JS thread and bypasses the pool entirely. Never
-      // call `restartPool()` — it rebuilds the pool with `hardware_concurrency()`
-      // threads, which breaks that guarantee.)
-      // SAVEPOINT, not BEGIN: it nests, so running inside another writer's open
-      // transaction neither fails nor lets our recovery destroy their work.
+      // op-SQLite's JS `executeBatch` does NOT reach the pool at call time. It parks the
+      // batch on a transaction lock and dispatches it from a `setImmediate`
+      // (`op-sqlite/src/functions.ts:50-70`), then brackets it in a JS-thread
+      // `BEGIN TRANSACTION` / `COMMIT`, with `ROLLBACK;` on failure (`:95-131`). So the
+      // wrapper already makes this atomic, and a plain `execute` issued afterwards can
+      // reach the pool FIRST. `musicCacheStore.ts:234-243` documents the same thing.
+      //
+      // The SAVEPOINT nests inside the wrapper's transaction and costs nothing. What used
+      // to follow it — an unconditional "recovery" batch — was removed: see below.
       const batch = trackWrite(
         op.executeBatch([
           ['SAVEPOINT op_batch', []],
@@ -186,34 +185,16 @@ function adapt(op: DB): InternalDb {
           ['RELEASE op_batch', []],
         ] as unknown as SQLBatchTuple[]),
       );
-      // The recovery is enqueued in the SAME TICK, unconditionally, and that is
-      // load-bearing: `opsqlite_execute_batch` rethrows the first statement failure
-      // (`cpp/bridge.cpp`), so an aborted batch never reaches its RELEASE and leaves
-      // the savepoint OPEN. Recovering from the JS `catch` below would be too late —
-      // every task the pool drains while the rejection travels back to JS would commit
-      // inside the stranded savepoint and then be silently discarded by the ROLLBACK.
-      // One JS thread plus FIFO means there is no window between these two calls.
-      //
-      // On the success path the batch has already RELEASEd the savepoint, so
-      // `ROLLBACK TO` fails with "no such savepoint" and nothing is undone — expected,
-      // and swallowed. Same swallow covers SQLITE_FULL / IOERR / NOMEM, which abort the
-      // whole transaction themselves, so the recovery's failure is never the error to
-      // report. Tracked like any other write, because `awaitDbWritesIdle` promises
-      // there are no queued pool tasks.
-      const recovery = trackWrite(
-        op.executeBatch([
-          ['ROLLBACK TO op_batch', []],
-          ['RELEASE op_batch', []],
-        ] as unknown as SQLBatchTuple[]),
-      ).catch(() => undefined);
-      try {
-        await batch;
-      } catch (e) {
-        // Settle the recovery before reporting, so the caller's error handling can
-        // never observe a half-applied batch. Always rethrow the statement error.
-        await recovery;
-        throw e;
-      }
+      // NO recovery batch here, deliberately. There used to be a second `executeBatch`
+      // issued in the same tick to `ROLLBACK TO op_batch`, on the theory that a failed
+      // batch strands its savepoint. It did far more harm than good: on the SUCCESS path
+      // its `ROLLBACK TO` fails (the savepoint is already released), the JS wrapper's
+      // catch fires `ROLLBACK;`, and that discards everything written since the wrapper's
+      // own `BEGIN TRANSACTION` — including unrelated writes from other callers, because
+      // the recovery runs a `setImmediate` later, after this function has returned.
+      // It is also unnecessary — the wrapper's own `ROLLBACK;` already discards the
+      // transaction the stranded savepoint lived in.
+      await batch;
     },
     execSync(sql: string): void {
       op.executeSync(sql);

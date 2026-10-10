@@ -108,18 +108,21 @@ export const QueueItemRow = memo(function QueueItemRow({
     [isActive, isInUserQueue, handleAddToUserQueue, colors.primary, t],
   );
 
-  // Swipe LEFT → Remove from queue (red)
+  // Swipe LEFT → Remove from queue (red) — disabled on active track (can't be removed)
   const leftActions: SwipeAction[] = useMemo(
-    () => [
-      {
-        icon: 'trash-outline' as const,
-        color: colors.red,
-        label: t('remove'),
-        onPress: handleRemove,
-        removesRow: true,
-      },
-    ],
-    [colors.red, handleRemove, t],
+    () =>
+      isActive
+        ? []
+        : [
+            {
+              icon: 'trash-outline' as const,
+              color: colors.red,
+              label: t('remove'),
+              onPress: handleRemove,
+              removesRow: true,
+            },
+          ],
+    [isActive, colors.red, handleRemove, t],
   );
 
   return (
@@ -127,7 +130,7 @@ export const QueueItemRow = memo(function QueueItemRow({
       rightActions={rightActions}
       leftActions={leftActions}
       enableFullSwipeRight={!isActive && !isInUserQueue}
-      enableFullSwipeLeft
+      enableFullSwipeLeft={!isActive}
       restingBackgroundColor="transparent"
       onPress={handlePress}
       onLongPress={onLongPress ? handleLongPress : undefined}

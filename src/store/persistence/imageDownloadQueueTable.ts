@@ -113,6 +113,40 @@ export async function countImageQueueRowsByCycle(cycleId: string): Promise<numbe
   }
 }
 
+/**
+ * Rows of one cycle in one status. Cycle-scoped on purpose: the global by-status count
+ * mixes in rows left behind by an earlier cycle, which can drive a live cycle's
+ * "still active" arithmetic negative and flip it to the error phase mid-drain.
+ */
+export async function countImageQueueRowsByCycleAndStatus(
+  cycleId: string,
+  status: string,
+): Promise<number> {
+  const db = getDb();
+  if (db === null) return 0;
+  try {
+    const row = await db.getFirstAsync<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM image_download_queue WHERE cycle_id = ? AND status = ?;',
+      [cycleId, status],
+    );
+    return row?.n ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Drop every queued image, for logout. See {@link clearImageQueueByCycle} for Cancel. */
+export async function clearImageQueue(): Promise<number> {
+  const db = getDb();
+  if (db === null) return 0;
+  try {
+    const result = await db.runAsync('DELETE FROM image_download_queue;');
+    return result.changes;
+  } catch {
+    return 0;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /*  Writes                                                             */
 /* ------------------------------------------------------------------ */

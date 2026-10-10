@@ -150,6 +150,8 @@ jest.mock('../../store/persistence/imageDownloadQueueTable', () => ({
   resetErrorRowsForCycle: (cycleId: string) => mockResetErrorForCycle(cycleId),
   countImageQueueRowsByCycle: (cycleId: string) => mockCountByCycle(cycleId),
   countImageQueueRowsByStatus: (status: string) => mockCountByStatus(status),
+  countImageQueueRowsByCycleAndStatus: (_cycleId: string, status: string) => mockCountByStatus(status),
+  clearImageQueue: () => Promise.resolve(0),
 }));
 
 // kvStorage — back the meta with an in-test Map.
