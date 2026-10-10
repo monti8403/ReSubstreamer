@@ -194,8 +194,12 @@ export async function moveQueueItemToUserQueue(index: number): Promise<void> {
 /**
  * Reorder a queue item from fromIndex to toIndex.
  */
-export async function reorderQueue(fromIndex: number, toIndex: number): Promise<void> {
-  await _reorderQueue(fromIndex, toIndex);
+export async function reorderQueue(
+  fromIndex: number,
+  toIndex: number,
+  explicitUserQueueTrackIds?: string[],
+): Promise<void> {
+  await _reorderQueue(fromIndex, toIndex, explicitUserQueueTrackIds);
 }
 
 /* ------------------------------------------------------------------ */
@@ -355,9 +359,19 @@ export async function playMoreLikeThis(
 
   const backgroundPromise = (async () => {
     try {
-      const tracks = isOffline
-        ? await buildDownloadedMoreLikeThisQueue(song, target)
-        : await buildMoreLikeThisQueue(song, target);
+      let tracks: Child[] = [];
+      if (isOffline) {
+        tracks = await buildDownloadedMoreLikeThisQueue(song, target);
+      } else {
+        try {
+          tracks = await buildMoreLikeThisQueue(song, target);
+        } catch {
+          tracks = await buildDownloadedMoreLikeThisQueue(song, target);
+        }
+        if (!tracks || tracks.length === 0) {
+          tracks = await buildDownloadedMoreLikeThisQueue(song, target);
+        }
+      }
 
       if (!tracks || tracks.length === 0) return;
 

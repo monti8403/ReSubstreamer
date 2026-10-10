@@ -29,6 +29,26 @@ const stubRow =
     const item = artist ?? album ?? song;
     return React.createElement(Text, { testID: `${kind}:${item?.id ?? ''}` }, kind);
   };
+jest.mock('react-native-reanimated', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  return {
+    __esModule: true,
+    default: { View },
+    FadeIn: {
+      duration: () => ({}),
+    },
+    useSharedValue: (init: number) => {
+      const ref = React.useRef({ value: init });
+      return ref.current;
+    },
+    useAnimatedStyle: (fn: () => object) => fn(),
+    withTiming: (val: number) => val,
+    withSequence: (val: number) => val,
+    withSpring: (val: number) => val,
+  };
+});
+
 jest.mock('../../components/ArtistRow', () => ({ ArtistRow: stubRow('artist') }));
 jest.mock('../../components/AlbumRow', () => ({ AlbumRow: stubRow('album') }));
 jest.mock('../../components/SongRow', () => ({ SongRow: stubRow('song') }));
@@ -241,7 +261,7 @@ describe('SearchScreen — favourites filter', () => {
     // The Favourites filter reads the membership id sets, the same ones the heart
     // icons read, so search and the star state can never disagree.
     filterBarStore.setState({ favoritesOnly: true });
-    expect(rowIds(render(<SearchScreen />))).toEqual(['artist:ar1', 'album:al1', 'song:s1']);
+    expect(rowIds(render(<SearchScreen />))).toEqual(['song:s1', 'artist:ar1', 'album:al1']);
   });
 
   it('blames the FILTER when nothing in the results is starred', () => {

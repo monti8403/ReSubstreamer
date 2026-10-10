@@ -1,7 +1,7 @@
 import Ionicons from "@react-native-vector-icons/ionicons/static";
 import { useRouter } from 'expo-router';
 import { memo, useCallback, useMemo } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 
 import { CachedImage } from './CachedImage';
@@ -23,10 +23,12 @@ const COVER_SIZE = 300;
 export const AlbumRow = memo(function AlbumRow({
   album,
   onPress,
+  variant = 'row',
 }: {
   album: AlbumID3;
   /** Overrides the default tap action (navigate to the album). */
   onPress?: () => void;
+  variant?: 'row' | 'carousel';
 }) {
   const { colors } = useTheme();
   const { t } = useTranslation();
@@ -83,6 +85,40 @@ export const AlbumRow = memo(function AlbumRow({
           ],
     [starred, colors.red, colors.primary, handleToggleStar, handleAddToPlaylist, offlineMode, t],
   );
+
+  if (variant === 'carousel') {
+    return (
+      <Pressable
+        testID={`album:${album.id}`}
+        onPress={handlePress}
+        onLongPress={handleLongPress}
+        style={styles.carouselItem}
+      >
+        <View style={styles.carouselCoverWrap}>
+          <CachedImage
+            coverArtId={album.coverArt}
+            size={180}
+            style={styles.carouselCover}
+            resizeMode="cover"
+          />
+        </View>
+        <Text
+          style={[styles.carouselTitle, { color: colors.textPrimary }]}
+          numberOfLines={1}
+        >
+          {album.name}
+        </Text>
+        {album.artist ? (
+          <Text
+            style={[styles.carouselArtist, { color: colors.textSecondary }]}
+            numberOfLines={1}
+          >
+            {album.artist}
+          </Text>
+        ) : null}
+      </Pressable>
+    );
+  }
 
   return (
     <SwipeableRow
@@ -186,5 +222,32 @@ const styles = StyleSheet.create({
   metaText: {
     fontSize: 12,
     marginLeft: 3,
+  },
+  carouselItem: {
+    width: 90,
+    marginRight: 14,
+  },
+  carouselCoverWrap: {
+    width: 90,
+    height: 90,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(0,0,0,0.1)',
+  },
+  carouselCover: {
+    width: 90,
+    height: 90,
+    borderRadius: 8,
+  },
+  carouselTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: 6,
+    width: 90,
+  },
+  carouselArtist: {
+    fontSize: 12,
+    marginTop: 2,
+    width: 90,
   },
 });

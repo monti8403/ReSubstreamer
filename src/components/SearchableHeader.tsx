@@ -105,36 +105,38 @@ export function SearchableHeader({ route }: BottomTabHeaderProps) {
 
   const headerContent = (
     <>
-      <View style={styles.row}>
-        <View
-          style={[styles.inputContainer, { backgroundColor: colors.inputBg }]}
-        >
-          <Ionicons
-            name="search"
-            size={18}
-            color={colors.textSecondary}
-            style={styles.searchIcon}
-          />
-          <TextInput
-            ref={inputRef}
-            style={[styles.input, { color: colors.textPrimary }]}
-            placeholder={offlineMode ? t('offlineSearchPlaceholder') : t('searchPlaceholder')}
-            placeholderTextColor={colors.textSecondary}
-            value={query}
-            onChangeText={handleChangeText}
-            onFocus={handleFocus}
-            onSubmitEditing={handleSubmitEditing}
-            returnKeyType="search"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          {query.length > 0 && (
-            <Pressable onPress={handleClear} hitSlop={8} style={styles.clearButton}>
-              <Ionicons name="close-circle" size={18} color={colors.textSecondary} />
-            </Pressable>
-          )}
+      {isSearchTab && (
+        <View style={styles.row}>
+          <View
+            style={[styles.inputContainer, { backgroundColor: colors.inputBg }]}
+          >
+            <Ionicons
+              name="search"
+              size={18}
+              color={colors.textSecondary}
+              style={styles.searchIcon}
+            />
+            <TextInput
+              ref={inputRef}
+              style={[styles.input, { color: colors.textPrimary }]}
+              placeholder={offlineMode ? t('offlineSearchPlaceholder') : t('searchPlaceholder')}
+              placeholderTextColor={colors.textSecondary}
+              value={query}
+              onChangeText={handleChangeText}
+              onFocus={handleFocus}
+              onSubmitEditing={handleSubmitEditing}
+              returnKeyType="search"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {query.length > 0 && (
+              <Pressable onPress={handleClear} hitSlop={8} style={styles.clearButton}>
+                <Ionicons name="close-circle" size={18} color={colors.textSecondary} />
+              </Pressable>
+            )}
+          </View>
         </View>
-      </View>
+      )}
       <FilterBar routeName={route.name} />
     </>
   );

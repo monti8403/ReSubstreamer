@@ -1,24 +1,30 @@
+import Ionicons from "@react-native-vector-icons/ionicons/static";
 import { useRouter } from 'expo-router';
 import { useIsFocused } from "expo-router/react-navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  SectionList,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import Animated, { FadeIn } from 'react-native-reanimated';
 import { useTranslation } from 'react-i18next';
 
 import { AlbumRow } from '../components/AlbumRow';
-import { EmptyState } from '../components/EmptyState';
 import { ArtistRow } from '../components/ArtistRow';
+import { CachedImage } from '../components/CachedImage';
+import { EmptyState } from '../components/EmptyState';
 import { RecentSearches } from '../components/RecentSearches';
 import { SongRow } from '../components/SongRow';
+import { useSongCoverArt } from '../hooks/useSongCoverArt';
 import { useTheme } from '../hooks/useTheme';
 import { getLocalTrackUri } from '../services/musicCacheService';
 import { playMoreLikeThis } from '../services/moreOptionsService';
-import { playTrack } from '../services/playerService';
 import { minDelay } from '../utils/stringHelpers';
 import {
   type AlbumID3,
@@ -36,17 +42,116 @@ import { recentSearchStore } from '../store/recentSearchStore';
 import { searchStore } from '../store/searchStore';
 
 /* ------------------------------------------------------------------ */
-/*  Section data types                                                */
+/*  Top Hit helpers                                                   */
 /* ------------------------------------------------------------------ */
 
-type SectionItem =
+type TopHitItem =
   | { type: 'artist'; data: ArtistID3 }
-  | { type: 'album'; data: AlbumID3 }
-  | { type: 'song'; data: Child };
+  | { type: 'song'; data: Child }
+  | { type: 'album'; data: AlbumID3 };
 
-interface ResultSection {
-  titleKey: string;
-  data: SectionItem[];
+function TopHitSongCover({ song }: { song: Child }) {
+  const songCoverArtId = useSongCoverArt(song);
+  return (
+    <CachedImage
+      coverArtId={songCoverArtId}
+      size={180}
+      style={styles.topHitCover}
+      resizeMode="cover"
+    />
+  );
+}
+
+interface TopHitCardProps {
+  topHit: TopHitItem;
+  onPress: () => void;
+  colors: ReturnType<typeof useTheme>['colors'];
+  t: (key: string, defaultValue?: any) => string;
+}
+
+function TopHitCard({ topHit, onPress, colors, t }: TopHitCardProps) {
+  const isArtist = topHit.type === 'artist';
+  const isSong = topHit.type === 'song';
+  const isAlbum = topHit.type === 'album';
+
+  const title = isArtist
+    ? topHit.data.name
+    : isSong
+    ? topHit.data.title
+    : topHit.data.name;
+
+  const subtitle = isArtist
+    ? null
+    : isSong
+    ? topHit.data.artist ?? t('unknownArtist', 'Unknown Artist')
+    : topHit.data.artist ?? t('unknownArtist', 'Unknown Artist');
+
+  const badgeText = isArtist
+    ? t('artist', 'Artist')
+    : isSong
+    ? t('song', 'Song')
+    : t('album', 'Album');
+
+  return (
+    <Pressable
+      testID={`top-hit:${topHit.type}:${topHit.data.id}`}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.topHitCard,
+        {
+          backgroundColor: colors.card,
+          borderColor: colors.border,
+          opacity: pressed ? 0.85 : 1,
+        },
+      ]}
+    >
+      <View style={styles.topHitImageWrap}>
+        {isArtist && (
+          <CachedImage
+            coverArtId={topHit.data.coverArt}
+            size={180}
+            style={styles.topHitAvatar}
+            resizeMode="cover"
+          />
+        )}
+        {isSong && <TopHitSongCover song={topHit.data} />}
+        {isAlbum && (
+          <CachedImage
+            coverArtId={topHit.data.coverArt}
+            size={180}
+            style={styles.topHitCover}
+            resizeMode="cover"
+          />
+        )}
+      </View>
+      <View style={styles.topHitContent}>
+        <Text
+          style={[styles.topHitTitle, { color: colors.textPrimary }]}
+          numberOfLines={1}
+        >
+          {title}
+        </Text>
+        {subtitle ? (
+          <Text
+            style={[styles.topHitSubtitle, { color: colors.textSecondary }]}
+            numberOfLines={1}
+          >
+            {subtitle}
+          </Text>
+        ) : null}
+        <View style={[styles.badge, { backgroundColor: colors.inputBg }]}>
+          <Text style={[styles.badgeText, { color: colors.textSecondary }]}>
+            {badgeText}
+          </Text>
+        </View>
+      </View>
+      {isSong && (
+        <View style={[styles.topHitPlayButton, { backgroundColor: colors.primary }]}>
+          <Ionicons name="play" size={18} color="#fff" style={styles.playIcon} />
+        </View>
+      )}
+    </Pressable>
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -66,6 +171,12 @@ export function SearchScreen() {
   const loading = searchStore((s) => s.loading);
   const performSearch = searchStore((s) => s.performSearch);
   const offlineMode = offlineModeStore((s) => s.offlineMode);
+
+  const [showAllSongs, setShowAllSongs] = useState(false);
+
+  useEffect(() => {
+    setShowAllSongs(false);
+  }, [query]);
 
   useEffect(() => {
     if (!isFocused) return;
@@ -100,18 +211,7 @@ export function SearchScreen() {
   const starredAlbumIds = favoritesStore((s) => s.albumIds);
   const starredArtistIds = favoritesStore((s) => s.artistIds);
 
-  // The downloaded ALBUM ids — MEMBERSHIP (`cached_items` alone), because these albums came
-  // from the search results and already carry their metadata.
-  //
-  // `null` means NOT YET KNOWN, and it is a distinct state from "known to be empty" on
-  // purpose. The read is asynchronous, so without the distinction the filter has to guess,
-  // and both guesses are wrong: an unfiltered fall-through flashes music that is not on the
-  // device, and treating a refresh as unknown blanks a populated list every time a download
-  // completes. Unknown ⇒ no albums; a refresh keeps the previous answer on screen (the same
-  // trade `album-library-list.tsx` makes by keeping its rows while `loading`).
   const [downloadedAlbumIds, setDownloadedAlbumIds] = useState<ReadonlySet<string> | null>(null);
-  // `revision` reaches the effect ONLY through this key, so it cannot be dropped without the
-  // re-read being dropped with it.
   const downloadedKey = `${includePartial}:${revision}`;
   useEffect(() => {
     if (!downloadedOnly) return;
@@ -133,14 +233,9 @@ export function SearchScreen() {
     let songs = results.songs;
 
     if (downloadedOnly) {
-      // No set yet ⇒ no albums. Never fall through to the unfiltered list: showing music
-      // that isn't on the device is the one failure a Downloaded filter must not have.
       albums =
         downloadedAlbumIds === null ? [] : albums.filter((a) => downloadedAlbumIds.has(a.id));
       songs = songs.filter((s) => getLocalTrackUri(s.id) !== null);
-      // Artists cannot be downloaded, so the filter drops them outright — the same
-      // handling the library and favourites tabs give the Artists segment. Only the
-      // ONLINE path reaches this; offline search already returns no artists.
       artists = [];
     }
 
@@ -166,39 +261,36 @@ export function SearchScreen() {
     filtered.albums.length > 0 ||
     filtered.songs.length > 0;
 
-  // "The query matched nothing" and "a chip removed every match" get different copy.
-  // Search can tell them apart without an extra query because it holds the UNFILTERED
-  // result set alongside the filtered one.
   const filteredAway =
     (downloadedOnly || favoritesOnly) &&
     (results.artists.length > 0 || results.albums.length > 0 || results.songs.length > 0);
 
-  // "Nothing to show" is only meaningful once the downloaded set has answered — otherwise
-  // entering the filter renders "No results found" over results that are about to appear.
   const busy = loading || downloadedUnknown;
 
-  const sections: ResultSection[] = useMemo(() => {
-    const result: ResultSection[] = [];
-    if (filtered.artists.length > 0) {
-      result.push({
-        titleKey: 'artists',
-        data: filtered.artists.map((a) => ({ type: 'artist' as const, data: a })),
-      });
-    }
-    if (filtered.albums.length > 0) {
-      result.push({
-        titleKey: 'albums',
-        data: filtered.albums.map((a) => ({ type: 'album' as const, data: a })),
-      });
+  const normalizedQuery = query.trim().toLowerCase();
+  const topHit: TopHitItem | null = useMemo(() => {
+    if (!normalizedQuery) return null;
+    const exactArtist = filtered.artists.find(
+      (a) => a.name.trim().toLowerCase() === normalizedQuery,
+    );
+    if (exactArtist) {
+      return { type: 'artist', data: exactArtist };
     }
     if (filtered.songs.length > 0) {
-      result.push({
-        titleKey: 'songs',
-        data: filtered.songs.map((s) => ({ type: 'song' as const, data: s })),
-      });
+      return { type: 'song', data: filtered.songs[0] };
     }
-    return result;
-  }, [filtered]);
+    if (filtered.artists.length > 0) {
+      return { type: 'artist', data: filtered.artists[0] };
+    }
+    if (filtered.albums.length > 0) {
+      return { type: 'album', data: filtered.albums[0] };
+    }
+    return null;
+  }, [normalizedQuery, filtered.artists, filtered.songs, filtered.albums]);
+
+  const displayedSongs = useMemo(() => {
+    return showAllSongs ? filtered.songs : filtered.songs.slice(0, 5);
+  }, [showAllSongs, filtered.songs]);
 
   const [refreshing, setRefreshing] = useState(false);
 
@@ -211,62 +303,21 @@ export function SearchScreen() {
     setRefreshing(false);
   }, [query, performSearch]);
 
-  const renderItem = useCallback(
-    ({ item }: { item: SectionItem }) => {
-      // Tapping a result is the "this search led somewhere" signal — record the
-      // live query (read lazily so these closures don't churn per keystroke),
-      // then perform the row's normal action.
-      const recordCurrent = () =>
-        recentSearchStore.getState().record(searchStore.getState().query);
-      switch (item.type) {
-        case 'artist':
-          return (
-            <ArtistRow
-              artist={item.data}
-              onPress={() => {
-                recordCurrent();
-                router.push(`/artist/${item.data.id}`);
-              }}
-            />
-          );
-        case 'album':
-          return (
-            <AlbumRow
-              album={item.data}
-              onPress={() => {
-                recordCurrent();
-                router.push(`/album/${item.data.id}`);
-              }}
-            />
-          );
-        case 'song':
-          return (
-            <SongRow
-              song={item.data}
-              onPress={() => {
-                recordCurrent();
-                void playMoreLikeThis(item.data, { downloadedOnly });
-              }}
-            />
-          );
-      }
-    },
-    [router]
-  );
+  const recordCurrent = useCallback(() => {
+    recentSearchStore.getState().record(searchStore.getState().query);
+  }, []);
 
-  const renderSectionHeader = useCallback(
-    ({ section }: { section: ResultSection }) => (
-      <Text style={[styles.sectionTitle, { color: colors.label }]}>
-        {t(section.titleKey)}
-      </Text>
-    ),
-    [colors.label, t]
-  );
-
-  const keyExtractor = useCallback(
-    (item: SectionItem, index: number) => `${item.type}-${item.data.id}-${index}`,
-    []
-  );
+  const handleTopHitPress = useCallback(() => {
+    if (!topHit) return;
+    recordCurrent();
+    if (topHit.type === 'artist') {
+      router.push(`/artist/${topHit.data.id}`);
+    } else if (topHit.type === 'song') {
+      void playMoreLikeThis(topHit.data, { downloadedOnly });
+    } else {
+      router.push(`/album/${topHit.data.id}`);
+    }
+  }, [topHit, recordCurrent, router, downloadedOnly]);
 
   // Empty box: show recent-searches history when present, otherwise the
   // original placeholder (offline-aware).
@@ -286,8 +337,7 @@ export function SearchScreen() {
   }
 
   // Query present, a search/refresh (or the downloaded-set read) in flight with nothing to
-  // show yet — a spinner, not a blank screen. Covers the first search and an offline↔online
-  // switch with no prior results.
+  // show yet — a spinner, not a blank screen.
   if (busy && !hasResults) {
     return (
       <View style={[styles.container, { paddingTop: headerHeight }]}>
@@ -316,9 +366,6 @@ export function SearchScreen() {
 
   return (
     <View style={styles.container}>
-      {/* A refresh in flight while previous results stay visible — e.g. flipping
-          offline↔online, or a new keystroke. A top strip so the user sees the
-          results are being updated rather than the screen sitting silently. */}
       {loading && (
         <View
           style={[
@@ -336,19 +383,121 @@ export function SearchScreen() {
           </Text>
         </View>
       )}
-      <SectionList
-        sections={sections}
-        renderItem={renderItem}
-        renderSectionHeader={renderSectionHeader}
-        keyExtractor={keyExtractor}
+
+      <ScrollView
         contentContainerStyle={[styles.listContent, { paddingTop: headerHeight + 16 }]}
-        stickySectionHeadersEnabled={false}
         showsVerticalScrollIndicator={false}
-        onRefresh={handleRefresh}
-        refreshing={refreshing}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
-      />
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+        }
+      >
+        <Animated.View entering={FadeIn.duration(200)}>
+          {/* 1. Top Hit Card */}
+          {topHit && (
+            <View style={styles.sectionWrap}>
+              <Text style={[styles.sectionTitle, { color: colors.label }]}>
+                {t('topResult', 'Top result')}
+              </Text>
+              <TopHitCard
+                topHit={topHit}
+                onPress={handleTopHitPress}
+                colors={colors}
+                t={t}
+              />
+            </View>
+          )}
+
+          {/* 2. Songs (Max 5, expandable) */}
+          {filtered.songs.length > 0 && (
+            <View style={styles.sectionWrap}>
+              <Text style={[styles.sectionTitle, { color: colors.label }]}>
+                {t('songs')}
+              </Text>
+              <View style={styles.songsList}>
+                {displayedSongs.map((song) => (
+                  <SongRow
+                    key={song.id}
+                    song={song}
+                    variant="compact"
+                    onPress={() => {
+                      recordCurrent();
+                      void playMoreLikeThis(song, { downloadedOnly });
+                    }}
+                  />
+                ))}
+              </View>
+              {filtered.songs.length > 5 && (
+                <Pressable
+                  onPress={() => setShowAllSongs((prev) => !prev)}
+                  style={styles.expandButton}
+                >
+                  <Text style={[styles.expandButtonText, { color: colors.primary }]}>
+                    {showAllSongs
+                      ? t('showLess', 'Show less')
+                      : t('seeAllSongs', 'See all {{count}} songs', {
+                          count: filtered.songs.length,
+                        })}
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+          )}
+
+          {/* 3. Artists (Horizontal Carousel) */}
+          {filtered.artists.length > 0 && (
+            <View style={styles.sectionWrap}>
+              <Text style={[styles.sectionTitle, { color: colors.label }]}>
+                {t('artists')}
+              </Text>
+              <FlatList
+                horizontal
+                data={filtered.artists}
+                keyExtractor={(item) => `artist-${item.id}`}
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.carouselContainer}
+                renderItem={({ item }) => (
+                  <ArtistRow
+                    artist={item}
+                    variant="carousel"
+                    onPress={() => {
+                      recordCurrent();
+                      router.push(`/artist/${item.id}`);
+                    }}
+                  />
+                )}
+              />
+            </View>
+          )}
+
+          {/* 4. Albums (Horizontal Carousel) */}
+          {filtered.albums.length > 0 && (
+            <View style={styles.sectionWrap}>
+              <Text style={[styles.sectionTitle, { color: colors.label }]}>
+                {t('albums')}
+              </Text>
+              <FlatList
+                horizontal
+                data={filtered.albums}
+                keyExtractor={(item) => `album-${item.id}`}
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.carouselContainer}
+                renderItem={({ item }) => (
+                  <AlbumRow
+                    album={item}
+                    variant="carousel"
+                    onPress={() => {
+                      recordCurrent();
+                      router.push(`/album/${item.id}`);
+                    }}
+                  />
+                )}
+              />
+            </View>
+          )}
+        </Animated.View>
+      </ScrollView>
     </View>
   );
 }
@@ -362,8 +511,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   listContent: {
-    padding: 16,
-    paddingBottom: 32,
+    paddingHorizontal: 16,
+    paddingBottom: 40,
   },
   loadingCentered: {
     flex: 1,
@@ -390,13 +539,91 @@ const styles = StyleSheet.create({
   loadingStripText: {
     fontSize: 13,
   },
+  sectionWrap: {
+    marginBottom: 20,
+  },
   sectionTitle: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '700',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-    marginBottom: 8,
-    marginTop: 16,
-    marginLeft: 4,
+    marginBottom: 10,
+    marginLeft: 2,
+  },
+  /* Top Hit Card styles */
+  topHitCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  topHitImageWrap: {
+    marginRight: 14,
+  },
+  topHitAvatar: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+  },
+  topHitCover: {
+    width: 72,
+    height: 72,
+    borderRadius: 8,
+  },
+  topHitContent: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  topHitTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  topHitSubtitle: {
+    fontSize: 13,
+    marginTop: 3,
+  },
+  badge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    marginTop: 6,
+  },
+  badgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  topHitPlayButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
+  playIcon: {
+    marginLeft: 2,
+  },
+  /* Songs list */
+  songsList: {
+    gap: 2,
+  },
+  expandButton: {
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+  expandButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  /* Carousels */
+  carouselContainer: {
+    paddingRight: 16,
+    paddingVertical: 4,
   },
 });

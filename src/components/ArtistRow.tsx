@@ -1,7 +1,7 @@
 import Ionicons from "@react-native-vector-icons/ionicons/static";
 import { useRouter } from 'expo-router';
 import { memo, useCallback, useMemo } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 
 import { CachedImage } from './CachedImage';
@@ -20,10 +20,12 @@ const COVER_SIZE = 300;
 export const ArtistRow = memo(function ArtistRow({
   artist,
   onPress,
+  variant = 'row',
 }: {
   artist: ArtistID3;
   /** Overrides the default tap action (navigate to the artist). */
   onPress?: () => void;
+  variant?: 'row' | 'carousel';
 }) {
   const { colors } = useTheme();
   const { t } = useTranslation();
@@ -59,6 +61,32 @@ export const ArtistRow = memo(function ArtistRow({
           ],
     [starred, colors.red, handleToggleStar, offlineMode, t],
   );
+
+  if (variant === 'carousel') {
+    return (
+      <Pressable
+        testID={`artist:${artist.id}`}
+        onPress={handlePress}
+        onLongPress={handleLongPress}
+        style={styles.carouselItem}
+      >
+        <View style={styles.carouselAvatarWrap}>
+          <CachedImage
+            coverArtId={artist.coverArt}
+            size={180}
+            style={styles.carouselAvatar}
+            resizeMode="cover"
+          />
+        </View>
+        <Text
+          style={[styles.carouselName, { color: colors.textPrimary }]}
+          numberOfLines={1}
+        >
+          {artist.name}
+        </Text>
+      </Pressable>
+    );
+  }
 
   return (
     <SwipeableRow
@@ -128,5 +156,29 @@ const styles = StyleSheet.create({
   metaText: {
     fontSize: 12,
     marginLeft: 3,
+  },
+  carouselItem: {
+    width: 90,
+    marginRight: 16,
+    alignItems: 'center',
+  },
+  carouselAvatarWrap: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(0,0,0,0.1)',
+  },
+  carouselAvatar: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+  },
+  carouselName: {
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginTop: 8,
+    width: 90,
   },
 });

@@ -24,7 +24,17 @@ import { formatTrackDuration } from '../utils/formatters';
 import { absoluteFill } from '../utils/styles';
 const COVER_SIZE = 300;
 
-export const SongRow = memo(function SongRow({ song, onPress, songs }: { song: Child; onPress?: () => void; songs?: Child[] }) {
+export const SongRow = memo(function SongRow({
+  song,
+  onPress,
+  songs,
+  variant = 'standard',
+}: {
+  song: Child;
+  onPress?: () => void;
+  songs?: Child[];
+  variant?: 'standard' | 'compact';
+}) {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const starred = useIsStarred('song', song.id);
@@ -85,6 +95,57 @@ export const SongRow = memo(function SongRow({ song, onPress, songs }: { song: C
           ],
     [starred, colors.red, colors.primary, handleToggleStar, handleAddToPlaylist, offlineMode, t],
   );
+
+  if (variant === 'compact') {
+    return (
+      <SwipeableRow
+        rightActions={rightActions}
+        leftActions={leftActions}
+        enableFullSwipeRight
+        enableFullSwipeLeft={!offlineMode}
+        compact
+        rowGap={4}
+        onLongPress={handleLongPress}
+        onPress={handlePress}
+      >
+        <View style={styles.compactRow} testID={`song:${song.id}`}>
+          <View style={styles.compactCoverWrap}>
+            <CachedImage
+              coverArtId={songCoverArtId}
+              size={120}
+              style={styles.compactCover}
+              resizeMode="cover"
+            />
+            {isActive && (
+              <View style={styles.activeOverlay}>
+                <NowPlayingIndicator size={20} color={colors.primary} />
+              </View>
+            )}
+          </View>
+          <View style={styles.compactText}>
+            <Text
+              style={[
+                styles.compactSongName,
+                { color: isActive ? colors.primary : colors.textPrimary },
+              ]}
+              numberOfLines={1}
+            >
+              {song.title}
+            </Text>
+            <Text
+              style={[
+                styles.compactArtistName,
+                { color: isActive ? colors.primary : colors.textSecondary },
+              ]}
+              numberOfLines={1}
+            >
+              {song.artist ?? t('unknownArtist')}
+            </Text>
+          </View>
+        </View>
+      </SwipeableRow>
+    );
+  }
 
   return (
     <SwipeableRow
@@ -174,6 +235,37 @@ const styles = StyleSheet.create({
     height: 56,
     borderRadius: 8,
   },
+  compactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+  },
+  compactCoverWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 6,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(0,0,0,0.1)',
+  },
+  compactCover: {
+    width: 48,
+    height: 48,
+    borderRadius: 6,
+  },
+  compactText: {
+    flex: 1,
+    marginLeft: 12,
+    justifyContent: 'center',
+  },
+  compactSongName: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  compactArtistName: {
+    fontSize: 13,
+    marginTop: 2,
+  },
   activeOverlay: {
     ...absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.45)',
@@ -197,10 +289,6 @@ const styles = StyleSheet.create({
   },
   albumTextWrapper: {
     flex: 1,
-    // `minWidth: 0` is essential for the album-name Text to actually
-    // ellipsize when long. Without it, flex children refuse to shrink
-    // below their content's intrinsic width and the row pushes wider
-    // than its parent.
     minWidth: 0,
     marginLeft: 3,
   },

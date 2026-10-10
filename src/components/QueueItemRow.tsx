@@ -40,6 +40,14 @@ export interface QueueItemRowProps {
   onLongPress?: (track: Child) => void;
 }
 
+function useSafeReorderableDrag() {
+  try {
+    return useReorderableDrag();
+  } catch {
+    return undefined;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
@@ -52,7 +60,7 @@ export const QueueItemRow = memo(function QueueItemRow({
   onPress,
   onLongPress,
 }: QueueItemRowProps) {
-  const drag = useReorderableDrag();
+  const drag = useSafeReorderableDrag();
 
   const handlePress = useCallback(() => {
     onPress(index);
@@ -181,17 +189,20 @@ export const QueueItemRow = memo(function QueueItemRow({
         </View>
 
         {/* Drag handle */}
-        <Pressable
-          onPressIn={drag}
-          hitSlop={8}
-          style={styles.dragHandle}
-        >
-          <Ionicons
-            name="reorder-three-outline"
-            size={24}
-            color={colors.textSecondary}
-          />
-        </Pressable>
+        {!isActive && (
+          <Pressable
+            testID="queue-item-drag-handle"
+            onPressIn={drag}
+            hitSlop={8}
+            style={styles.dragHandle}
+          >
+            <Ionicons
+              name="reorder-three-outline"
+              size={24}
+              color={colors.textSecondary}
+            />
+          </Pressable>
+        )}
       </View>
     </SwipeableRow>
   );

@@ -147,6 +147,7 @@ import {
   moveQueueItemToPlayNext,
   moveQueueItemToUserQueue,
   removeFromQueue,
+  reorderQueue,
   cycleRepeatMode,
   applyPlaybackRate,
   shuffleQueue,
@@ -1169,5 +1170,89 @@ describe('User Queue & Next Up separation', () => {
     expect(mockSetUserQueueTrackIds).toHaveBeenCalledWith(['s3']);
     expect(mockTP.removeFromQueue).toHaveBeenCalledWith([3]);
     expect(mockTP.addToQueue).toHaveBeenCalledWith(expect.any(Array), 1);
+  });
+
+  describe('reorderQueue', () => {
+    it('does not allow reordering the active track or past tracks', async () => {
+      const s0 = makeChild('s0');
+      const s1 = makeChild('s1');
+      const s2 = makeChild('s2');
+      await playTrack(s0, [s0, s1, s2]);
+
+      mockTP.removeFromQueue.mockClear();
+      mockTP.addToQueue.mockClear();
+
+      // fromIndex = 0 is active track
+      await reorderQueue(0, 2);
+      expect(mockTP.removeFromQueue).not.toHaveBeenCalled();
+
+      // fromIndex = -1 is out of bounds
+      await reorderQueue(-1, 2);
+      expect(mockTP.removeFromQueue).not.toHaveBeenCalled();
+    });
+
+    it('clamps toIndex to prevent dropping at or above the active track', async () => {
+      const s0 = makeChild('s0');
+      const s1 = makeChild('s1');
+      const s2 = makeChild('s2');
+      await playTrack(s0, [s0, s1, s2]);
+
+      mockTP.removeFromQueue.mockClear();
+      mockTP.addToQueue.mockClear();
+
+      // Try dropping s2 (index 2) to index 0 (active track position)
+      // Should clamp to index 1
+      await reorderQueue(2, 0);
+      expect(mockTP.removeFromQueue).toHaveBeenCalledWith([2]);
+      expect(mockTP.addToQueue).toHaveBeenCalledWith(expect.any(Array), 1);
+    });
+
+    it('promotes nextUp track to userQueue when dragged into userQueue area', async () => {
+      const s0 = makeChild('s0');
+      const u1 = makeChild('u1');
+      const n1 = makeChild('n1');
+      const n2 = makeChild('n2');
+      await playTrack(s0, [s0, n1, n2]);
+      await addSongToUserQueue(u1);
+      // Queue is: [s0 (active), u1 (userQueue, index 1), n1 (index 2), n2 (index 3)]
+      expect(getUserQueueTrackIds()).toEqual(['u1']);
+
+      // Drag n2 (index 3) to index 1 (inside userQueue)
+      await reorderQueue(3, 1);
+      // n2 is promoted to userQueue
+      expect(getUserQueueTrackIds()).toContain('n2');
+      expect(getUserQueueTrackIds()).toContain('u1');
+      expect(mockSetUserQueueTrackIds).toHaveBeenCalled();
+    });
+
+    it('demotes userQueue track to nextUp when dragged into nextUp area', async () => {
+      const s0 = makeChild('s0');
+      const u1 = makeChild('u1');
+      const n1 = makeChild('n1');
+      await playTrack(s0, [s0, n1]);
+      await addSongToUserQueue(u1);
+      // Queue is: [s0 (active), u1 (index 1), n1 (index 2)]
+      expect(getUserQueueTrackIds()).toEqual(['u1']);
+
+      // Drag u1 (index 1) to index 2 (beyond userQueue)
+      await reorderQueue(1, 2);
+      // u1 is demoted
+      expect(getUserQueueTrackIds()).not.toContain('u1');
+      expect(mockSetUserQueueTrackIds).toHaveBeenCalledWith([]);
+    });
+
+    it('reorders within nextUp without promoting when userQueue is empty', async () => {
+      const s0 = makeChild('s0');
+      const n1 = makeChild('n1');
+      const n2 = makeChild('n2');
+      await playTrack(s0, [s0, n1, n2]);
+      expect(getUserQueueTrackIds()).toEqual([]);
+
+      // Reorder n2 (index 2) to index 1 (still in nextUp because userQueue is empty)
+      await reorderQueue(2, 1);
+      expect(getUserQueueTrackIds()).toEqual([]);
+      expect(mockTP.removeFromQueue).toHaveBeenCalledWith([2]);
+      expect(mockTP.addToQueue).toHaveBeenCalledWith(expect.any(Array), 1);
+    });
   });
 });

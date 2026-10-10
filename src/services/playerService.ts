@@ -1151,32 +1151,76 @@ export async function moveQueueItemToPlayNext(fromIndex: number): Promise<void> 
 /**
  * Reorder a track in the play queue from `fromIndex` to `toIndex`.
  */
-export async function reorderQueue(fromIndex: number, toIndex: number): Promise<void> {
-  await awaitHydration();
-  if (
-    fromIndex < 0 ||
-    fromIndex >= currentChildQueue.length ||
-    toIndex < 0 ||
-    toIndex >= currentChildQueue.length ||
-    fromIndex === toIndex
-  ) {
+export async function reorderQueue(
+  fromIndex: number,
+  toIndex: number,
+  explicitUserQueueTrackIds?: string[],
+): Promise<void> {
+  const currentIndex = playerStore.getState().currentTrackIndex ?? 0;
+  const minValidIndex = Math.min(currentIndex + 1, currentChildQueue.length);
+
+  if (fromIndex < minValidIndex || fromIndex >= currentChildQueue.length) {
+    return;
+  }
+
+  const clampedTo = Math.max(minValidIndex, Math.min(toIndex, currentChildQueue.length - 1));
+  const isIndexSame = fromIndex === clampedTo;
+
+  if (isIndexSame && !explicitUserQueueTrackIds) {
     return;
   }
 
   const child = currentChildQueue[fromIndex];
-  const newQueue = [...currentChildQueue];
-  const [removed] = newQueue.splice(fromIndex, 1);
-  newQueue.splice(toIndex, 0, removed);
-  currentChildQueue = newQueue;
+  const wasInUserQueue = userQueueTrackIds.includes(child.id);
+
+  // User queue tracks in the upcoming section before reordering
+  const userQueueBefore = userQueueTrackIds.filter((id) =>
+    currentChildQueue.slice(minValidIndex).some((t) => t.id === id),
+  );
+  const userQueueCount = userQueueBefore.length;
+
+  if (!isIndexSame) {
+    const newQueue = [...currentChildQueue];
+    const [removed] = newQueue.splice(fromIndex, 1);
+    newQueue.splice(clampedTo, 0, removed);
+    currentChildQueue = newQueue;
+  }
+
+  if (explicitUserQueueTrackIds != null) {
+    userQueueTrackIds = explicitUserQueueTrackIds;
+  } else if (userQueueCount > 0) {
+    const userQueueEndIndex = minValidIndex + userQueueCount - 1;
+    if (!wasInUserQueue && clampedTo <= userQueueEndIndex + 1) {
+      // Promoted to user queue
+      userQueueTrackIds = [...userQueueTrackIds, child.id];
+    } else if (wasInUserQueue && clampedTo > userQueueEndIndex) {
+      // Demoted from user queue
+      userQueueTrackIds = userQueueTrackIds.filter((id) => id !== child.id);
+    }
+  }
+
+  // Keep userQueueTrackIds strictly in the relative order of the updated upcoming queue
+  const userSet = new Set(userQueueTrackIds);
+  userQueueTrackIds = currentChildQueue
+    .slice(minValidIndex)
+    .filter((t) => userSet.has(t.id))
+    .map((t) => t.id);
+
+  // Synchronous optimistic update so UI re-renders immediately on this tick
+  playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
   playerStore.getState().setQueue(currentChildQueue);
 
-  // Sync with native player
-  await tp.removeFromQueue([fromIndex]);
-  await waitForTrackMapsReady();
-  await ensureCoverArtAuth();
-  const { rnTracks } = await buildPlayableQueue([child]);
-  if (rnTracks.length > 0) {
-    await tp.addToQueue(rnTracks, toIndex);
+  await awaitHydration();
+
+  if (!isIndexSame) {
+    // Sync with native player
+    await tp.removeFromQueue([fromIndex]);
+    await waitForTrackMapsReady();
+    await ensureCoverArtAuth();
+    const { rnTracks } = await buildPlayableQueue([child]);
+    if (rnTracks.length > 0) {
+      await tp.addToQueue(rnTracks, clampedTo);
+    }
   }
 
   const activeIndex = tp.getCurrentTrackIndex();

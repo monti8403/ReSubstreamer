@@ -80,6 +80,11 @@ import { moreOptionsStore } from '@/store/moreOptionsStore';
 import { playerStore } from '@/store/playerStore';
 import { mixHexColors } from '@/utils/colors';
 import { reorderQueue } from '@/services/moreOptionsService';
+import {
+  usePartitionedQueue,
+  calculateReorderPlan,
+  type QueueListItem,
+} from '@/hooks/usePartitionedQueue';
 
 
 import { absoluteFill } from '@/utils/styles';
@@ -91,8 +96,6 @@ const TAB_FADE_DURATION = 300;
 const TAB_FADE_EASING = Easing.out(Easing.cubic);
 const TAB_SLIDE_DISTANCE = 12;
 
-/** Static content inset for the queue list — module-scope so FlashList isn't
- *  handed a fresh object on every parent re-render. */
 const QUEUE_CONTENT_CONTAINER_STYLE = { paddingBottom: 12 } as const;
 
 export function PlayerPhonePortrait() {
@@ -408,15 +411,11 @@ export function PlayerPhonePortrait() {
 
   const userQueueTrackIds = playerStore((s) => s.userQueueTrackIds);
 
-  const visibleQueue = useMemo(() => {
-    const startIdx = currentTrackIndex ?? 0;
-    return queue.slice(startIdx);
-  }, [queue, currentTrackIndex]);
-
-  const userQueueCount = useMemo(() => {
-    const upcoming = visibleQueue.slice(1);
-    return upcoming.filter((item) => userQueueTrackIds.includes(item.id)).length;
-  }, [visibleQueue, userQueueTrackIds]);
+  const {
+    nowPlaying,
+    visibleQueue,
+    reorderableListItems,
+  } = usePartitionedQueue(queue, currentTrackIndex, userQueueTrackIds);
 
   const handleClearUserQueue = useCallback(() => {
     void clearUserQueue();
@@ -442,96 +441,117 @@ export function PlayerPhonePortrait() {
   );
 
   const renderQueueItem = useCallback(
-    ({ item, index: relativeIndex }: { item: Child; index: number }) => {
-      const absoluteIndex = (currentTrackIndex ?? 0) + relativeIndex;
-      const isNowPlayingHeader = relativeIndex === 0;
-      const isCurrentItemInUserQueue = userQueueTrackIds.includes(item.id);
-      const prevItem = relativeIndex > 0 ? visibleQueue[relativeIndex - 1] : null;
-      const isPrevInUserQueue = prevItem ? userQueueTrackIds.includes(prevItem.id) : false;
+    ({ item }: { item: QueueListItem }) => {
+      if (item.type === 'header') {
+        const title =
+          item.section === 'nowPlaying'
+            ? t('nowPlayingHeader')
+            : item.section === 'userQueue'
+              ? t('userQueue')
+              : t('nextUp');
 
-      const isUserQueueHeader =
-        relativeIndex > 0 &&
-        isCurrentItemInUserQueue &&
-        (relativeIndex === 1 || !isPrevInUserQueue);
-
-      const isContextQueueHeader =
-        relativeIndex > 0 &&
-        !isCurrentItemInUserQueue &&
-        (relativeIndex === 1 || isPrevInUserQueue);
+        return (
+          <QueueSectionHeader
+            title={title}
+            count={item.count}
+            onClear={item.section === 'userQueue' ? handleClearUserQueue : undefined}
+            colors={colors}
+          />
+        );
+      }
 
       return (
-        <View>
-          {isNowPlayingHeader && (
-            <QueueSectionHeader
-              title={t('nowPlayingHeader')}
-              colors={colors}
-            />
-          )}
-          {isUserQueueHeader && (
-            <QueueSectionHeader
-              title={t('userQueue')}
-              count={userQueueCount}
-              onClear={handleClearUserQueue}
-              colors={colors}
-            />
-          )}
-          {isContextQueueHeader && (
-            <QueueSectionHeader
-              title={t('nextUp')}
-              colors={colors}
-            />
-          )}
-          <QueueItemRow
-            track={item}
-            index={absoluteIndex}
-            isActive={relativeIndex === 0}
-            colors={queueColors}
-            onPress={onQueueItemPressWithScroll}
-            onLongPress={handleQueueItemLongPress}
-          />
-        </View>
+        <QueueItemRow
+          track={item.track}
+          index={item.absoluteIndex}
+          isActive={item.isNowPlaying}
+          colors={queueColors}
+          onPress={onQueueItemPressWithScroll}
+          onLongPress={handleQueueItemLongPress}
+        />
       );
     },
     [
-      currentTrackIndex,
-      userQueueTrackIds,
-      userQueueCount,
-      visibleQueue,
-      queueColors,
       colors,
+      queueColors,
+      handleClearUserQueue,
       onQueueItemPressWithScroll,
       handleQueueItemLongPress,
-      handleClearUserQueue,
       t,
     ],
   );
 
   const keyExtractor = useCallback(
-    (item: Child) => (item as any)._queueKey || item.id,
+    (item: QueueListItem) => item.id,
     [],
   );
 
   const handleReorderQueue = useCallback(
     ({ from, to }: ReorderableListReorderEvent) => {
-      const offset = currentTrackIndex ?? 0;
-      void reorderQueue(offset + from, offset + to);
+      const plan = calculateReorderPlan(
+        reorderableListItems,
+        from,
+        to,
+        currentTrackIndex ?? 0,
+      );
+      if (!plan) {
+        return;
+      }
+      void reorderQueue(
+        plan.fromAbsoluteIndex,
+        plan.toAbsoluteIndex,
+        plan.newUserQueueTrackIds,
+      );
     },
-    [currentTrackIndex],
+    [currentTrackIndex, reorderableListItems],
   );
 
   const queueListHeader = useMemo(
     () => (
-      <QueueHeader
-        colors={colors}
-        handleClearQueue={handleClearQueue}
-        handleShuffle={handleShuffle}
-        handleShareQueue={handleShareQueue}
-        shuffling={shuffling}
-        queueLength={visibleQueue.length}
-        swipeDownGesture={queueSwipeDownGesture}
-      />
+      <View>
+        <QueueHeader
+          colors={colors}
+          handleClearQueue={handleClearQueue}
+          handleShuffle={handleShuffle}
+          handleShareQueue={handleShareQueue}
+          shuffling={shuffling}
+          queueLength={visibleQueue.length}
+          swipeDownGesture={queueSwipeDownGesture}
+        />
+        {nowPlaying && (
+          <>
+            <QueueSectionHeader
+              title={t('nowPlayingHeader')}
+              count={1}
+              colors={colors}
+            />
+            <QueueItemRow
+              track={nowPlaying}
+              index={currentTrackIndex ?? 0}
+              isActive={true}
+              colors={queueColors}
+              onPress={onQueueItemPressWithScroll}
+              onLongPress={handleQueueItemLongPress}
+            />
+          </>
+        )}
+      </View>
     ),
-    [colors, handleClearQueue, handleShuffle, handleShareQueue, shuffling, visibleQueue.length, queueSwipeDownGesture],
+    [
+      colors,
+      handleClearQueue,
+      handleShuffle,
+      handleShareQueue,
+      shuffling,
+      visibleQueue.length,
+      queueSwipeDownGesture,
+      nowPlaying,
+      t,
+      currentTrackIndex,
+      queueColors,
+      onQueueItemPressWithScroll,
+      handleQueueItemLongPress,
+    ],
   );
 
   const headerTopPadding = Platform.OS === 'ios'
@@ -627,10 +647,11 @@ export function PlayerPhonePortrait() {
               <GestureDetector gesture={queueSwipeDownGesture}>
                 <ReorderableList
                   ref={listRef}
-                  data={visibleQueue}
+                  data={reorderableListItems}
                   renderItem={renderQueueItem}
                   keyExtractor={keyExtractor}
                   onReorder={handleReorderQueue}
+                  animationDuration={150}
                   ListHeaderComponent={queueListHeader}
                   onScroll={handleQueueScroll}
                   onScrollBeginDrag={closeOpenRow}

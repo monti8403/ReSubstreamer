@@ -161,4 +161,32 @@ describe('QueueItemRow', () => {
     fireEvent.press(getByTestId('left-action-0'));
     expect(mockRemoveItemFromQueue).toHaveBeenCalledWith(3);
   });
+
+  it('renders drag handle when isActive is false', () => {
+    const track = makeTrack('s1');
+    const { getByTestId } = render(
+      <QueueItemRow
+        track={track}
+        index={1}
+        isActive={false}
+        colors={mockColors}
+        onPress={jest.fn()}
+      />,
+    );
+    expect(getByTestId('queue-item-drag-handle')).toBeTruthy();
+  });
+
+  it('does not render drag handle when isActive is true', () => {
+    const track = makeTrack('s0');
+    const { queryByTestId } = render(
+      <QueueItemRow
+        track={track}
+        index={0}
+        isActive={true}
+        colors={mockColors}
+        onPress={jest.fn()}
+      />,
+    );
+    expect(queryByTestId('queue-item-drag-handle')).toBeNull();
+  });
 });

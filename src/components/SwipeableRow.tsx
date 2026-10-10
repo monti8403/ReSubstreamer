@@ -88,6 +88,8 @@ export interface SwipeableRowProps {
    * View) so the SwipeableRow primitive doesn't need a theme hook.
    */
   disabled?: boolean;
+  /** When true, renders smaller action discs and typography suited for compact rows. */
+  compact?: boolean;
   children: React.ReactNode;
 }
 
@@ -96,8 +98,11 @@ export interface SwipeableRowProps {
 /* ------------------------------------------------------------------ */
 
 const ACTION_WIDTH = 74;
+const ACTION_WIDTH_COMPACT = 60;
 const ICON_SIZE = 22;
+const ICON_SIZE_COMPACT = 18;
 const ICON_DISC_SIZE = 46;
+const ICON_DISC_SIZE_COMPACT = 34;
 
 /** Progress threshold beyond which a swipe counts as "full" (1.5x action panel width). */
 const FULL_SWIPE_PROGRESS_THRESHOLD = 1.5;
@@ -129,6 +134,7 @@ export const SwipeableRow = memo(function SwipeableRow({
   onLongPress,
   onPress,
   disabled = false,
+  compact = false,
   children,
 }: SwipeableRowProps) {
   const { colors } = useTheme();
@@ -318,9 +324,10 @@ export const SwipeableRow = memo(function SwipeableRow({
         fullSwipeTriggered={fullSwipeRightTriggered}
         onFullSwipeChange={setFullSwipeRight}
         onProgressChange={updateSwipeBgOpacity}
+        compact={compact}
       />
     ),
-    [rightActions, enableFullSwipeRight, fullSwipeRightTriggered, setFullSwipeRight, updateSwipeBgOpacity],
+    [rightActions, enableFullSwipeRight, fullSwipeRightTriggered, setFullSwipeRight, updateSwipeBgOpacity, compact],
   );
 
   // renderRightActions = shown when swiping LEFT = our leftActions
@@ -340,9 +347,10 @@ export const SwipeableRow = memo(function SwipeableRow({
         fullSwipeTriggered={fullSwipeLeftTriggered}
         onFullSwipeChange={setFullSwipeLeft}
         onProgressChange={updateSwipeBgOpacity}
+        compact={compact}
       />
     ),
-    [leftActions, enableFullSwipeLeft, fullSwipeLeftTriggered, setFullSwipeLeft, updateSwipeBgOpacity],
+    [leftActions, enableFullSwipeLeft, fullSwipeLeftTriggered, setFullSwipeLeft, updateSwipeBgOpacity, compact],
   );
 
   const swipeContainerStyle = useMemo(
@@ -416,6 +424,7 @@ interface ActionPanelProps {
   onFullSwipeChange: (triggered: boolean) => void;
   /** Called from the UI thread (via runOnJS) with current progress value. */
   onProgressChange: (progress: number) => void;
+  compact?: boolean;
 }
 
 function ActionPanel({
@@ -427,6 +436,7 @@ function ActionPanel({
   fullSwipeTriggered,
   onFullSwipeChange,
   onProgressChange,
+  compact,
 }: ActionPanelProps) {
   const iconPopScale = useSharedValue(1);
 
@@ -477,6 +487,7 @@ function ActionPanel({
           progress={progress}
           methods={methods}
           popScale={enableFullSwipe && index === fullSwipeActionIndex ? iconPopScale : undefined}
+          compact={compact}
         />
       ))}
     </View>
@@ -492,6 +503,7 @@ interface ActionButtonProps {
   progress: SharedValue<number>;
   methods: SwipeableMethods;
   popScale?: SharedValue<number>;
+  compact?: boolean;
 }
 
 const ActionButton = memo(function ActionButton({
@@ -499,6 +511,7 @@ const ActionButton = memo(function ActionButton({
   progress,
   methods,
   popScale,
+  compact = false,
 }: ActionButtonProps) {
   const discStyle = useAnimatedStyle(() => {
     const baseScale = interpolate(
@@ -523,19 +536,37 @@ const ActionButton = memo(function ActionButton({
     methods.close();
   }, [action, methods]);
 
+  const discSize = compact ? ICON_DISC_SIZE_COMPACT : ICON_DISC_SIZE;
+  const iconSize = compact ? ICON_SIZE_COMPACT : ICON_SIZE;
+
   return (
-    <Pressable onPress={handlePress} style={styles.actionButton}>
+    <Pressable
+      onPress={handlePress}
+      style={[styles.actionButton, compact && styles.actionButtonCompact]}
+    >
       <Animated.View
-        style={[styles.iconDisc, { backgroundColor: action.color }, discStyle]}
+        style={[
+          styles.iconDisc,
+          {
+            backgroundColor: action.color,
+            width: discSize,
+            height: discSize,
+            borderRadius: discSize / 2,
+          },
+          discStyle,
+        ]}
       >
         {action.iconFamily === 'mdi' ? (
-          <MaterialCommunityIcons name={action.icon as MaterialCommunityIconsName} size={ICON_SIZE} color="#fff" />
+          <MaterialCommunityIcons name={action.icon as MaterialCommunityIconsName} size={iconSize} color="#fff" />
         ) : (
-          <Ionicons name={action.icon as IoniconsName} size={ICON_SIZE} color="#fff" />
+          <Ionicons name={action.icon as IoniconsName} size={iconSize} color="#fff" />
         )}
       </Animated.View>
       {action.label != null && (
-        <Animated.Text style={[styles.actionLabel, labelStyle]} numberOfLines={1}>
+        <Animated.Text
+          style={[styles.actionLabel, compact && styles.actionLabelCompact, labelStyle]}
+          numberOfLines={1}
+        >
           {action.label}
         </Animated.Text>
       )}
@@ -561,6 +592,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
   },
+  actionButtonCompact: {
+    width: ACTION_WIDTH_COMPACT,
+    gap: 2,
+  },
   iconDisc: {
     width: ICON_DISC_SIZE,
     height: ICON_DISC_SIZE,
@@ -573,5 +608,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     letterSpacing: 0.1,
+  },
+  actionLabelCompact: {
+    fontSize: 10,
   },
 });

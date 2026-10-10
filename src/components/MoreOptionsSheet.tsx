@@ -249,6 +249,7 @@ export function MoreOptionsSheet() {
   // Match the prefix, NOT `!== 'default'`: other non-player sources exist, and treating
   // them as player sources swaps Add to Queue / Play Next for the queue actions.
   const isPlayerSource = source.startsWith('player-');
+  const offline = offlineModeStore((s) => s.offlineMode);
 
   const starType: 'song' | 'album' | 'artist' =
     entity?.type === 'album' || entity?.type === 'artist' ? entity.type : 'song';
@@ -638,7 +639,6 @@ export function MoreOptionsSheet() {
     );
   }
 
-  const offline = offlineModeStore.getState().offlineMode;
   const starrable = !offline && isStarrable(entity);
   const showRating = !offline && isRatable(entity) && (
     entity.type === 'song' || supports('albumArtistRating')

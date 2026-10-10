@@ -29,6 +29,10 @@ import { type ThemeColors } from '@/constants/theme';
 import { useCanSkip } from '@/hooks/useCanSkip';
 import { useSongCoverArt } from '@/hooks/useSongCoverArt';
 import { mixHexColors } from '@/utils/colors';
+import {
+  usePartitionedQueue,
+  type QueueListItem,
+} from '@/hooks/usePartitionedQueue';
 import { usePlayerActions } from '@/hooks/usePlayerActions';
 import { usePlaybackState } from '@/hooks/usePlaybackState';
 import { useShuffleOverlay } from '@/hooks/useShuffleOverlay';
@@ -88,74 +92,49 @@ export function PlayerTabletSplitview() {
 
   const userQueueTrackIds = playerStore((s) => s.userQueueTrackIds);
 
-  const userQueueCount = useMemo(() => {
-    const curIdx = currentTrackIndex ?? 0;
-    const upcoming = queue.slice(curIdx + 1);
-    return upcoming.filter((item) => userQueueTrackIds.includes(item.id)).length;
-  }, [queue, currentTrackIndex, userQueueTrackIds]);
+  const {
+    visibleQueue,
+    queueListItems,
+  } = usePartitionedQueue(queue, currentTrackIndex, userQueueTrackIds);
 
   const handleClearUserQueue = useCallback(() => {
     void clearUserQueue();
   }, []);
 
   const renderQueueItem = useCallback(
-    ({ item, index }: { item: Child; index: number }) => {
-      const curIdx = currentTrackIndex ?? 0;
-      const isNowPlayingHeader = index === curIdx;
-      const isCurrentItemInUserQueue = userQueueTrackIds.includes(item.id);
-      const prevItem = index > curIdx ? queue[index - 1] : null;
-      const isPrevInUserQueue = prevItem ? userQueueTrackIds.includes(prevItem.id) : false;
+    ({ item }: { item: QueueListItem }) => {
+      if (item.type === 'header') {
+        const title =
+          item.section === 'nowPlaying'
+            ? t('nowPlayingHeader')
+            : item.section === 'userQueue'
+              ? t('userQueue')
+              : t('nextUp');
 
-      const isUserQueueHeader =
-        index > curIdx &&
-        isCurrentItemInUserQueue &&
-        (index === curIdx + 1 || !isPrevInUserQueue);
-
-      const isContextQueueHeader =
-        index > curIdx &&
-        !isCurrentItemInUserQueue &&
-        (index === curIdx + 1 || isPrevInUserQueue);
+        return (
+          <QueueSectionHeader
+            title={title}
+            count={item.count}
+            onClear={item.section === 'userQueue' ? handleClearUserQueue : undefined}
+            colors={colors}
+          />
+        );
+      }
 
       return (
-        <View>
-          {isNowPlayingHeader && (
-            <QueueSectionHeader
-              title={t('nowPlayingHeader')}
-              colors={colors}
-            />
-          )}
-          {isUserQueueHeader && (
-            <QueueSectionHeader
-              title={t('userQueue')}
-              count={userQueueCount}
-              onClear={handleClearUserQueue}
-              colors={colors}
-            />
-          )}
-          {isContextQueueHeader && (
-            <QueueSectionHeader
-              title={t('nextUp')}
-              colors={colors}
-            />
-          )}
-          <QueueItemRow
-            track={item}
-            index={index}
-            isActive={index === currentTrackIndex}
-            colors={queueColors}
-            onPress={handleQueueItemPress}
-            onLongPress={handleQueueItemLongPress}
-          />
-        </View>
+        <QueueItemRow
+          track={item.track}
+          index={item.absoluteIndex}
+          isActive={item.isNowPlaying}
+          colors={queueColors}
+          onPress={handleQueueItemPress}
+          onLongPress={handleQueueItemLongPress}
+        />
       );
     },
     [
-      currentTrackIndex,
-      userQueueTrackIds,
-      userQueueCount,
-      queue,
-      queueColors,
       colors,
+      queueColors,
       handleQueueItemPress,
       handleQueueItemLongPress,
       handleClearUserQueue,
@@ -164,7 +143,7 @@ export function PlayerTabletSplitview() {
   );
 
   const keyExtractor = useCallback(
-    (item: Child, index: number) => `${item.id}-${index}`,
+    (item: QueueListItem) => item.id,
     [],
   );
 
@@ -243,9 +222,10 @@ export function PlayerTabletSplitview() {
       {/* Scrollable queue list */}
       <View style={styles.queueList}>
         <FlashList
-          data={queue}
+          data={queueListItems}
           renderItem={renderQueueItem}
           keyExtractor={keyExtractor}
+          getItemType={(item) => item.type}
           onScrollBeginDrag={closeOpenRow}
           drawDistance={200}
           showsVerticalScrollIndicator={false}
