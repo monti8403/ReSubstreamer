@@ -53,12 +53,11 @@ export const QueueSectionHeader = memo(function QueueSectionHeader({
 
 const styles = StyleSheet.create({
   container: {
+    height: 42,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingTop: 18,
-    paddingBottom: 8,
   },
   leftRow: {
     flexDirection: 'row',

@@ -21,6 +21,7 @@ import Animated, {
   Easing,
   interpolate,
   runOnJS,
+  useAnimatedScrollHandler,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -53,6 +54,12 @@ import { PlaybackSourceBadge } from '@/components/PlaybackSourceBadge';
 import { QueueItemRow } from '@/components/QueueItemRow';
 import { QueueSectionHeader } from '@/components/player/QueueSectionHeader';
 import { closeOpenRow } from '@/components/SwipeableRow';
+import { ArtistSelectSheet } from '@/components/player/ArtistSelectSheet';
+import {
+  parseTrackArtists,
+  resolveArtistId,
+  type TrackArtistItem,
+} from '@/services/artistResolutionService';
 import { type ThemeColors } from '@/constants/theme';
 import { useCanSkip } from '@/hooks/useCanSkip';
 import { PlayerCoverGradient } from '@/components/player/PlayerCoverGradient';
@@ -228,9 +235,14 @@ export function PlayerPhonePortrait() {
   }, [windowHeight, ensureQueueMounted, queueTranslateY, queueOpacity, onClose, isTransitioningQueue]);
 
   const isQueueAtTop = useSharedValue(true);
-  const handleQueueScroll = useCallback((event: any) => {
-    isQueueAtTop.value = (event.nativeEvent?.contentOffset?.y ?? 0) <= 0;
-  }, [isQueueAtTop]);
+  const isDraggingQueueDown = useSharedValue(false);
+
+  const handleQueueScroll = useAnimatedScrollHandler({
+    onScroll: (event) => {
+      'worklet';
+      isQueueAtTop.value = event.contentOffset.y <= 0;
+    },
+  });
 
   // Swipe down gesture to dismiss queue back to player (active when list is at top or dragging handle)
   const queueSwipeDownGesture = useMemo(() => {
@@ -241,12 +253,14 @@ export function PlayerPhonePortrait() {
       .onStart(() => {
         'worklet';
         if (isTransitioningQueue.value) return;
+        if (!isQueueAtTop.value) return;
         runOnJS(ensurePlayerMounted)();
       })
       .onUpdate((event) => {
         'worklet';
         if (isTransitioningQueue.value) return;
         if (isQueueAtTop.value && event.translationY > 0) {
+          isDraggingQueueDown.value = true;
           queueTranslateY.value = event.translationY;
           queueOpacity.value = interpolate(
             queueTranslateY.value,
@@ -258,7 +272,10 @@ export function PlayerPhonePortrait() {
       .onEnd((event) => {
         'worklet';
         if (isTransitioningQueue.value) return;
-        if (isQueueAtTop.value && (event.translationY > 55 || event.velocityY > 240)) {
+        if (!isDraggingQueueDown.value) return;
+        isDraggingQueueDown.value = false;
+
+        if (event.translationY > 55 || event.velocityY > 240) {
           isTransitioningQueue.value = true;
           queueTranslateY.value = withTiming(
             windowHeight,
@@ -280,7 +297,7 @@ export function PlayerPhonePortrait() {
           queueOpacity.value = withTiming(1, { duration: 180 });
         }
       });
-  }, [windowHeight, isQueueAtTop, queueTranslateY, queueOpacity, ensurePlayerMounted, isTransitioningQueue]);
+  }, [windowHeight, isQueueAtTop, isDraggingQueueDown, queueTranslateY, queueOpacity, ensurePlayerMounted, isTransitioningQueue]);
 
   // Android hardware back button handler: if queue is open, close queue and return to player
   useEffect(() => {
@@ -486,6 +503,21 @@ export function PlayerPhonePortrait() {
     [],
   );
 
+  const getItemLayout = useCallback(
+    (data: ArrayLike<QueueListItem> | null | undefined, index: number) => {
+      if (!data || index < 0 || index >= data.length) {
+        return { length: 64, offset: 64 * index, index };
+      }
+      let offset = 0;
+      for (let i = 0; i < index; i++) {
+        offset += data[i]?.type === 'header' ? 42 : 64;
+      }
+      const length = data[index]?.type === 'header' ? 42 : 64;
+      return { length, offset, index };
+    },
+    [],
+  );
+
   const handleReorderQueue = useCallback(
     ({ from, to }: ReorderableListReorderEvent) => {
       const plan = calculateReorderPlan(
@@ -617,6 +649,7 @@ export function PlayerPhonePortrait() {
                 onSwitchToQueue={() => setActiveTab('queue')}
                 screenSwipeGesture={screenSwipeGesture}
                 queueTranslateY={queueTranslateY}
+                onClose={onClose}
               />
             </View>
           </Animated.View>
@@ -650,17 +683,20 @@ export function PlayerPhonePortrait() {
                   data={reorderableListItems}
                   renderItem={renderQueueItem}
                   keyExtractor={keyExtractor}
+                  getItemLayout={getItemLayout}
                   onReorder={handleReorderQueue}
                   animationDuration={150}
+                  autoscrollThreshold={0.08}
+                  autoscrollDelay={Platform.OS === 'android' ? 50 : 100}
                   ListHeaderComponent={queueListHeader}
                   onScroll={handleQueueScroll}
                   onScrollBeginDrag={closeOpenRow}
                   showsVerticalScrollIndicator={false}
                   contentContainerStyle={QUEUE_CONTENT_CONTAINER_STYLE}
-                  windowSize={7}
-                  maxToRenderPerBatch={10}
-                  initialNumToRender={12}
-                  updateCellsBatchingPeriod={50}
+                  windowSize={15}
+                  maxToRenderPerBatch={15}
+                  initialNumToRender={16}
+                  updateCellsBatchingPeriod={40}
                 />
               </GestureDetector>
             )}
@@ -736,6 +772,7 @@ interface PlayerContentProps {
   onSwitchToQueue: () => void;
   screenSwipeGesture?: any;
   queueTranslateY?: SharedValue<number>;
+  onClose: () => void;
 }
 
 const CAROUSEL_GAP = 22;
@@ -824,7 +861,9 @@ const PlayerContent = memo(function PlayerContent({
   shuffling,
   screenSwipeGesture,
   queueTranslateY,
+  onClose,
 }: PlayerContentProps) {
+  const router = useRouter();
   const { t } = useTranslation();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -835,6 +874,43 @@ const PlayerContent = memo(function PlayerContent({
   const queue = playerStore((s) => s.queue);
   const currentTrackIndex = playerStore((s) => s.currentTrackIndex);
   const { canSkipNext, canSkipPrevious } = useCanSkip();
+
+  const [artistSheetVisible, setArtistSheetVisible] = useState(false);
+  const [parsedArtists, setParsedArtists] = useState<TrackArtistItem[]>([]);
+
+  const handleAlbumPress = useCallback(() => {
+    if (!currentTrack?.albumId) return;
+    router.push(`/album/${currentTrack.albumId}`);
+  }, [currentTrack?.albumId, router]);
+
+  const handleArtistPress = useCallback(async () => {
+    if (!currentTrack) return;
+    const artists = parseTrackArtists(currentTrack);
+
+    if (artists.length <= 1) {
+      let artistId = artists[0]?.id || currentTrack.artistId;
+      if (!artistId && artists[0]?.name) {
+        artistId = (await resolveArtistId(artists[0].name)) ?? undefined;
+      }
+      if (artistId) {
+        router.push(`/artist/${artistId}`);
+      }
+      return;
+    }
+
+    setParsedArtists(artists);
+    setArtistSheetVisible(true);
+  }, [currentTrack, router]);
+
+  const handleSelectArtist = useCallback(
+    (artist: TrackArtistItem) => {
+      setArtistSheetVisible(false);
+      if (artist.id) {
+        router.push(`/artist/${artist.id}`);
+      }
+    },
+    [router],
+  );
 
   const carouselTracks = useMemo(() => {
     if (!currentTrack) return [];
@@ -1085,15 +1161,63 @@ const PlayerContent = memo(function PlayerContent({
       <Animated.View style={[styles.trackInfo, { marginBottom: m.infoMarginBottom }, infoSynergyStyle]}>
         <View style={styles.trackInfoRow}>
           <View style={styles.trackInfoText}>
-            <MarqueeText style={marqueeStyle}>
-              {currentTrack.title}
-            </MarqueeText>
-            <Text
-              style={[styles.trackArtist, { color: colors.textSecondary, fontSize: m.artistFont }]}
-              numberOfLines={1}
+            <Pressable
+              onPress={handleAlbumPress}
+              disabled={!currentTrack.albumId}
+              style={({ pressed }) => pressed && styles.pressed}
             >
-              {currentTrack.artist ?? t('unknownArtist')}
-            </Text>
+              <MarqueeText style={marqueeStyle}>
+                {currentTrack.title}
+              </MarqueeText>
+            </Pressable>
+
+            <View style={styles.artistAlbumRow}>
+              <Pressable
+                onPress={handleArtistPress}
+                style={({ pressed }) => [
+                  styles.artistPressable,
+                  currentTrack.album ? styles.artistPressableWithAlbum : styles.artistPressableSolo,
+                  pressed && styles.pressed,
+                ]}
+                hitSlop={6}
+              >
+                <Text
+                  style={[styles.trackArtist, { color: colors.textSecondary, fontSize: m.artistFont }]}
+                  numberOfLines={1}
+                >
+                  {currentTrack.artist ?? t('unknownArtist')}
+                </Text>
+              </Pressable>
+
+              {Boolean(currentTrack.album) && (
+                <>
+                  <Text
+                    style={[styles.metadataDot, { color: colors.textSecondary, fontSize: m.artistFont }]}
+                    accessibilityElementsHidden
+                    importantForAccessibility="no"
+                  >
+                    {' • '}
+                  </Text>
+                  <Pressable
+                    onPress={handleAlbumPress}
+                    disabled={!currentTrack.albumId}
+                    style={({ pressed }) => [
+                      styles.albumPressable,
+                      pressed && styles.pressed,
+                    ]}
+                    hitSlop={6}
+                  >
+                    <Text
+                      style={[styles.trackAlbum, { color: colors.textSecondary, fontSize: m.artistFont }]}
+                      numberOfLines={1}
+                    >
+                      {currentTrack.album}
+                    </Text>
+                  </Pressable>
+                </>
+              )}
+            </View>
+
             <CastButton />
           </View>
           <FavoriteButton trackId={currentTrack.id} style={styles.favoriteButton} />
@@ -1223,11 +1347,22 @@ const PlayerContent = memo(function PlayerContent({
     </View>
   );
 
-  if (!screenSwipeGesture) return playerContainer;
   return (
-    <GestureDetector gesture={screenSwipeGesture}>
-      {playerContainer}
-    </GestureDetector>
+    <>
+      {screenSwipeGesture ? (
+        <GestureDetector gesture={screenSwipeGesture}>
+          {playerContainer}
+        </GestureDetector>
+      ) : (
+        playerContainer
+      )}
+      <ArtistSelectSheet
+        visible={artistSheetVisible}
+        artists={parsedArtists}
+        onClose={() => setArtistSheetVisible(false)}
+        onSelectArtist={handleSelectArtist}
+      />
+    </>
   );
 });
 
@@ -1494,9 +1629,35 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '700',
   },
+  artistAlbumRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    minWidth: 0,
+  },
+  artistPressable: {
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  artistPressableWithAlbum: {
+    maxWidth: '65%',
+  },
+  artistPressableSolo: {
+    maxWidth: '100%',
+  },
+  metadataDot: {
+    flexShrink: 0,
+    paddingHorizontal: 2,
+  },
+  albumPressable: {
+    flexShrink: 1,
+    minWidth: 0,
+  },
   trackArtist: {
     fontSize: 16,
-    marginTop: 4,
+  },
+  trackAlbum: {
+    fontSize: 16,
   },
   favoriteButton: {
     paddingLeft: 12,

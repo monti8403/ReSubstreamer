@@ -64,6 +64,8 @@ interface BottomSheetProps {
    */
   scrollable?: boolean;
   children: React.ReactNode;
+  /** Custom background color for the sheet. Defaults to `colors.card`. */
+  backgroundColor?: string;
 }
 
 export function BottomSheet({
@@ -74,6 +76,7 @@ export function BottomSheet({
   maxHeight,
   scrollable = true,
   children,
+  backgroundColor,
 }: BottomSheetProps) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -318,7 +321,7 @@ export function BottomSheet({
         <Animated.View
           style={[
             styles.sheet,
-            { backgroundColor: colors.card },
+            { backgroundColor: backgroundColor ?? colors.card },
             sheetAnimatedStyle,
           ]}
           onLayout={handleLayout}

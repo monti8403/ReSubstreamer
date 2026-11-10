@@ -195,7 +195,8 @@ export const QueueItemRow = memo(function QueueItemRow({
         {!isActive && (
           <Pressable
             testID="queue-item-drag-handle"
-            onPressIn={drag}
+            onLongPress={drag}
+            delayLongPress={150}
             hitSlop={8}
             style={styles.dragHandle}
           >
@@ -217,9 +218,9 @@ export const QueueItemRow = memo(function QueueItemRow({
 
 const styles = StyleSheet.create({
   row: {
+    height: 64,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
     paddingHorizontal: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },

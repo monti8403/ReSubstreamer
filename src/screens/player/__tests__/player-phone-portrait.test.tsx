@@ -40,6 +40,9 @@ jest.mock('@/hooks/useThemedAlert', () => ({
   }),
 }));
 
+const mockRouterBack = jest.fn();
+const mockRouterPush = jest.fn();
+
 jest.mock('expo-router', () => ({
   Stack: {
     Toolbar: Object.assign(
@@ -50,7 +53,7 @@ jest.mock('expo-router', () => ({
     ),
   },
   useNavigation: () => ({ setOptions: jest.fn() }),
-  useRouter: () => ({ back: jest.fn() }),
+  useRouter: () => ({ back: mockRouterBack, push: mockRouterPush }),
 }));
 
 jest.mock('react-native-reorderable-list', () => {
@@ -139,6 +142,22 @@ jest.mock('react-native-gesture-handler', () => {
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 44, bottom: 34, left: 0, right: 0 }),
 }));
+
+jest.mock('@/components/player/ArtistSelectSheet', () => {
+  const { View, Text, Pressable } = require('react-native');
+  return {
+    ArtistSelectSheet: ({ visible, artists, onSelectArtist }: any) =>
+      visible ? (
+        <View testID="artist-select-sheet">
+          {artists.map((a: any) => (
+            <Pressable key={a.name} onPress={() => onSelectArtist(a)}>
+              <Text>{a.name}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null,
+  };
+});
 
 jest.mock('@/components/CachedImage', () => {
   const { View } = require('react-native');
@@ -305,6 +324,8 @@ const MOCK_QUEUE: Child[] = [
 ];
 
 beforeEach(() => {
+  mockRouterBack.mockClear();
+  mockRouterPush.mockClear();
   fetchLyrics.mockClear();
   appStateStore.setState({ isActive: true });
   playerStore.setState({
@@ -557,7 +578,7 @@ describe('PlayerPhonePortrait', () => {
 
   it('auto-dismisses when currentTrack becomes null after being populated', () => {
     const routerBack = jest.fn();
-    jest.spyOn(require('expo-router'), 'useRouter').mockReturnValue({ back: routerBack });
+    const routerSpy = jest.spyOn(require('expo-router'), 'useRouter').mockReturnValue({ back: routerBack, push: mockRouterPush });
 
     render(<PlayerPhonePortrait />);
 
@@ -567,6 +588,7 @@ describe('PlayerPhonePortrait', () => {
     });
 
     expect(routerBack).toHaveBeenCalled();
+    routerSpy.mockRestore();
   });
 
   it('invokes skipToTrack when queue item pressed', () => {
@@ -604,5 +626,46 @@ describe('PlayerPhonePortrait', () => {
 
     // Queue items should still be rendered (mounted)
     expect(getByText('Second Song')).toBeTruthy();
+  });
+
+  it('navigates to album when album name is pressed', async () => {
+    const { getByText } = render(<PlayerPhonePortrait />);
+
+    fireEvent.press(getByText('Test Album'));
+    expect(mockRouterPush).toHaveBeenCalledWith('/album/album-1');
+  });
+
+  it('navigates to album when track title is pressed', async () => {
+    const { getByText } = render(<PlayerPhonePortrait />);
+
+    fireEvent.press(getByText('Test Song'));
+    expect(mockRouterPush).toHaveBeenCalledWith('/album/album-1');
+  });
+
+  it('navigates directly to artist when single artist is pressed', async () => {
+    playerStore.setState({
+      currentTrack: { ...MOCK_TRACK, artist: 'Marracash', artistId: 'marra-1' },
+    });
+    const { getByText } = render(<PlayerPhonePortrait />);
+
+    fireEvent.press(getByText('Marracash'));
+    expect(mockRouterPush).toHaveBeenCalledWith('/artist/marra-1');
+  });
+
+  it('opens ArtistSelectSheet when multiple featuring artists are pressed', async () => {
+    playerStore.setState({
+      currentTrack: {
+        ...MOCK_TRACK,
+        artist: 'Artie 5ive/Kid Yugi',
+        artistId: 'artie-1',
+      },
+    });
+    const { getByText, findByText } = render(<PlayerPhonePortrait />);
+
+    fireEvent.press(getByText('Artie 5ive/Kid Yugi'));
+
+    // Should open the multi-artist sheet
+    expect(await findByText('Artie 5ive')).toBeTruthy();
+    expect(await findByText('Kid Yugi')).toBeTruthy();
   });
 });

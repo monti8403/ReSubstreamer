@@ -68,6 +68,7 @@ import { getDb } from '../store/persistence/db';
 import { getArtistBioRow } from '../db/repository/details';
 import { deletePlaylist as deletePlaylistRow } from '../db/repository/playlists';
 import { bumpDetailChanged } from '../db/detailNotifier';
+import { resolveArtistId } from '../services/artistResolutionService';
 import { runWithOverlay } from '../store/processingOverlayStore';
 import { canUserShare, supports } from '../services/serverCapabilityService';
 import { setRatingStore } from '../store/setRatingStore';
@@ -121,8 +122,11 @@ function isStarrable(entity: MoreOptionsEntity): boolean {
 }
 
 function hasArtistLink(entity: MoreOptionsEntity): boolean {
-  if (entity.type === 'song') return Boolean(entity.item.artistId);
-  if (entity.type === 'album') return Boolean(entity.item.artistId);
+  if (entity.type === 'song') {
+    const song = entity.item as Child;
+    return Boolean(song.artistId || (song.artists && song.artists.length > 0) || song.artist);
+  }
+  if (entity.type === 'album') return Boolean((entity.item as AlbumID3).artistId);
   return false;
 }
 
@@ -426,18 +430,28 @@ export function MoreOptionsSheet() {
     }
   }, [entity, handleClose]);
 
-  const handleGoToArtist = useCallback(() => {
+  const handleGoToArtist = useCallback(async () => {
     if (!entity) return;
     handleClose();
     if (source === 'player-tablet-landscape') {
       tabletLayoutStore.getState().setPlayerExpanded(false);
     }
-    const artistId =
+    let artistId =
       entity.type === 'song'
         ? (entity.item as Child).artistId
         : entity.type === 'album'
           ? (entity.item as AlbumID3).artistId
           : undefined;
+
+    if (!artistId && entity.type === 'song') {
+      const song = entity.item as Child;
+      if (song.artists && song.artists.length > 0 && song.artists[0]?.id) {
+        artistId = song.artists[0].id;
+      } else if (song.artist) {
+        artistId = (await resolveArtistId(song.artist)) ?? undefined;
+      }
+    }
+
     if (artistId) {
       router.push(`/artist/${artistId}`);
     }
