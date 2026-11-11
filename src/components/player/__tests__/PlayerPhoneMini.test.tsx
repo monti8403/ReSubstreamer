@@ -28,6 +28,8 @@ jest.mock('react-native-reanimated', () => {
       out: (e: unknown) => e,
       inOut: (e: unknown) => e,
       cubic: (t: number) => t,
+      quad: (t: number) => t,
+      bezier: () => (t: number) => t,
     },
     runOnJS: (fn: Function) => fn,
   };

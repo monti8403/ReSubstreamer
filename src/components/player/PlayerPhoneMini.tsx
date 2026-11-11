@@ -14,12 +14,12 @@ import {
 import { useTranslation } from 'react-i18next';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
+  Easing,
   Extrapolation,
   interpolate,
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
-  withSpring,
   withTiming,
 } from 'react-native-reanimated';
 
@@ -37,6 +37,12 @@ import { absoluteFill } from '@/utils/styles';
 const MINI_PLAYER_HEIGHT = 56;
 /** Matches the placeholder cover art background (rgb 150,150,150). */
 const PLACEHOLDER_BG = '#969696';
+
+// Magnetic snap parameters: smooth cubic-bezier deceleration that locks into place with zero bounce
+const SNAP_EASING = Easing.bezier(0.25, 1, 0.5, 1);
+const SNAP_DURATION = 190;
+const SNAP_BACK_DURATION = 160;
+const EXIT_DURATION = 130;
 
 export function PlayerPhoneMini() {
   const { colors } = useTheme();
@@ -192,26 +198,33 @@ export function PlayerPhoneMini() {
           // Swipe left (next track)
           if (isSwipeLeft && canSkipNext) {
             isAnimatingChange.value = true;
-            trackOpacity.value = withTiming(0, { duration: 140 });
-            trackTranslateX.value = withTiming(-exitDistance, { duration: 140 }, (finished) => {
-              if (finished) {
-                trackTranslateX.value = exitDistance;
-                trackOpacity.value = 0.4;
-                runOnJS(skipToNext)();
-                trackTranslateX.value = withSpring(
-                  0,
-                  { damping: 20, stiffness: 220 },
-                  (springDone) => {
-                    if (springDone) {
-                      isAnimatingChange.value = false;
-                    }
-                  },
-                );
-                trackOpacity.value = withSpring(1, { damping: 20, stiffness: 220 });
-              } else {
-                isAnimatingChange.value = false;
-              }
-            });
+            trackOpacity.value = withTiming(0, { duration: EXIT_DURATION });
+            trackTranslateX.value = withTiming(
+              -exitDistance,
+              { duration: EXIT_DURATION, easing: Easing.out(Easing.quad) },
+              (finished) => {
+                if (finished) {
+                  trackTranslateX.value = exitDistance;
+                  trackOpacity.value = 0.4;
+                  runOnJS(skipToNext)();
+                  trackTranslateX.value = withTiming(
+                    0,
+                    { duration: SNAP_DURATION, easing: SNAP_EASING },
+                    (snapDone) => {
+                      if (snapDone) {
+                        isAnimatingChange.value = false;
+                      }
+                    },
+                  );
+                  trackOpacity.value = withTiming(1, {
+                    duration: SNAP_DURATION,
+                    easing: SNAP_EASING,
+                  });
+                } else {
+                  isAnimatingChange.value = false;
+                }
+              },
+            );
             gestureDirection.value = 0;
             return;
           }
@@ -219,46 +232,71 @@ export function PlayerPhoneMini() {
           // Swipe right (previous track)
           if (isSwipeRight && canSkipPrevious) {
             isAnimatingChange.value = true;
-            trackOpacity.value = withTiming(0, { duration: 140 });
-            trackTranslateX.value = withTiming(exitDistance, { duration: 140 }, (finished) => {
-              if (finished) {
-                trackTranslateX.value = -exitDistance;
-                trackOpacity.value = 0.4;
-                runOnJS(skipToPrevious)();
-                trackTranslateX.value = withSpring(
-                  0,
-                  { damping: 20, stiffness: 220 },
-                  (springDone) => {
-                    if (springDone) {
-                      isAnimatingChange.value = false;
-                    }
-                  },
-                );
-                trackOpacity.value = withSpring(1, { damping: 20, stiffness: 220 });
-              } else {
-                isAnimatingChange.value = false;
-              }
-            });
+            trackOpacity.value = withTiming(0, { duration: EXIT_DURATION });
+            trackTranslateX.value = withTiming(
+              exitDistance,
+              { duration: EXIT_DURATION, easing: Easing.out(Easing.quad) },
+              (finished) => {
+                if (finished) {
+                  trackTranslateX.value = -exitDistance;
+                  trackOpacity.value = 0.4;
+                  runOnJS(skipToPrevious)();
+                  trackTranslateX.value = withTiming(
+                    0,
+                    { duration: SNAP_DURATION, easing: SNAP_EASING },
+                    (snapDone) => {
+                      if (snapDone) {
+                        isAnimatingChange.value = false;
+                      }
+                    },
+                  );
+                  trackOpacity.value = withTiming(1, {
+                    duration: SNAP_DURATION,
+                    easing: SNAP_EASING,
+                  });
+                } else {
+                  isAnimatingChange.value = false;
+                }
+              },
+            );
             gestureDirection.value = 0;
             return;
           }
 
-          // Threshold NOT reached or cannot skip: snap back
-          trackTranslateX.value = withSpring(0, { damping: 20, stiffness: 220 });
-          trackOpacity.value = withSpring(1, { damping: 20, stiffness: 220 });
+          // Threshold NOT reached or cannot skip: snap back magnetically with zero bounce
+          trackTranslateX.value = withTiming(0, {
+            duration: SNAP_BACK_DURATION,
+            easing: SNAP_EASING,
+          });
+          trackOpacity.value = withTiming(1, {
+            duration: SNAP_BACK_DURATION,
+            easing: SNAP_EASING,
+          });
           gestureDirection.value = 0;
           return;
         }
 
-        trackTranslateX.value = withSpring(0, { damping: 20, stiffness: 220 });
-        trackOpacity.value = withSpring(1, { damping: 20, stiffness: 220 });
+        trackTranslateX.value = withTiming(0, {
+          duration: SNAP_BACK_DURATION,
+          easing: SNAP_EASING,
+        });
+        trackOpacity.value = withTiming(1, {
+          duration: SNAP_BACK_DURATION,
+          easing: SNAP_EASING,
+        });
         gestureDirection.value = 0;
       })
       .onFinalize(() => {
         'worklet';
         if (!isAnimatingChange.value && trackTranslateX.value !== 0) {
-          trackTranslateX.value = withSpring(0, { damping: 20, stiffness: 220 });
-          trackOpacity.value = withSpring(1, { damping: 20, stiffness: 220 });
+          trackTranslateX.value = withTiming(0, {
+            duration: SNAP_BACK_DURATION,
+            easing: SNAP_EASING,
+          });
+          trackOpacity.value = withTiming(1, {
+            duration: SNAP_BACK_DURATION,
+            easing: SNAP_EASING,
+          });
           gestureDirection.value = 0;
         }
       });
