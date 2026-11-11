@@ -18,6 +18,7 @@ import { ListLengthCard } from '../components/settings/ListLengthCard';
 import { SongCoverArtCard } from '../components/settings/SongCoverArtCard';
 import { SongSortOrderCard } from '../components/settings/SongSortOrderCard';
 import { ThemeCard } from '../components/settings/ThemeCard';
+import { WidgetSettingsCard } from '../components/settings/WidgetSettingsCard';
 import { settingsStyles } from '../styles/settingsStyles';
 
 export function SettingsAppearanceScreen() {
@@ -32,6 +33,7 @@ export function SettingsAppearanceScreen() {
       >
         <ThemeCard />
         <AccentColorCard />
+        <WidgetSettingsCard />
         <BookmarksCard />
         <LanguageCard />
         <AlbumSortOrderCard />

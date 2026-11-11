@@ -1,0 +1,9 @@
+<resources>
+  <string name="app_name">ReSubstreamer</string>
+  <string name="expo_system_ui_user_interface_style" translatable="false">automatic</string>
+  <string name="widget_name">ReSubstreamer</string>
+  <string name="widget_recent_title">Ascoltati di recente</string>
+  <string name="widget_shuffle">Mescola</string>
+  <string name="widget_no_track">Nessun brano</string>
+  <string name="widget_ready_to_play">Tocca per riprodurre</string>
+</resources>

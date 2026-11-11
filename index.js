@@ -15,3 +15,17 @@ try {
 
 // Register the expo-router root component. MUST run even if bootstrap threw.
 require('expo-router/entry');
+
+// Register the native Android Music Widget headless task for background / cold-start actions.
+const { AppRegistry } = require('react-native');
+AppRegistry.registerHeadlessTask('MusicWidgetTask', () => async (taskData) => {
+  try {
+    const { handleWidgetAction } = require('./src/services/widgetSyncService');
+    if (taskData?.action) {
+      await handleWidgetAction(taskData.action, taskData);
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[MusicWidgetTask] failed:', e);
+  }
+});

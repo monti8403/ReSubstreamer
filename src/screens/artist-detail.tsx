@@ -50,6 +50,7 @@ import { subscribeDetailChanged } from '../db/detailNotifier';
 import { layoutPreferencesStore } from '../store/layoutPreferencesStore';
 import { moreOptionsStore } from '../store/moreOptionsStore';
 import { offlineModeStore } from '../store/offlineModeStore';
+import { recentPlaysStore } from '../store/recentPlaysStore';
 import { playbackSettingsStore, type ArtistPlayMode } from '../store/playbackSettingsStore';
 
 import {
@@ -325,6 +326,13 @@ export function ArtistDetailScreen() {
             <ShufflePlayButton
               disabled={artistPlayMode === 'topSongs' && !topSongsSettled}
               onPress={() => {
+                recentPlaysStore.getState().recordRecentPlay({
+                  id: artist.id,
+                  type: 'artist',
+                  title: artist.name,
+                  subtitle: '',
+                  coverUri: artist.coverArt,
+                });
                 if (artistPlayMode === 'allSongs') {
                   playAllByArtist(artist.id, artist.name, true, topSongs);
                 } else if (topSongs.length > 1) {
@@ -338,6 +346,13 @@ export function ArtistDetailScreen() {
             <PlayAllButton
               disabled={artistPlayMode === 'topSongs' && !topSongsSettled}
               onPress={() => {
+                recentPlaysStore.getState().recordRecentPlay({
+                  id: artist.id,
+                  type: 'artist',
+                  title: artist.name,
+                  subtitle: '',
+                  coverUri: artist.coverArt,
+                });
                 if (artistPlayMode === 'allSongs') {
                   playAllByArtist(artist.id, artist.name, false, topSongs);
                 } else if (topSongs.length > 0) {

@@ -54,6 +54,7 @@ import { authStore } from '../store/authStore';
 import { moreOptionsStore } from '../store/moreOptionsStore';
 import { musicCacheStore } from '../store/musicCacheStore';
 import { offlineModeStore } from '../store/offlineModeStore';
+import { recentPlaysStore } from '../store/recentPlaysStore';
 import { fetchPlaylistDetail } from '../services/detailFetchService';
 import { getDb } from '../store/persistence/db';
 import { getPlaylistDetail } from '../db/repository/details';
@@ -551,6 +552,15 @@ export function PlaylistDetailScreen() {
 
   const handleTrackPress = useCallback(
     (item: Child) => {
+      if (playlist) {
+        recentPlaysStore.getState().recordRecentPlay({
+          id,
+          type: 'playlist',
+          title: playlist.name ?? '',
+          subtitle: playlist.comment ?? '',
+          coverUri: playlist.coverArt,
+        });
+      }
       const fullIndex = tracks.findIndex((t) => t.id === item.id);
       const others =
         fullIndex !== -1
@@ -559,7 +569,7 @@ export function PlaylistDetailScreen() {
       const queue = [item, ...shuffleArray(others)];
       playTrack(item, queue, id);
     },
-    [tracks, id],
+    [tracks, playlist, id],
   );
 
   const renderItem = useCallback(
@@ -694,6 +704,15 @@ export function PlaylistDetailScreen() {
                 style={styles.heroButtonSpacing}
                 onPress={() => {
                   const shuffled = shuffleArray(displayTracks);
+                  if (playlist) {
+                    recentPlaysStore.getState().recordRecentPlay({
+                      id,
+                      type: 'playlist',
+                      title: playlist.name ?? '',
+                      subtitle: playlist.comment ?? '',
+                      coverUri: playlist.coverArt,
+                    });
+                  }
                   playTrack(shuffled[0], shuffled, id);
                 }}
               />
@@ -701,7 +720,18 @@ export function PlaylistDetailScreen() {
             {!editing && displayTracks.length > 0 && (
               <PlayAllButton
                 style={styles.heroButtonSpacing}
-                onPress={() => playTrack(displayTracks[0], displayTracks, id)}
+                onPress={() => {
+                  if (playlist) {
+                    recentPlaysStore.getState().recordRecentPlay({
+                      id,
+                      type: 'playlist',
+                      title: playlist.name ?? '',
+                      subtitle: playlist.comment ?? '',
+                      coverUri: playlist.coverArt,
+                    });
+                  }
+                  playTrack(displayTracks[0], displayTracks, id);
+                }}
               />
             )}
           </View>

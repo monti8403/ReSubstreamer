@@ -151,6 +151,9 @@ export const LOOKAHEAD_MAX_CACHE_MB = 512;
  */
 export type SkipPreviousBehavior = 'always-previous' | 'restart-or-previous';
 
+export type WidgetTheme = 'dynamic' | 'oled';
+export type WidgetShuffleMode = 'toggle_queue' | 'all_songs' | 'starred' | 'downloaded';
+
 export interface PlaybackSettingsState {
   /** Maximum bitrate for streaming (legacy/fallback). null = no limit (server default). */
   maxBitRate: MaxBitRate;
@@ -206,6 +209,11 @@ export interface PlaybackSettingsState {
   /** Whether Previous button always goes to previous track or restarts if >3s. */
   skipPreviousBehavior: SkipPreviousBehavior;
 
+  /** Android home screen widget theme: dynamic (Spotify style) or oled (pure black). */
+  widgetTheme: WidgetTheme;
+  /** Android home screen widget shuffle mode. */
+  widgetShuffleMode: WidgetShuffleMode;
+
   setMaxBitRate: (bitRate: MaxBitRate) => void;
   setMaxBitRateWifi: (bitRate: MaxBitRate) => void;
   setMaxBitRateCellular: (bitRate: MaxBitRate) => void;
@@ -229,6 +237,8 @@ export interface PlaybackSettingsState {
   setCrossfadeDurationMs: (ms: CrossfadeDurationMs) => void;
   setReplayGainMode: (mode: ReplayGainModeSetting) => void;
   setSkipPreviousBehavior: (behavior: SkipPreviousBehavior) => void;
+  setWidgetTheme: (theme: WidgetTheme) => void;
+  setWidgetShuffleMode: (mode: WidgetShuffleMode) => void;
 }
 
 const PERSIST_KEY = 'substreamer-playback-settings';
@@ -277,6 +287,8 @@ export const playbackSettingsStore = create<PlaybackSettingsState>()(
       crossfadeDurationMs: 5000,
       replayGainMode: 'off',
       skipPreviousBehavior: 'always-previous',
+      widgetTheme: 'dynamic',
+      widgetShuffleMode: 'toggle_queue',
 
       setMaxBitRate: (maxBitRate) => set({ maxBitRate, maxBitRateWifi: maxBitRate }),
       setMaxBitRateWifi: (maxBitRateWifi) => set({ maxBitRateWifi, maxBitRate: maxBitRateWifi }),
@@ -304,6 +316,8 @@ export const playbackSettingsStore = create<PlaybackSettingsState>()(
         set({ skipPreviousBehavior });
         setNativeSkipPreviousBehavior(skipPreviousBehavior);
       },
+      setWidgetTheme: (widgetTheme) => set({ widgetTheme }),
+      setWidgetShuffleMode: (widgetShuffleMode) => set({ widgetShuffleMode }),
     }),
     {
       name: PERSIST_KEY,
@@ -339,6 +353,8 @@ export const playbackSettingsStore = create<PlaybackSettingsState>()(
         crossfadeDurationMs: state.crossfadeDurationMs,
         replayGainMode: state.replayGainMode,
         skipPreviousBehavior: state.skipPreviousBehavior,
+        widgetTheme: state.widgetTheme,
+        widgetShuffleMode: state.widgetShuffleMode,
       }),
     }
   )

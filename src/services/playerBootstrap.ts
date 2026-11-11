@@ -17,6 +17,7 @@ import { getTrackPlayer } from 'react-native-queue-player';
 
 import { errMessage } from '../utils/errorMessage';
 import { installHeadlessMediaService } from './headlessMediaService';
+import { initWidgetSyncService } from './widgetSyncService';
 import { LOOKAHEAD_MAX_CACHE_MB, playbackSettingsStore } from '../store/playbackSettingsStore';
 import { ensureNowPlayingPlaceholderUri } from './nowPlayingPlaceholder';
 import { setNativeSkipPreviousBehavior } from 'expo-move-to-back';
@@ -59,6 +60,7 @@ void getTrackPlayer()
     // idempotent; this covers the cold car / Siri / Assistant wake that runs
     // this bundle before any screen (or login) mounts.
     installHeadlessMediaService();
+    initWidgetSyncService();
     markPlayerReady();
   })
   .catch((e) => {

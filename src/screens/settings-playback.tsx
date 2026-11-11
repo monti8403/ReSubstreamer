@@ -16,6 +16,7 @@ import { RemoteControlsCard } from '../components/settings/RemoteControlsCard';
 import { ReplayGainCard } from '../components/settings/ReplayGainCard';
 import { SkipIntervalsCard } from '../components/settings/SkipIntervalsCard';
 import { StreamingCard } from '../components/settings/StreamingCard';
+import { WidgetSettingsCard } from '../components/settings/WidgetSettingsCard';
 import { StreamFormatSheet } from '../components/StreamFormatSheet';
 import { useTheme } from '../hooks/useTheme';
 import { useThemedAlert } from '../hooks/useThemedAlert';
@@ -118,6 +119,7 @@ export function SettingsPlaybackScreen() {
           {/* Battery-optimization exemption — affects background playback, so it
               lives here under Sound & Playback (Android-only; renders null on iOS). */}
           <BackgroundPlaybackCard />
+          <WidgetSettingsCard />
 
           {!isDefault && (
             <Pressable

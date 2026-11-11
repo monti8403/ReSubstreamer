@@ -42,6 +42,7 @@ import { getDb } from '../store/persistence/db';
 import { getAlbumDetail } from '../db/repository/details';
 import { moreOptionsStore } from '../store/moreOptionsStore';
 import { offlineModeStore } from '../store/offlineModeStore';
+import { recentPlaysStore } from '../store/recentPlaysStore';
 
 import type { AlbumWithSongsID3, Child } from '../services/subsonicService';
 
@@ -221,11 +222,23 @@ export function AlbumDetailScreen() {
             trackNumber={item.track.track != null ? `${item.track.track}. ` : undefined}
             colors={colors}
             songs={allSongs}
+            onPress={() => {
+              if (album) {
+                recentPlaysStore.getState().recordRecentPlay({
+                  id,
+                  type: 'album',
+                  title: album.name ?? '',
+                  subtitle: album.artist ?? album.displayArtist ?? '',
+                  coverUri: album.coverArt,
+                });
+              }
+              playTrack(item.track, allSongs);
+            }}
           />
         </View>
       );
     },
-    [colors, allSongs, t],
+    [colors, allSongs, album, id, t],
   );
 
   const keyExtractor = useCallback(
@@ -287,6 +300,13 @@ export function AlbumDetailScreen() {
                 style={styles.heroButtonSpacing}
                 onPress={() => {
                   const shuffled = shuffleArray(allSongs);
+                  recentPlaysStore.getState().recordRecentPlay({
+                    id,
+                    type: 'album',
+                    title: album.name ?? '',
+                    subtitle: album.artist ?? album.displayArtist ?? '',
+                    coverUri: album.coverArt,
+                  });
                   playTrack(shuffled[0], shuffled);
                 }}
               />
@@ -294,7 +314,16 @@ export function AlbumDetailScreen() {
             {allSongs.length > 0 && (
               <PlayAllButton
                 style={styles.heroButtonSpacing}
-                onPress={() => playTrack(allSongs[0], allSongs)}
+                onPress={() => {
+                  recentPlaysStore.getState().recordRecentPlay({
+                    id,
+                    type: 'album',
+                    title: album.name ?? '',
+                    subtitle: album.artist ?? album.displayArtist ?? '',
+                    coverUri: album.coverArt,
+                  });
+                  playTrack(allSongs[0], allSongs);
+                }}
               />
             )}
           </View>

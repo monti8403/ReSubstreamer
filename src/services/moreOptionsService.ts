@@ -742,3 +742,24 @@ export async function handleRemoveSongDownload(song: Child): Promise<void> {
     processingOverlayStore.getState().showError(i18n.t('failedToLoad'));
   }
 }
+
+/**
+ * Convenience entry point to play or shuffle an artist's songs by id.
+ */
+export async function playArtistSongs(artistId: string, shuffle: boolean): Promise<void> {
+  const db = getDb();
+  let artistName = '';
+  if (db) {
+    try {
+      const topCached = await getArtistTopSongsRow(db, artistId);
+      if (topCached?.songs?.length) {
+        artistName = topCached.songs[0].artist ?? '';
+        await playAllByArtist(artistId, artistName, shuffle, topCached.songs);
+        return;
+      }
+    } catch {
+      // non-critical
+    }
+  }
+  await playAllByArtist(artistId, artistName, shuffle);
+}
