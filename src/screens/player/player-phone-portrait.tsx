@@ -243,8 +243,18 @@ export function PlayerPhonePortrait() {
   const handleQueueScroll = useAnimatedScrollHandler({
     onScroll: (event) => {
       'worklet';
-      scrollY.value = event.contentOffset.y;
-      isQueueAtTop.value = event.contentOffset.y <= 0;
+      scrollY.value = Math.max(0, event.contentOffset.y);
+      isQueueAtTop.value = event.contentOffset.y <= 15;
+    },
+    onBeginDrag: (event) => {
+      'worklet';
+      scrollY.value = Math.max(0, event.contentOffset.y);
+      isQueueAtTop.value = event.contentOffset.y <= 15;
+    },
+    onMomentumEnd: (event) => {
+      'worklet';
+      scrollY.value = Math.max(0, event.contentOffset.y);
+      isQueueAtTop.value = event.contentOffset.y <= 15;
     },
   });
 
@@ -266,7 +276,7 @@ export function PlayerPhonePortrait() {
 
       if (queueTranslateY.value <= 0) return;
 
-      if (queueTranslateY.value > 120 || velocityY > 600) {
+      if (queueTranslateY.value > 100 || velocityY > 500) {
         isTransitioningQueue.value = true;
         queueTranslateY.value = withSpring(
           windowHeight,
@@ -301,7 +311,6 @@ export function PlayerPhonePortrait() {
   const headerPanGesture = useMemo(() => {
     return Gesture.Pan()
       .activeOffsetY(5)
-      .failOffsetY(-15)
       .cancelsTouchesInView(true)
       .onStart(() => {
         'worklet';
@@ -316,7 +325,8 @@ export function PlayerPhonePortrait() {
             isTrackingSheetDismiss.value = true;
             runOnJS(ensurePlayerMounted)();
           }
-          const next = Math.max(0, queueTranslateY.value + event.changeY);
+          const delta = queueTranslateY.value === 0 ? Math.max(0, event.translationY) : event.changeY;
+          const next = Math.max(0, queueTranslateY.value + delta);
           queueTranslateY.value = next;
           queueOpacity.value = interpolate(
             next,
@@ -332,14 +342,11 @@ export function PlayerPhonePortrait() {
       });
   }, [isDraggingQueueItem, isTransitioningQueue, ensurePlayerMounted, queueTranslateY, queueOpacity, windowHeight, isTrackingSheetDismiss, handleGestureRelease]);
 
-  // List Pan Gesture: coordinated simultaneously with the list's native scroll gesture
-  const nativeScrollGesture = useMemo(() => Gesture.Native(), []);
-
+  // List Pan Gesture: handles pull-to-dismiss at the top of the queue without canceling native scroll
   const listPanGesture = useMemo(() => {
     return Gesture.Pan()
       .activeOffsetY(6)
-      .failOffsetY(-15)
-      .cancelsTouchesInView(true)
+      .cancelsTouchesInView(false)
       .onStart(() => {
         'worklet';
         isDismissingQueue.value = false;
@@ -361,24 +368,27 @@ export function PlayerPhonePortrait() {
           return;
         }
 
-        // At the top of the queue: initiate dismiss only on intentional downward motion
-        if (scrollY.value <= 0) {
+        // At the top of the queue: initiate dismiss on intentional downward motion
+        if (scrollY.value <= 15) {
           const absX = Math.abs(event.translationX);
           const translationY = event.translationY;
 
-          // Guard against horizontal swipes (e.g. swipe to remove track):
-          // Require downward movement that is dominant over horizontal movement
+          // Downward motion biased over horizontal drift
           if (!isDismissingQueue.value) {
-            if (translationY > 6 && translationY > absX * 1.1) {
+            if (translationY > 6 && translationY > absX * 0.6) {
               isDismissingQueue.value = true;
+              queueTranslateY.value = Math.max(0, translationY);
+              queueOpacity.value = interpolate(
+                queueTranslateY.value,
+                [0, windowHeight],
+                [1, 0.35],
+              );
               if (!isTrackingSheetDismiss.value) {
                 isTrackingSheetDismiss.value = true;
                 runOnJS(ensurePlayerMounted)();
               }
             }
-          }
-
-          if (isDismissingQueue.value && (event.changeY > 0 || queueTranslateY.value > 0)) {
+          } else if (event.changeY > 0) {
             const next = Math.max(0, queueTranslateY.value + event.changeY);
             queueTranslateY.value = next;
             queueOpacity.value = interpolate(
@@ -412,11 +422,6 @@ export function PlayerPhonePortrait() {
     handleGestureRelease,
   ]);
 
-  const composedListGesture = useMemo(
-    () => Gesture.Simultaneous(listPanGesture, nativeScrollGesture),
-    [listPanGesture, nativeScrollGesture],
-  );
-
   // Android hardware back button handler: if queue is open, close queue and return to player
   useEffect(() => {
     if (activeTab !== 'queue') return;
@@ -440,6 +445,10 @@ export function PlayerPhonePortrait() {
 
     if (activeTab === 'queue') {
       isTransitioningQueue.value = false;
+      scrollY.value = 0;
+      isQueueAtTop.value = true;
+      isDismissingQueue.value = false;
+      isTrackingSheetDismiss.value = false;
       queueTranslateY.value = withSpring(0, {
         damping: 28,
         stiffness: 220,
@@ -567,12 +576,25 @@ export function PlayerPhonePortrait() {
 
   const onQueueItemPressWithScroll = useCallback(
     (targetAbsoluteIndex: number) => {
+      if (queueTranslateY.value > 5 || isDismissingQueue.value || isTrackingSheetDismiss.value) {
+        return;
+      }
       if (targetAbsoluteIndex !== currentTrackIndex) {
         pendingScrollToTopOnSelectRef.current = true;
       }
       handleQueueItemPress(targetAbsoluteIndex);
     },
-    [currentTrackIndex, handleQueueItemPress],
+    [currentTrackIndex, handleQueueItemPress, queueTranslateY, isDismissingQueue, isTrackingSheetDismiss],
+  );
+
+  const handleQueueItemLongPressWithGuard = useCallback(
+    (track: Child) => {
+      if (queueTranslateY.value > 5 || isDismissingQueue.value || isTrackingSheetDismiss.value) {
+        return;
+      }
+      handleQueueItemLongPress(track);
+    },
+    [handleQueueItemLongPress, queueTranslateY, isDismissingQueue, isTrackingSheetDismiss],
   );
 
   const renderQueueItem = useCallback(
@@ -602,7 +624,7 @@ export function PlayerPhonePortrait() {
           isActive={item.isNowPlaying}
           colors={queueColors}
           onPress={onQueueItemPressWithScroll}
-          onLongPress={handleQueueItemLongPress}
+          onLongPress={handleQueueItemLongPressWithGuard}
         />
       );
     },
@@ -611,7 +633,7 @@ export function PlayerPhonePortrait() {
       queueColors,
       handleClearUserQueue,
       onQueueItemPressWithScroll,
-      handleQueueItemLongPress,
+      handleQueueItemLongPressWithGuard,
       t,
     ],
   );
@@ -671,7 +693,7 @@ export function PlayerPhonePortrait() {
             isActive={true}
             colors={queueColors}
             onPress={onQueueItemPressWithScroll}
-            onLongPress={handleQueueItemLongPress}
+            onLongPress={handleQueueItemLongPressWithGuard}
           />
         </View>
       ) : null,
@@ -682,7 +704,7 @@ export function PlayerPhonePortrait() {
       currentTrackIndex,
       queueColors,
       onQueueItemPressWithScroll,
-      handleQueueItemLongPress,
+      handleQueueItemLongPressWithGuard,
     ],
   );
 
@@ -787,7 +809,7 @@ export function PlayerPhonePortrait() {
                   queueLength={visibleQueue.length}
                   swipeDownGesture={headerPanGesture}
                 />
-                <GestureDetector gesture={composedListGesture}>
+                <GestureDetector gesture={listPanGesture}>
                   <ReorderableList
                     ref={listRef}
                     data={reorderableListItems}
