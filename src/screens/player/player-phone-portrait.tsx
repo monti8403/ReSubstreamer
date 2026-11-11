@@ -238,6 +238,7 @@ export function PlayerPhonePortrait() {
   const scrollY = useSharedValue(0);
   const isDraggingQueueItem = useSharedValue(false);
   const isTrackingSheetDismiss = useSharedValue(false);
+  const isDismissingQueue = useSharedValue(false);
 
   const handleQueueScroll = useAnimatedScrollHandler({
     onScroll: (event) => {
@@ -300,8 +301,8 @@ export function PlayerPhonePortrait() {
   const headerPanGesture = useMemo(() => {
     return Gesture.Pan()
       .activeOffsetY(5)
-      .failOffsetY(-10)
-      .failOffsetX([-40, 40])
+      .failOffsetY(-15)
+      .cancelsTouchesInView(true)
       .onStart(() => {
         'worklet';
         if (isDraggingQueueItem.value || isTransitioningQueue.value) return;
@@ -336,23 +337,48 @@ export function PlayerPhonePortrait() {
 
   const listPanGesture = useMemo(() => {
     return Gesture.Pan()
-      .activeOffsetY(5)
-      .failOffsetX([-40, 40])
-      .cancelsTouchesInView(false)
+      .activeOffsetY(6)
+      .failOffsetY(-15)
+      .cancelsTouchesInView(true)
       .onStart(() => {
         'worklet';
+        isDismissingQueue.value = false;
         isTrackingSheetDismiss.value = false;
       })
       .onChange((event) => {
         'worklet';
         if (isDraggingQueueItem.value || isTransitioningQueue.value) return;
 
-        if (scrollY.value <= 0 || queueTranslateY.value > 0) {
-          if (event.changeY > 0 || queueTranslateY.value > 0) {
-            if (!isTrackingSheetDismiss.value && event.changeY > 0) {
-              isTrackingSheetDismiss.value = true;
-              runOnJS(ensurePlayerMounted)();
+        // If sheet is already in motion downwards
+        if (queueTranslateY.value > 0) {
+          const next = Math.max(0, queueTranslateY.value + event.changeY);
+          queueTranslateY.value = next;
+          queueOpacity.value = interpolate(
+            next,
+            [0, windowHeight],
+            [1, 0.35],
+          );
+          return;
+        }
+
+        // At the top of the queue: initiate dismiss only on intentional downward motion
+        if (scrollY.value <= 0) {
+          const absX = Math.abs(event.translationX);
+          const translationY = event.translationY;
+
+          // Guard against horizontal swipes (e.g. swipe to remove track):
+          // Require downward movement that is dominant over horizontal movement
+          if (!isDismissingQueue.value) {
+            if (translationY > 6 && translationY > absX * 1.1) {
+              isDismissingQueue.value = true;
+              if (!isTrackingSheetDismiss.value) {
+                isTrackingSheetDismiss.value = true;
+                runOnJS(ensurePlayerMounted)();
+              }
             }
+          }
+
+          if (isDismissingQueue.value && (event.changeY > 0 || queueTranslateY.value > 0)) {
             const next = Math.max(0, queueTranslateY.value + event.changeY);
             queueTranslateY.value = next;
             queueOpacity.value = interpolate(
@@ -366,9 +392,25 @@ export function PlayerPhonePortrait() {
       .onEnd((event) => {
         'worklet';
         if (isDraggingQueueItem.value || isTransitioningQueue.value) return;
+        isDismissingQueue.value = false;
         handleGestureRelease(event.velocityY);
+      })
+      .onFinalize(() => {
+        'worklet';
+        isDismissingQueue.value = false;
       });
-  }, [isDraggingQueueItem, isTransitioningQueue, scrollY, queueTranslateY, isTrackingSheetDismiss, ensurePlayerMounted, queueOpacity, windowHeight, handleGestureRelease]);
+  }, [
+    isDraggingQueueItem,
+    isTransitioningQueue,
+    isDismissingQueue,
+    scrollY,
+    queueTranslateY,
+    isTrackingSheetDismiss,
+    ensurePlayerMounted,
+    queueOpacity,
+    windowHeight,
+    handleGestureRelease,
+  ]);
 
   const composedListGesture = useMemo(
     () => Gesture.Simultaneous(listPanGesture, nativeScrollGesture),

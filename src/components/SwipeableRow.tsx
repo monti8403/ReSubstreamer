@@ -90,6 +90,8 @@ export interface SwipeableRowProps {
   disabled?: boolean;
   /** When true, renders smaller action discs and typography suited for compact rows. */
   compact?: boolean;
+  /** Horizontal drag distance (in points) required to activate the swipe. Defaults to 20. */
+  dragOffset?: number;
   children: React.ReactNode;
 }
 
@@ -135,6 +137,7 @@ export const SwipeableRow = memo(function SwipeableRow({
   onPress,
   disabled = false,
   compact = false,
+  dragOffset,
   children,
 }: SwipeableRowProps) {
   const { colors } = useTheme();
@@ -366,6 +369,8 @@ export const SwipeableRow = memo(function SwipeableRow({
     [borderRadius],
   );
 
+  const effectiveDragOffset = dragOffset ?? 20;
+
   return (
     <ReanimatedSwipeable
       ref={swipeableRef as any}
@@ -373,8 +378,8 @@ export const SwipeableRow = memo(function SwipeableRow({
       hitSlop={{ left: -EDGE_BACK_GESTURE_WIDTH }}
       friction={effectiveFriction}
       overshootFriction={effectiveOvershootFriction}
-      dragOffsetFromLeftEdge={6}
-      dragOffsetFromRightEdge={6}
+      dragOffsetFromLeftEdge={effectiveDragOffset}
+      dragOffsetFromRightEdge={effectiveDragOffset}
       leftThreshold={32}
       rightThreshold={32}
       overshootLeft={hasRight}
