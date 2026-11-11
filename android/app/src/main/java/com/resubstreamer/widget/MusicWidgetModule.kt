@@ -41,6 +41,7 @@ class MusicWidgetModule(context: ReactApplicationContext) : ReactContextBaseJava
         if (state.hasKey("album")) editor.putString("album", state.getString("album"))
         if (state.hasKey("coverUri")) editor.putString("cover_uri", state.getString("coverUri"))
         if (state.hasKey("isPlaying")) editor.putBoolean("is_playing", state.getBoolean("isPlaying"))
+        editor.putBoolean("is_loading", false)
         if (state.hasKey("isStarred")) editor.putBoolean("is_starred", state.getBoolean("isStarred"))
         if (state.hasKey("isShuffleActive")) editor.putBoolean("is_shuffle_active", state.getBoolean("isShuffleActive"))
         if (state.hasKey("widgetTheme")) editor.putString("widget_theme", state.getString("widgetTheme"))
@@ -75,3 +76,4 @@ class MusicWidgetModule(context: ReactApplicationContext) : ReactContextBaseJava
         }
     }
 }
+

@@ -25,19 +25,14 @@ import { shuffleArray } from '../utils/arrayHelpers';
 
 const { MusicWidgetModule } = NativeModules;
 
-let syncTimer: ReturnType<typeof setTimeout> | null = null;
-
 /**
- * Schedule a debounced synchronization of the React Native state to the native
+ * Immediately synchronize the React Native state to the native
  * Android SharedPreferences and AppWidget.
+ * No setTimeout debounce so background/standby threads never delay sync.
  */
 export function scheduleWidgetSync(): void {
   if (Platform.OS !== 'android' || !MusicWidgetModule) return;
-  if (syncTimer) clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => {
-    syncTimer = null;
-    void syncWidgetState();
-  }, 100);
+  void syncWidgetState();
 }
 
 /**
@@ -236,6 +231,13 @@ export async function handleWidgetAction(action: string, extras?: Record<string,
     default:
       break;
   }
+
+  try {
+    await syncWidgetState();
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[widgetSyncService] handleWidgetAction post-sync failed:', e);
+  }
 }
 
 let isInitialized = false;
@@ -290,3 +292,4 @@ export function initWidgetSyncService(): () => void {
     isInitialized = false;
   };
 }
+

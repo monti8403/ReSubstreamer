@@ -3,6 +3,9 @@ package com.resubstreamer.widget
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.util.Log
 import com.facebook.react.HeadlessJsTaskService
 import com.facebook.react.bridge.Arguments
@@ -22,20 +25,60 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
-        Log.d(TAG, "Received action: $action")
+        Log.d(TAG, "Received widget action: $action")
 
         val prefs = context.getSharedPreferences(MusicWidgetModule.PREFS_NAME, Context.MODE_PRIVATE)
+
+        // Haptic feedback
+        try {
+            val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator?.vibrate(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator?.vibrate(30)
+            }
+        } catch (_: Exception) {}
+
+        // Ensure MediaManager is initialized
+        MusicWidgetMediaManager.initialize(context)
 
         // Optimistic UI updates
         when (action) {
             ACTION_PLAY_PAUSE -> {
-                val currentPlaying = prefs.getBoolean("is_playing", false)
-                prefs.edit().putBoolean("is_playing", !currentPlaying).apply()
+                val controller = MusicWidgetMediaManager.mediaController
+                val isCurrentlyPlaying = controller?.isPlaying ?: prefs.getBoolean("is_playing", false)
+                prefs.edit().putBoolean("is_playing", !isCurrentlyPlaying).putBoolean("is_loading", false).apply()
                 MusicWidgetProvider.updateAllWidgets(context)
+
+                if (controller != null && controller.currentMediaItem != null) {
+                    if (isCurrentlyPlaying) {
+                        controller.pause()
+                    } else {
+                        controller.play()
+                    }
+                }
+            }
+            ACTION_NEXT -> {
+                val controller = MusicWidgetMediaManager.mediaController
+                if (controller != null && controller.currentMediaItem != null) {
+                    MusicWidgetMediaManager.skipToNext()
+                }
+            }
+            ACTION_PREV -> {
+                val controller = MusicWidgetMediaManager.mediaController
+                if (controller != null && controller.currentMediaItem != null) {
+                    MusicWidgetMediaManager.skipToPrevious()
+                }
             }
             ACTION_STAR -> {
                 val currentStarred = prefs.getBoolean("is_starred", false)
                 prefs.edit().putBoolean("is_starred", !currentStarred).apply()
+                MusicWidgetProvider.updateAllWidgets(context)
+            }
+            ACTION_SHUFFLE -> {
+                // Show loading spinner immediately in place of the play button
+                prefs.edit().putBoolean("is_loading", true).apply()
                 MusicWidgetProvider.updateAllWidgets(context)
             }
         }

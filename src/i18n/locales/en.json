@@ -1127,11 +1127,11 @@
   "widgetHomeScreen": "Home Screen Widget",
   "widgetSettingsHint": "Customize the background appearance and Shuffle button action for the native Android widget.",
   "widgetThemeLabel": "Widget Theme",
-  "widgetThemeDynamic": "Dynamic (Spotify Style)",
+  "widgetThemeDynamic": "Dynamic",
   "widgetThemeOled": "Pure Black (OLED)",
-  "widgetShuffleModeLabel": "Shuffle Button Action",
-  "widgetShuffleModeToggleQueue": "Current Queue (Random mix if empty)",
-  "widgetShuffleModeAllSongs": "Entire Library",
-  "widgetShuffleModeStarred": "Favorite Songs (♥)",
-  "widgetShuffleModeDownloaded": "Downloaded Songs (Offline)"
+  "widgetShuffleModeLabel": "Shuffle Action",
+  "widgetShuffleModeToggleQueue": "Current queue",
+  "widgetShuffleModeAllSongs": "Entire library",
+  "widgetShuffleModeStarred": "Favorites",
+  "widgetShuffleModeDownloaded": "Downloaded"
 }

@@ -18,9 +18,11 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.util.LruCache
+import android.util.SizeF
 import android.view.View
 import android.widget.RemoteViews
 import androidx.core.graphics.ColorUtils
@@ -77,44 +79,106 @@ class MusicWidgetProvider : AppWidgetProvider() {
         }
 
         fun updateWidget(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int) {
+            MusicWidgetMediaManager.initialize(context)
+
+            val prefs = context.getSharedPreferences(MusicWidgetModule.PREFS_NAME, Context.MODE_PRIVATE)
+            val coverUri = prefs.getString("cover_uri", null)
+            val theme = prefs.getString("widget_theme", "dynamic") ?: "dynamic"
+            val isOled = theme == "oled"
+
+            val cachedData = if (!coverUri.isNullOrEmpty()) coverCache.get(coverUri) else null
+            val defaultDominant = if (isOled) Color.BLACK else Color.parseColor("#181818")
+            val defaultVibrant = Color.parseColor("#1DB954")
+            val activeData = cachedData ?: CoverColorData(null, null, defaultDominant, defaultVibrant)
+
             val options = appWidgetManager.getAppWidgetOptions(appWidgetId)
             val minHeight = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0) ?: 0
-            val isExpanded = minHeight >= 130
+            val maxHeight = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0) ?: 0
 
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val compact = buildViewsForLayout(context, isExpanded = false, activeData, isOled)
+                val expanded = buildViewsForLayout(context, isExpanded = true, activeData, isOled)
+                val viewMapping = mapOf(
+                    SizeF(180f, 40f) to compact,
+                    SizeF(180f, 95f) to expanded
+                )
+                appWidgetManager.updateAppWidget(appWidgetId, RemoteViews(viewMapping))
+            } else {
+                val isExpanded = minHeight >= 95 || maxHeight >= 105
+                val views = buildViewsForLayout(context, isExpanded, activeData, isOled)
+                appWidgetManager.updateAppWidget(appWidgetId, views)
+            }
+
+            // If cover is not yet cached, fetch and process in background coroutine
+            if (cachedData == null && !coverUri.isNullOrEmpty()) {
+                coroutineScope.launch {
+                    val loadedData = loadCoverAndExtractColors(context, coverUri)
+                    if (loadedData != null) {
+                        coverCache.put(coverUri, loadedData)
+                        withContext(Dispatchers.Main) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                val compact = buildViewsForLayout(context, isExpanded = false, loadedData, isOled)
+                                val expanded = buildViewsForLayout(context, isExpanded = true, loadedData, isOled)
+                                val viewMapping = mapOf(
+                                    SizeF(180f, 40f) to compact,
+                                    SizeF(180f, 95f) to expanded
+                                )
+                                appWidgetManager.updateAppWidget(appWidgetId, RemoteViews(viewMapping))
+                            } else {
+                                val isExpanded = minHeight >= 95 || maxHeight >= 105
+                                val views = buildViewsForLayout(context, isExpanded, loadedData, isOled)
+                                appWidgetManager.updateAppWidget(appWidgetId, views)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private fun buildViewsForLayout(
+            context: Context,
+            isExpanded: Boolean,
+            data: CoverColorData,
+            isOled: Boolean
+        ): RemoteViews {
             val layoutId = if (isExpanded) R.layout.widget_expanded else R.layout.widget_compact
             val views = RemoteViews(context.packageName, layoutId)
 
             val prefs = context.getSharedPreferences(MusicWidgetModule.PREFS_NAME, Context.MODE_PRIVATE)
             val title = prefs.getString("title", null)?.ifEmpty { null } ?: context.getString(R.string.widget_no_track)
             val artist = prefs.getString("artist", null)?.ifEmpty { null } ?: context.getString(R.string.widget_ready_to_play)
-            val coverUri = prefs.getString("cover_uri", null)
             val isPlaying = prefs.getBoolean("is_playing", false)
             val isStarred = prefs.getBoolean("is_starred", false)
-            val isShuffleActive = prefs.getBoolean("is_shuffle_active", false)
-            val theme = prefs.getString("widget_theme", "dynamic") ?: "dynamic"
-            val isOled = theme == "oled"
+            val isLoading = prefs.getBoolean("is_loading", false)
             val recentItemsJson = prefs.getString("recent_items", "[]") ?: "[]"
 
-            // Set Text
+            // Text
             views.setTextViewText(R.id.widget_title, title)
             views.setTextViewText(R.id.widget_artist, artist)
 
-            // Set Play/Pause icon
-            views.setImageViewResource(
-                R.id.btn_play_pause,
-                if (isPlaying) R.drawable.ic_widget_pause else R.drawable.ic_widget_play
-            )
+            // Play/Pause / Loading spinner
+            if (isLoading) {
+                views.setViewVisibility(R.id.btn_play_pause, View.GONE)
+                views.setViewVisibility(R.id.widget_loading_spinner, View.VISIBLE)
+            } else {
+                views.setViewVisibility(R.id.widget_loading_spinner, View.GONE)
+                views.setViewVisibility(R.id.btn_play_pause, View.VISIBLE)
+                views.setImageViewResource(
+                    R.id.btn_play_pause,
+                    if (isPlaying) R.drawable.ic_widget_pause else R.drawable.ic_widget_play
+                )
+            }
 
-            // Set Star icon
+            // Star icon
             views.setImageViewResource(
                 R.id.btn_star,
                 if (isStarred) R.drawable.ic_widget_heart_filled else R.drawable.ic_widget_heart
             )
 
-            // Set Shuffle icon tint / resource
+            // Shuffle icon
             views.setImageViewResource(R.id.btn_shuffle, R.drawable.ic_widget_shuffle)
 
-            // Tap on Track Info / Cover -> open full player
+            // Tap on Track Info / Cover -> open full player in app
             val openPlayerIntent = Intent(Intent.ACTION_VIEW, Uri.parse("resubstreamer://player")).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
@@ -127,9 +191,13 @@ class MusicWidgetProvider : AppWidgetProvider() {
             views.setOnClickPendingIntent(R.id.layout_track_info, openPlayerPendingIntent)
             views.setOnClickPendingIntent(R.id.widget_cover, openPlayerPendingIntent)
 
-            // Transport PendingIntents
+            // PendingIntents for Controls
             views.setOnClickPendingIntent(
                 R.id.btn_play_pause,
+                createBroadcastIntent(context, MusicWidgetActionReceiver.ACTION_PLAY_PAUSE, 101)
+            )
+            views.setOnClickPendingIntent(
+                R.id.container_play_pause,
                 createBroadcastIntent(context, MusicWidgetActionReceiver.ACTION_PLAY_PAUSE, 101)
             )
             views.setOnClickPendingIntent(
@@ -149,43 +217,15 @@ class MusicWidgetProvider : AppWidgetProvider() {
                 createBroadcastIntent(context, MusicWidgetActionReceiver.ACTION_SHUFFLE, 105)
             )
 
-            // Expanded specific views
+            // Populate Recents if expanded
             if (isExpanded) {
-                views.setOnClickPendingIntent(
-                    R.id.btn_quick_shuffle,
-                    createBroadcastIntent(context, MusicWidgetActionReceiver.ACTION_SHUFFLE, 106)
-                )
-
                 populateRecentCards(context, views, recentItemsJson)
             }
 
-            // Check cached cover data
-            val cachedData = if (!coverUri.isNullOrEmpty()) coverCache.get(coverUri) else null
-            if (cachedData != null) {
-                applyCoverAndTheme(context, views, cachedData, isOled, isExpanded)
-                appWidgetManager.updateAppWidget(appWidgetId, views)
-            } else {
-                // Apply fallback theme immediately for zero UI stall
-                val defaultDominant = if (isOled) Color.BLACK else Color.parseColor("#181818")
-                val defaultVibrant = Color.parseColor("#1DB954")
-                val fallbackData = CoverColorData(null, null, defaultDominant, defaultVibrant)
-                applyCoverAndTheme(context, views, fallbackData, isOled, isExpanded)
-                appWidgetManager.updateAppWidget(appWidgetId, views)
+            // Apply artwork & theme colors
+            applyCoverAndTheme(context, views, data, isOled, isExpanded)
 
-                // Load cover asynchronously in IO coroutine
-                if (!coverUri.isNullOrEmpty()) {
-                    coroutineScope.launch {
-                        val loadedData = loadCoverAndExtractColors(context, coverUri)
-                        if (loadedData != null) {
-                            coverCache.put(coverUri, loadedData)
-                            withContext(Dispatchers.Main) {
-                                applyCoverAndTheme(context, views, loadedData, isOled, isExpanded)
-                                appWidgetManager.updateAppWidget(appWidgetId, views)
-                            }
-                        }
-                    }
-                }
-            }
+            return views
         }
 
         private fun createBroadcastIntent(context: Context, action: String, requestCode: Int): PendingIntent {
@@ -285,18 +325,18 @@ class MusicWidgetProvider : AppWidgetProvider() {
             }
 
             // 2. Play button circle background
-            val playBgBmp = createColoredCircleBitmap(40f, data.vibrantColor, context)
+            val playBgBmp = createColoredCircleBitmap(38f, data.vibrantColor, context)
             views.setImageViewBitmap(R.id.btn_play_bg, playBgBmp)
 
             // 3. Widget Background Bitmap
             val density = context.resources.displayMetrics.density
             val widthPx = (320 * density).toInt()
-            val heightPx = if (isExpanded) (180 * density).toInt() else (76 * density).toInt()
+            val heightPx = if (isExpanded) (125 * density).toInt() else (70 * density).toInt()
 
             val bgBitmap = createWidgetBackgroundBitmap(
                 widthPx = widthPx,
                 heightPx = heightPx,
-                cornerRadiusDp = 22f,
+                cornerRadiusDp = 20f,
                 context = context,
                 isOled = isOled,
                 dominantColor = data.dominantColor
@@ -308,6 +348,16 @@ class MusicWidgetProvider : AppWidgetProvider() {
             return withContext(Dispatchers.IO) {
                 try {
                     val rawBitmap = when {
+                        coverUri.startsWith("content://") -> {
+                            try {
+                                context.contentResolver.openInputStream(Uri.parse(coverUri))?.use {
+                                    BitmapFactory.decodeStream(it)
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed reading content URI $coverUri: ${e.message}")
+                                null
+                            }
+                        }
                         coverUri.startsWith("file://") -> {
                             val path = Uri.parse(coverUri).path
                             if (path != null && File(path).exists()) BitmapFactory.decodeFile(path) else null
@@ -331,7 +381,7 @@ class MusicWidgetProvider : AppWidgetProvider() {
                         ?: palette.darkMutedSwatch?.rgb
                         ?: Color.parseColor("#181818")
 
-                    val rounded = getRoundedCornerBitmap(rawBitmap, 12f, context)
+                    val rounded = getRoundedCornerBitmap(rawBitmap, 10f, context)
                     val circular = getCircularBitmap(rawBitmap)
 
                     CoverColorData(
@@ -419,28 +469,45 @@ class MusicWidgetProvider : AppWidgetProvider() {
             val canvas = Canvas(output)
             val rect = RectF(0f, 0f, widthPx.toFloat(), heightPx.toFloat())
 
-            val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.FILL
-                if (isOled) {
-                    color = Color.BLACK
-                } else {
-                    val darkColor = ColorUtils.blendARGB(dominantColor, Color.BLACK, 0.72f)
-                    val deeperDarkColor = ColorUtils.blendARGB(darkColor, Color.BLACK, 0.45f)
-                    shader = LinearGradient(0f, 0f, 0f, heightPx.toFloat(), darkColor, deeperDarkColor, Shader.TileMode.CLAMP)
-                }
-            }
-            canvas.drawRoundRect(rect, radiusPx, radiusPx, fillPaint)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+            if (isOled) {
+                // Pure OLED Black
+                paint.color = Color.BLACK
+                canvas.drawRoundRect(rect, radiusPx, radiusPx, paint)
 
-            // Subtle border
-            val strokeWidthPx = 1.2f * density
-            val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.STROKE
-                strokeWidth = strokeWidthPx
-                color = if (isOled) Color.parseColor("#222222") else Color.parseColor("#28FFFFFF")
+                // Thin border
+                val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.parseColor("#222222")
+                    style = Paint.Style.STROKE
+                    strokeWidth = 1.5f * density
+                }
+                val inset = 0.75f * density
+                val strokeRect = RectF(inset, inset, widthPx.toFloat() - inset, heightPx.toFloat() - inset)
+                canvas.drawRoundRect(strokeRect, radiusPx - inset, radiusPx - inset, strokePaint)
+            } else {
+                // Spotify style dynamic tinted gradient
+                val darkenedDominant = ColorUtils.blendARGB(dominantColor, Color.BLACK, 0.72f)
+                val baseDark = Color.parseColor("#121212")
+
+                val shader = LinearGradient(
+                    0f, 0f, 0f, heightPx.toFloat(),
+                    intArrayOf(darkenedDominant, baseDark),
+                    floatArrayOf(0f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+                paint.shader = shader
+                canvas.drawRoundRect(rect, radiusPx, radiusPx, paint)
+
+                // Subtle top highlight border
+                val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = ColorUtils.setAlphaComponent(Color.WHITE, 25)
+                    style = Paint.Style.STROKE
+                    strokeWidth = 1f * density
+                }
+                val inset = 0.5f * density
+                val strokeRect = RectF(inset, inset, widthPx.toFloat() - inset, heightPx.toFloat() - inset)
+                canvas.drawRoundRect(strokeRect, radiusPx - inset, radiusPx - inset, strokePaint)
             }
-            val inset = strokeWidthPx / 2f
-            val strokeRect = RectF(inset, inset, widthPx - inset, heightPx - inset)
-            canvas.drawRoundRect(strokeRect, radiusPx, radiusPx, strokePaint)
 
             return output
         }

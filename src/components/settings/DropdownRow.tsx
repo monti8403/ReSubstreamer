@@ -58,9 +58,13 @@ export function DropdownRow<T extends string | number | null>({
       >
         {label != null ? (
           <>
-            <Text style={[styles.label, { color: colors.textPrimary }]}>{label}</Text>
+            <Text style={[styles.label, { color: colors.textPrimary, flexShrink: 0 }]}>{label}</Text>
             <View style={styles.right}>
-              <Text style={[styles.label, { color: colors.textSecondary }]} numberOfLines={1}>
+              <Text
+                style={[styles.label, styles.rightLabel, { color: colors.textSecondary }]}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
                 {currentLabel}
               </Text>
               <Ionicons
@@ -126,9 +130,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   right: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'flex-end',
     gap: 8,
+    marginStart: 12,
+  },
+  rightLabel: {
+    flexShrink: 1,
+    textAlign: 'right',
   },
   optionList: {
     borderTopWidth: StyleSheet.hairlineWidth,

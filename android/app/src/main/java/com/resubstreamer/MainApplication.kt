@@ -36,6 +36,7 @@ class MainApplication : Application(), ReactApplication {
     }
     loadReactNative(this)
     ApplicationLifecycleDispatcher.onApplicationCreate(this)
+    com.resubstreamer.widget.MusicWidgetMediaManager.initialize(this)
   }
 
   override fun onConfigurationChanged(newConfig: Configuration) {

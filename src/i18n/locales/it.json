@@ -1040,11 +1040,11 @@
   "widgetHomeScreen": "Widget Home Screen",
   "widgetSettingsHint": "Personalizza l'aspetto e l'azione del tasto Shuffle per il widget musicale Android.",
   "widgetThemeLabel": "Stile Sfondo Widget",
-  "widgetThemeDynamic": "Dinamico (Stile Spotify)",
+  "widgetThemeDynamic": "Dinamico",
   "widgetThemeOled": "Nero Assoluto (OLED)",
-  "widgetShuffleModeLabel": "Azione Tasto Shuffle",
-  "widgetShuffleModeToggleQueue": "Coda Attuale (Mix casuale se vuota)",
-  "widgetShuffleModeAllSongs": "Tutta la Libreria",
-  "widgetShuffleModeStarred": "Brani Preferiti (♥)",
-  "widgetShuffleModeDownloaded": "Brani Scaricati (Offline)"
+  "widgetShuffleModeLabel": "Azione Shuffle",
+  "widgetShuffleModeToggleQueue": "Coda attuale",
+  "widgetShuffleModeAllSongs": "Tutta la libreria",
+  "widgetShuffleModeStarred": "Preferiti",
+  "widgetShuffleModeDownloaded": "Scaricati"
 }

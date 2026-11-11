@@ -16,3 +16,4 @@ class MusicWidgetPackage : ReactPackage {
         return emptyList()
     }
 }
+
