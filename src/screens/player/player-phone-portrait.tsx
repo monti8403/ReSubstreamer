@@ -234,29 +234,8 @@ export function PlayerPhonePortrait() {
       });
   }, [windowHeight, ensureQueueMounted, queueTranslateY, queueOpacity, onClose, isTransitioningQueue]);
 
-  const isQueueAtTop = useSharedValue(true);
-  const scrollY = useSharedValue(0);
   const isDraggingQueueItem = useSharedValue(false);
   const isTrackingSheetDismiss = useSharedValue(false);
-  const isDismissingQueue = useSharedValue(false);
-
-  const handleQueueScroll = useAnimatedScrollHandler({
-    onScroll: (event) => {
-      'worklet';
-      scrollY.value = Math.max(0, event.contentOffset.y);
-      isQueueAtTop.value = event.contentOffset.y <= 15;
-    },
-    onBeginDrag: (event) => {
-      'worklet';
-      scrollY.value = Math.max(0, event.contentOffset.y);
-      isQueueAtTop.value = event.contentOffset.y <= 15;
-    },
-    onMomentumEnd: (event) => {
-      'worklet';
-      scrollY.value = Math.max(0, event.contentOffset.y);
-      isQueueAtTop.value = event.contentOffset.y <= 15;
-    },
-  });
 
   const handleDragStart = useCallback(() => {
     'worklet';
@@ -342,86 +321,6 @@ export function PlayerPhonePortrait() {
       });
   }, [isDraggingQueueItem, isTransitioningQueue, ensurePlayerMounted, queueTranslateY, queueOpacity, windowHeight, isTrackingSheetDismiss, handleGestureRelease]);
 
-  // List Pan Gesture: handles pull-to-dismiss at the top of the queue without canceling native scroll
-  const listPanGesture = useMemo(() => {
-    return Gesture.Pan()
-      .activeOffsetY(6)
-      .cancelsTouchesInView(false)
-      .onStart(() => {
-        'worklet';
-        isDismissingQueue.value = false;
-        isTrackingSheetDismiss.value = false;
-      })
-      .onChange((event) => {
-        'worklet';
-        if (isDraggingQueueItem.value || isTransitioningQueue.value) return;
-
-        // If sheet is already in motion downwards
-        if (queueTranslateY.value > 0) {
-          const next = Math.max(0, queueTranslateY.value + event.changeY);
-          queueTranslateY.value = next;
-          queueOpacity.value = interpolate(
-            next,
-            [0, windowHeight],
-            [1, 0.35],
-          );
-          return;
-        }
-
-        // At the top of the queue: initiate dismiss on intentional downward motion
-        if (scrollY.value <= 15) {
-          const absX = Math.abs(event.translationX);
-          const translationY = event.translationY;
-
-          // Downward motion biased over horizontal drift
-          if (!isDismissingQueue.value) {
-            if (translationY > 6 && translationY > absX * 0.6) {
-              isDismissingQueue.value = true;
-              queueTranslateY.value = Math.max(0, translationY);
-              queueOpacity.value = interpolate(
-                queueTranslateY.value,
-                [0, windowHeight],
-                [1, 0.35],
-              );
-              if (!isTrackingSheetDismiss.value) {
-                isTrackingSheetDismiss.value = true;
-                runOnJS(ensurePlayerMounted)();
-              }
-            }
-          } else if (event.changeY > 0) {
-            const next = Math.max(0, queueTranslateY.value + event.changeY);
-            queueTranslateY.value = next;
-            queueOpacity.value = interpolate(
-              next,
-              [0, windowHeight],
-              [1, 0.35],
-            );
-          }
-        }
-      })
-      .onEnd((event) => {
-        'worklet';
-        if (isDraggingQueueItem.value || isTransitioningQueue.value) return;
-        isDismissingQueue.value = false;
-        handleGestureRelease(event.velocityY);
-      })
-      .onFinalize(() => {
-        'worklet';
-        isDismissingQueue.value = false;
-      });
-  }, [
-    isDraggingQueueItem,
-    isTransitioningQueue,
-    isDismissingQueue,
-    scrollY,
-    queueTranslateY,
-    isTrackingSheetDismiss,
-    ensurePlayerMounted,
-    queueOpacity,
-    windowHeight,
-    handleGestureRelease,
-  ]);
-
   // Android hardware back button handler: if queue is open, close queue and return to player
   useEffect(() => {
     if (activeTab !== 'queue') return;
@@ -445,9 +344,6 @@ export function PlayerPhonePortrait() {
 
     if (activeTab === 'queue') {
       isTransitioningQueue.value = false;
-      scrollY.value = 0;
-      isQueueAtTop.value = true;
-      isDismissingQueue.value = false;
       isTrackingSheetDismiss.value = false;
       queueTranslateY.value = withSpring(0, {
         damping: 28,
@@ -576,25 +472,12 @@ export function PlayerPhonePortrait() {
 
   const onQueueItemPressWithScroll = useCallback(
     (targetAbsoluteIndex: number) => {
-      if (queueTranslateY.value > 5 || isDismissingQueue.value || isTrackingSheetDismiss.value) {
-        return;
-      }
       if (targetAbsoluteIndex !== currentTrackIndex) {
         pendingScrollToTopOnSelectRef.current = true;
       }
       handleQueueItemPress(targetAbsoluteIndex);
     },
-    [currentTrackIndex, handleQueueItemPress, queueTranslateY, isDismissingQueue, isTrackingSheetDismiss],
-  );
-
-  const handleQueueItemLongPressWithGuard = useCallback(
-    (track: Child) => {
-      if (queueTranslateY.value > 5 || isDismissingQueue.value || isTrackingSheetDismiss.value) {
-        return;
-      }
-      handleQueueItemLongPress(track);
-    },
-    [handleQueueItemLongPress, queueTranslateY, isDismissingQueue, isTrackingSheetDismiss],
+    [currentTrackIndex, handleQueueItemPress],
   );
 
   const renderQueueItem = useCallback(
@@ -624,7 +507,7 @@ export function PlayerPhonePortrait() {
           isActive={item.isNowPlaying}
           colors={queueColors}
           onPress={onQueueItemPressWithScroll}
-          onLongPress={handleQueueItemLongPressWithGuard}
+          onLongPress={handleQueueItemLongPress}
         />
       );
     },
@@ -633,7 +516,7 @@ export function PlayerPhonePortrait() {
       queueColors,
       handleClearUserQueue,
       onQueueItemPressWithScroll,
-      handleQueueItemLongPressWithGuard,
+      handleQueueItemLongPress,
       t,
     ],
   );
@@ -693,7 +576,7 @@ export function PlayerPhonePortrait() {
             isActive={true}
             colors={queueColors}
             onPress={onQueueItemPressWithScroll}
-            onLongPress={handleQueueItemLongPressWithGuard}
+            onLongPress={handleQueueItemLongPress}
           />
         </View>
       ) : null,
@@ -704,7 +587,7 @@ export function PlayerPhonePortrait() {
       currentTrackIndex,
       queueColors,
       onQueueItemPressWithScroll,
-      handleQueueItemLongPressWithGuard,
+      handleQueueItemLongPress,
     ],
   );
 
@@ -809,32 +692,29 @@ export function PlayerPhonePortrait() {
                   queueLength={visibleQueue.length}
                   swipeDownGesture={headerPanGesture}
                 />
-                <GestureDetector gesture={listPanGesture}>
-                  <ReorderableList
-                    ref={listRef}
-                    data={reorderableListItems}
-                    renderItem={renderQueueItem}
-                    keyExtractor={keyExtractor}
-                    getItemLayout={getItemLayout}
-                    onReorder={handleReorderQueue}
-                    onDragStart={handleDragStart}
-                    onDragEnd={handleDragEnd}
-                    animationDuration={150}
-                    autoscrollThreshold={0.08}
-                    autoscrollDelay={Platform.OS === 'android' ? 50 : 100}
-                    ListHeaderComponent={nowPlayingHeader}
-                    onScroll={handleQueueScroll}
-                    onScrollBeginDrag={closeOpenRow}
-                    showsVerticalScrollIndicator={false}
-                    contentContainerStyle={QUEUE_CONTENT_CONTAINER_STYLE}
-                    windowSize={15}
-                    maxToRenderPerBatch={15}
-                    initialNumToRender={16}
-                    updateCellsBatchingPeriod={40}
-                    bounces={false}
-                    overScrollMode="never"
-                  />
-                </GestureDetector>
+                <ReorderableList
+                  ref={listRef}
+                  data={reorderableListItems}
+                  renderItem={renderQueueItem}
+                  keyExtractor={keyExtractor}
+                  getItemLayout={getItemLayout}
+                  onReorder={handleReorderQueue}
+                  onDragStart={handleDragStart}
+                  onDragEnd={handleDragEnd}
+                  animationDuration={150}
+                  autoscrollThreshold={0.08}
+                  autoscrollDelay={Platform.OS === 'android' ? 50 : 100}
+                  ListHeaderComponent={nowPlayingHeader}
+                  onScrollBeginDrag={closeOpenRow}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={QUEUE_CONTENT_CONTAINER_STYLE}
+                  windowSize={15}
+                  maxToRenderPerBatch={15}
+                  initialNumToRender={16}
+                  updateCellsBatchingPeriod={40}
+                  bounces={false}
+                  overScrollMode="never"
+                />
               </View>
             )}
           </Animated.View>
@@ -1721,14 +1601,14 @@ const styles = StyleSheet.create({
   dragHandleContainer: {
     width: '100%',
     alignItems: 'center',
-    paddingTop: 8,
-    paddingBottom: 6,
+    paddingTop: 12,
+    paddingBottom: 10,
   },
   dragHandlePill: {
-    width: 38,
-    height: 4,
-    borderRadius: 2,
-    opacity: 0.35,
+    width: 44,
+    height: 5,
+    borderRadius: 2.5,
+    opacity: 0.45,
   },
   heroImage: {
     width: '100%',

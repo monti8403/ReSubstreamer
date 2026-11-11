@@ -132,7 +132,6 @@ export const QueueItemRow = memo(function QueueItemRow({
       enableFullSwipeRight={!isActive && !isInUserQueue}
       enableFullSwipeLeft={!isActive}
       restingBackgroundColor="transparent"
-      dragOffset={36}
       onPress={handlePress}
       onLongPress={onLongPress ? handleLongPress : undefined}
     >

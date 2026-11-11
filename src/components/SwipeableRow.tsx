@@ -369,7 +369,7 @@ export const SwipeableRow = memo(function SwipeableRow({
     [borderRadius],
   );
 
-  const effectiveDragOffset = dragOffset ?? 20;
+  const effectiveDragOffset = dragOffset ?? 6;
 
   return (
     <ReanimatedSwipeable
