@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next';
 
 import { useTheme } from '../../hooks/useTheme';
 import { devOptionsStore } from '../../store/devOptionsStore';
-import { processingOverlayStore } from '../../store/processingOverlayStore';
 import { notificationAsync, selectionAsync } from '../../utils/haptics';
 
 const APP_VERSION = Constants.expoConfig?.version ?? '?';
@@ -56,7 +55,6 @@ export function VersionFooter() {
       setCountdownText(null);
       devOptionsStore.getState().enable();
       notificationAsync();
-      processingOverlayStore.getState().showSuccess(t('developerOptionsActivated'));
     } else if (count >= 2) {
       selectionAsync();
       setCountdownText(t('devOptionsTapCountdown', { count: remaining }));

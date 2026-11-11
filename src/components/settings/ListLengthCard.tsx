@@ -39,12 +39,10 @@ export function ListLengthCard() {
         Alert.alert(t('offlineListLengthTitle'), t('offlineListLengthMessage'));
         return;
       }
-      processingOverlayStore.getState().show(t('updatingCachedLists'));
       try {
         // Artist top songs are NOT bulk-refreshed: the stored `list_length` no longer
         // matches, so each artist re-fetches on next open, for artists actually visited.
         await albumListsStore.getState().refreshAll();
-        processingOverlayStore.getState().showSuccess(t('cachedListsUpdated'));
       } catch {
         processingOverlayStore.getState().showError(t('cachedListsUpdateFailed'));
       }

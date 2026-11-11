@@ -68,29 +68,11 @@ export function ImageCacheCard() {
   const handleImageScan = useCallback(async () => {
     if (imageScanning) return;
     setImageScanning(true);
-    processingOverlayStore.getState().show(t('repairingImages'));
-    const minShown = minDelay(1500);
     try {
-      const outcome = await scanImageCache('settings');
-      if (outcome.repaired === 0 && outcome.removed === 0 && outcome.failed === 0) {
-        processingOverlayStore.getState().showSuccess(t('imageRepairNothingToDo'));
-      } else if (outcome.failed > 0) {
-        processingOverlayStore.getState().showSuccess(
-          t('imageRepairCompleteWithFailures', {
-            repaired: outcome.repaired,
-            removed: outcome.removed,
-            failed: outcome.failed,
-          }),
-        );
-      } else {
-        processingOverlayStore.getState().showSuccess(
-          t('imageRepairComplete', { repaired: outcome.repaired, removed: outcome.removed }),
-        );
-      }
+      await scanImageCache('settings');
     } catch {
       processingOverlayStore.getState().showError(t('imageRepairFailed'));
     } finally {
-      await minShown;
       setImageScanning(false);
     }
   }, [imageScanning, t]);

@@ -389,7 +389,6 @@ export function PlaylistDetailScreen() {
     }
 
     setSaving(true);
-    processingOverlayStore.getState().show(t('saving'));
     try {
       // 1. Track order/membership (full replace). Stay in edit mode on failure.
       if (tracksChanged) {
@@ -444,9 +443,7 @@ export function PlaylistDetailScreen() {
 
       setEditing(false);
       setEditedTracks([]);
-      if (detailsOk) {
-        processingOverlayStore.getState().showSuccess(t('playlistSaved'));
-      } else {
+      if (!detailsOk) {
         // Tracks were replaced but the property write failed.
         processingOverlayStore.getState().showError(t('playlistTracksSavedPropsFailed'));
       }

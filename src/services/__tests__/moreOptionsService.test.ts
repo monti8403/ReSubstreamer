@@ -563,7 +563,6 @@ describe('playSimilarArtistsMix', () => {
 
     expect(mockGetSimilarSongs2).toHaveBeenCalledWith('ar1', 20);
     expect(mockPlayTrack).toHaveBeenCalledWith(tracks[0], tracks);
-    expect(mockOverlayShowSuccess).toHaveBeenCalledWith('Playing similar artists mix');
   });
 
   it('shows error when no similar artists mix available', async () => {
@@ -593,9 +592,7 @@ describe('saveArtistTopSongsPlaylist', () => {
 
     await saveArtistTopSongsPlaylist(artist);
 
-    expect(mockOverlayShow).toHaveBeenCalledWith('Creating…');
     expect(mockCreateNewPlaylist).toHaveBeenCalledWith('Test Artist Top Songs', ['s1', 's2']);
-    expect(mockOverlayShowSuccess).toHaveBeenCalledWith('Playlist Created');
   });
 
   it('creates the playlist from a fetcher that had to go to the server', async () => {
@@ -607,7 +604,6 @@ describe('saveArtistTopSongsPlaylist', () => {
     await saveArtistTopSongsPlaylist(artist);
 
     expect(mockCreateNewPlaylist).toHaveBeenCalledWith('Test Artist Top Songs', ['s1']);
-    expect(mockOverlayShowSuccess).toHaveBeenCalledWith('Playlist Created');
   });
 
   it('shows error when no top songs are available', async () => {
@@ -657,12 +653,10 @@ describe('playMoreByArtist', () => {
 
       await playMoreByArtist('ar1', 'Artist A');
 
-      expect(mockOverlayShow).toHaveBeenCalledWith('Loading…');
       expect(mockPlayTrack).toHaveBeenCalled();
       const [firstTrack, queue] = mockPlayTrack.mock.calls[0];
       expect(queue.length).toBe(5);
       expect(queue).toContain(firstTrack);
-      expect(mockOverlayShowSuccess).toHaveBeenCalledWith(`Playing Artist A mix`);
     });
 
     it('fetches artist when not cached', async () => {
@@ -804,7 +798,6 @@ describe('playMoreByArtist', () => {
       expect(song.coverArt).toBe('cov1');
       expect(song.isDir).toBe(false);
       expect(queue).toContain(firstTrack);
-      expect(mockOverlayShowSuccess).toHaveBeenCalledWith(`Playing Artist A mix`);
     });
 
     it('shows error when no offline songs match', async () => {
@@ -941,7 +934,6 @@ describe('playAllByArtist', () => {
       const [firstTrack, queue] = mockPlayTrack.mock.calls[0];
       expect(queue.map((s: any) => s.id)).toEqual(['s2', 's3', 's1', 's4']);
       expect(firstTrack.id).toBe('s2');
-      expect(mockOverlayShowSuccess).toHaveBeenCalledWith('Playing all songs by A');
     });
 
     it('does not cap queue length', async () => {
@@ -955,6 +947,28 @@ describe('playAllByArtist', () => {
 
       const [, queue] = mockPlayTrack.mock.calls[0];
       expect(queue.length).toBe(50);
+    });
+
+    it('implements Play-First, Fetch-Later when initialTracks are provided', async () => {
+      const initial = [{ id: 'init1', artist: 'A', artistId: 'ar1', year: 2021, track: 1 }];
+      const fullCatalog = [
+        { id: 'init1', artist: 'A', artistId: 'ar1', year: 2021, track: 1 },
+        { id: 'rem1', artist: 'A', artistId: 'ar1', year: 2022, track: 1 },
+      ];
+      mockArtistParts = { albums: [{ id: 'alb1' }] };
+      mockAlbumDetails = { alb1: { album: { song: fullCatalog } } };
+
+      playerStore.setState({ currentTrack: initial[0] as any, queue: initial as any });
+
+      await playAllByArtist('ar1', 'A', false, initial as any);
+
+      // 1. Immediately started playback with initial track
+      expect(mockPlayTrack).toHaveBeenCalledWith(initial[0], initial);
+
+      // 2. Background fetch fetched all songs and enqueued remaining without duplicate
+      expect(mockAddToQueue).toHaveBeenCalled();
+      const added = mockAddToQueue.mock.calls[0][0];
+      expect(added.map((t: any) => t.id)).toEqual(['rem1']);
     });
 
     it('plays even with fewer than 5 songs (no min check)', async () => {
@@ -1009,7 +1023,6 @@ describe('playAllByArtist', () => {
       const [firstTrack, queue] = mockPlayTrack.mock.calls[0];
       expect(queue.length).toBe(10);
       expect(queue).toContain(firstTrack);
-      expect(mockOverlayShowSuccess).toHaveBeenCalledWith('Shuffling all songs by A');
     });
   });
 
@@ -1059,20 +1072,18 @@ describe('handleDownloadSong', () => {
     await handleDownloadSong(undefined as any);
     await handleDownloadSong({} as any);
     expect(mockEnqueue).not.toHaveBeenCalled();
-    expect(mockOverlayShowSuccess).not.toHaveBeenCalled();
   });
 
-  it('enqueues and shows success toast on happy path', async () => {
+  it('enqueues without blocking on happy path', async () => {
     const song = { id: 's1', title: 'Cool Song', artist: 'A' } as any;
     await handleDownloadSong(song);
     expect(mockEnqueue).toHaveBeenCalledWith(song);
-    expect(mockOverlayShowSuccess).toHaveBeenCalledWith('Downloading "Cool Song"');
   });
 
   it('falls back to unknownSong when title is missing', async () => {
     const song = { id: 's1' } as any;
     await handleDownloadSong(song);
-    expect(mockOverlayShowSuccess).toHaveBeenCalledWith('Downloading "Unknown Song"');
+    expect(mockEnqueue).toHaveBeenCalledWith(song);
   });
 
   it('shows error overlay when enqueue throws', async () => {
@@ -1083,12 +1094,9 @@ describe('handleDownloadSong', () => {
   });
 
   it('still fires enqueue when song is already cached (service short-circuits)', async () => {
-    // The service layer handles the already-cached short-circuit. From the
-    // more-options perspective we still call through and show a toast.
     const song = { id: 'cached', title: 'Cached' } as any;
     await handleDownloadSong(song);
     expect(mockEnqueue).toHaveBeenCalledWith(song);
-    expect(mockOverlayShowSuccess).toHaveBeenCalled();
   });
 });
 
@@ -1109,19 +1117,11 @@ describe('handleRemoveSongDownload', () => {
     expect(mockRemoveAlbumSong).not.toHaveBeenCalled();
   });
 
-  it('deletes the song: item and shows a success toast', async () => {
+  it('deletes the song: item on happy path', async () => {
     withCachedItems('song:s1');
     const song = { id: 's1', title: 'Cool Song' } as any;
     await handleRemoveSongDownload(song);
     expect(mockDelete).toHaveBeenCalledWith('song:s1');
-    expect(mockOverlayShowSuccess).toHaveBeenCalledWith('Removed "Cool Song"');
-  });
-
-  it('falls back to unknownSong when title is missing', async () => {
-    withCachedItems('song:s1');
-    const song = { id: 's1' } as any;
-    await handleRemoveSongDownload(song);
-    expect(mockOverlayShowSuccess).toHaveBeenCalledWith('Removed "Unknown Song"');
   });
 
   it('removes the song from its parent album (reverts album to partial)', async () => {
@@ -1131,7 +1131,6 @@ describe('handleRemoveSongDownload', () => {
     await handleRemoveSongDownload(song);
     expect(mockDelete).not.toHaveBeenCalled();
     expect(mockRemoveAlbumSong).toHaveBeenCalledWith('alb1', 's1');
-    expect(mockOverlayShowSuccess).toHaveBeenCalledWith('Removed "Cool Song"');
   });
 
   it('shows error overlay when nothing was removed', async () => {

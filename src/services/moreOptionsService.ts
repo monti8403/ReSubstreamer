@@ -13,7 +13,7 @@ import { offlineModeStore } from '../store/offlineModeStore';
 import { layoutPreferencesStore } from '../store/layoutPreferencesStore';
 import { refreshPlaylistLibrary } from './normalizedLibrarySync';
 import { getDb } from '../store/persistence/db';
-import { getAlbumDetail, getPlaylistDetail } from '../db/repository/details';
+import { getAlbumDetail, getArtistTopSongsRow, getPlaylistDetail } from '../db/repository/details';
 import { processingOverlayStore } from '../store/processingOverlayStore';
 import { playerStore } from '../store/playerStore';
 import { shuffleArray } from '../utils/arrayHelpers';
@@ -396,13 +396,20 @@ export async function playMoreLikeThis(
 /*  Play mix of similar artists                                        */
 /* ------------------------------------------------------------------ */
 
+function sortArtistSongsChronologically(songs: Child[]): Child[] {
+  return [...songs].sort((a, b) => {
+    const yearDiff = (a.year ?? 0) - (b.year ?? 0);
+    if (yearDiff !== 0) return yearDiff;
+    const discDiff = (a.discNumber ?? 1) - (b.discNumber ?? 1);
+    if (discDiff !== 0) return discDiff;
+    return (a.track ?? 0) - (b.track ?? 0);
+  });
+}
+
 /**
  * Fetch similar songs for a given artist (mix of similar artists) and set them as the play queue.
- * Uses processing overlay for progress, success, and error feedback.
  */
 export async function playSimilarArtistsMix(artist: ArtistID3): Promise<void> {
-  processingOverlayStore.getState().show(i18n.t('loading'));
-
   try {
     const tracks = await getSimilarSongs2(artist.id, layoutPreferencesStore.getState().listLength);
     if (tracks.length === 0) {
@@ -411,7 +418,6 @@ export async function playSimilarArtistsMix(artist: ArtistID3): Promise<void> {
     }
 
     await playTrack(tracks[0], tracks);
-    processingOverlayStore.getState().showSuccess(i18n.t('playingSimilarArtistsMix'));
   } catch {
     processingOverlayStore.getState().showError(i18n.t('failedToLoadSimilarArtistsMix'));
   }
@@ -424,11 +430,9 @@ export async function playSimilarArtistsMix(artist: ArtistID3): Promise<void> {
 /**
  * Create a new playlist from an artist's top songs.
  * Uses cached data when available, otherwise fetches artist detail.
- * Shows processing overlay for feedback; refreshes playlist library on success.
+ * Refreshes playlist library on success.
  */
 export async function saveArtistTopSongsPlaylist(artist: ArtistID3): Promise<void> {
-  processingOverlayStore.getState().show(i18n.t('creating'));
-
   try {
     // Local-first inside the fetcher: this only hits the server on a genuine miss.
     const topSongs = (await fetchArtistTopSongs(artist.id))?.songs ?? [];
@@ -446,7 +450,6 @@ export async function saveArtistTopSongsPlaylist(artist: ArtistID3): Promise<voi
     }
 
     await refreshPlaylistLibrary();
-    processingOverlayStore.getState().showSuccess(i18n.t('playlistCreated'));
   } catch {
     processingOverlayStore.getState().showError(i18n.t('failedToCreatePlaylist'));
   }
@@ -462,18 +465,12 @@ const MORE_BY_ARTIST_MIN = 5;
  * Fetch all songs by an artist across all albums.
  * Online: walks every album in the artist detail, fetches songs, filters by artist.
  * Offline: scans cached music items for matching tracks.
- * Returns `null` with an error overlay if no songs are found.
+ * Returns `null` with an error toast if no songs are found.
  */
 async function fetchAllArtistSongs(
   artistId: string,
   artistName: string,
 ): Promise<Child[] | null> {
-  // Both callers show the processing overlay then immediately await this function,
-  // so yield one tick to let that overlay frame paint: the flatMap/filter below
-  // blocks the JS thread on a prolific artist's discography. setTimeout, not rAF —
-  // rAF can stall on Fabric.
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
   const offline = offlineModeStore.getState().offlineMode;
 
   if (offline) {
@@ -530,9 +527,38 @@ async function fetchAllArtistSongs(
  * Build a shuffled queue of songs by a specific artist and start playback.
  * Online: fetches all albums by the artist, collects songs, shuffles.
  * Offline: scans cached music items for matching tracks.
+ * Implements "Play-First, Fetch-Later".
  */
-export async function playMoreByArtist(artistId: string, artistName: string): Promise<void> {
-  processingOverlayStore.getState().show(i18n.t('loading'));
+export async function playMoreByArtist(
+  artistId: string,
+  artistName: string,
+  initialTracks?: Child[],
+): Promise<void> {
+  const target = layoutPreferencesStore.getState().listLength;
+  let startingTracks = initialTracks && initialTracks.length > 0 ? initialTracks : [];
+
+  if (startingTracks.length === 0) {
+    const db = getDb();
+    if (db) {
+      try {
+        const topCached = (await getArtistTopSongsRow(db, artistId))?.songs;
+        if (topCached?.length) {
+          startingTracks = topCached;
+        }
+      } catch {
+        // non-critical cache miss
+      }
+    }
+  }
+
+  let playedInitialTrackId: string | null = null;
+  let playPromise: Promise<void> | null = null;
+
+  if (startingTracks.length > 0) {
+    const startQueue = shuffleArray(startingTracks).slice(0, target);
+    playedInitialTrackId = startQueue[0].id;
+    playPromise = playTrack(startQueue[0], startQueue);
+  }
 
   try {
     const songs = await fetchAllArtistSongs(artistId, artistName);
@@ -545,49 +571,111 @@ export async function playMoreByArtist(artistId: string, artistName: string): Pr
       return;
     }
 
-    const queue = shuffleArray(songs).slice(0, layoutPreferencesStore.getState().listLength);
-    await playTrack(queue[0], queue);
-    processingOverlayStore.getState().showSuccess(i18n.t('playingArtistMix', { artist: artistName }));
+    if (playPromise) {
+      await playPromise;
+      const currentTrack = playerStore.getState().currentTrack;
+      if (!currentTrack) return;
+      const belongsToArtist =
+        currentTrack.artistId === artistId ||
+        currentTrack.artist?.toLowerCase() === artistName.toLowerCase();
+      if (!belongsToArtist && currentTrack.id !== playedInitialTrackId) {
+        return;
+      }
+
+      const currentQueue = playerStore.getState().queue;
+      const existingIds = new Set(currentQueue.map((t) => t.id));
+      const remaining = songs.filter((s) => !existingIds.has(s.id));
+
+      if (remaining.length > 0 && currentQueue.length < target) {
+        const needed = target - currentQueue.length;
+        const toAdd = shuffleArray(remaining).slice(0, needed);
+        await addToQueue(toAdd);
+      }
+    } else {
+      const queue = shuffleArray(songs).slice(0, target);
+      await playTrack(queue[0], queue);
+    }
   } catch {
-    processingOverlayStore.getState().showError(i18n.t('failedToLoadArtistSongs', { artist: artistName }));
+    processingOverlayStore.getState().showError(
+      i18n.t('failedToLoadArtistSongs', { artist: artistName }),
+    );
   }
 }
 
 /**
  * Play all songs by an artist. When shuffle is false, songs are ordered
  * chronologically by album (year → disc → track). No song count cap.
+ * Implements "Play-First, Fetch-Later".
  */
 export async function playAllByArtist(
   artistId: string,
   artistName: string,
   shuffle: boolean,
+  initialTracks?: Child[],
 ): Promise<void> {
-  processingOverlayStore.getState().show(i18n.t('loading'));
+  let startingTracks = initialTracks && initialTracks.length > 0 ? initialTracks : [];
+
+  if (startingTracks.length === 0) {
+    const db = getDb();
+    if (db) {
+      try {
+        const topCached = (await getArtistTopSongsRow(db, artistId))?.songs;
+        if (topCached?.length) {
+          startingTracks = topCached;
+        }
+      } catch {
+        // non-critical cache miss
+      }
+    }
+  }
+
+  let playedInitialTrackId: string | null = null;
+  let playPromise: Promise<void> | null = null;
+
+  if (startingTracks.length > 0) {
+    const startQueue = shuffle
+      ? shuffleArray(startingTracks)
+      : sortArtistSongsChronologically(startingTracks);
+    playedInitialTrackId = startQueue[0].id;
+    playPromise = playTrack(startQueue[0], startQueue);
+  }
 
   try {
     const songs = await fetchAllArtistSongs(artistId, artistName);
-    if (!songs) return;
+    if (!songs || songs.length === 0) return;
 
-    let queue: Child[];
-    if (shuffle) {
-      queue = shuffleArray(songs);
+    if (playPromise) {
+      await playPromise;
+
+      const currentTrack = playerStore.getState().currentTrack;
+      if (!currentTrack) return;
+      const belongsToArtist =
+        currentTrack.artistId === artistId ||
+        currentTrack.artist?.toLowerCase() === artistName.toLowerCase();
+      if (!belongsToArtist && currentTrack.id !== playedInitialTrackId) {
+        return;
+      }
+
+      const currentQueue = playerStore.getState().queue;
+      const existingIds = new Set(currentQueue.map((t) => t.id));
+      const remaining = songs.filter((s) => !existingIds.has(s.id));
+
+      if (remaining.length > 0) {
+        const orderedRemaining = shuffle
+          ? shuffleArray(remaining)
+          : sortArtistSongsChronologically(remaining);
+        await addToQueue(orderedRemaining);
+      }
     } else {
-      // Sort by album year → disc → track for a natural listening order
-      queue = [...songs].sort((a, b) => {
-        const yearDiff = (a.year ?? 0) - (b.year ?? 0);
-        if (yearDiff !== 0) return yearDiff;
-        const discDiff = (a.discNumber ?? 1) - (b.discNumber ?? 1);
-        if (discDiff !== 0) return discDiff;
-        return (a.track ?? 0) - (b.track ?? 0);
-      });
+      const queue = shuffle
+        ? shuffleArray(songs)
+        : sortArtistSongsChronologically(songs);
+      await playTrack(queue[0], queue);
     }
-
-    await playTrack(queue[0], queue);
-    processingOverlayStore.getState().showSuccess(
-      i18n.t(shuffle ? 'shufflingAllSongsByArtist' : 'playingAllSongsByArtist', { artist: artistName }),
-    );
   } catch {
-    processingOverlayStore.getState().showError(i18n.t('failedToLoadArtistSongs', { artist: artistName }));
+    processingOverlayStore.getState().showError(
+      i18n.t('failedToLoadArtistSongs', { artist: artistName }),
+    );
   }
 }
 
@@ -618,9 +706,6 @@ export async function handleDownloadSong(song: Child): Promise<void> {
   if (!song?.id) return;
   try {
     await enqueueSongDownloadService(song);
-    processingOverlayStore.getState().showSuccess(
-      i18n.t('songDownloadStarted', { title: song.title ?? i18n.t('unknownSong') }),
-    );
   } catch {
     processingOverlayStore.getState().showError(i18n.t('downloadFailed'));
   }
@@ -650,11 +735,7 @@ export async function handleRemoveSongDownload(song: Child): Promise<void> {
       removed = true;
     }
 
-    if (removed) {
-      processingOverlayStore.getState().showSuccess(
-        i18n.t('songDownloadRemoved', { title: song.title ?? i18n.t('unknownSong') }),
-      );
-    } else {
+    if (!removed) {
       processingOverlayStore.getState().showError(i18n.t('failedToLoad'));
     }
   } catch {

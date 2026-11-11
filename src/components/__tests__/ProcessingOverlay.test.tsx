@@ -4,9 +4,26 @@ jest.mock('../../hooks/useTheme', () => ({
   }),
 }));
 
-// Stub Reanimated to no-ops — the fix is JS-state-driven (mount/unmount,
-// pointerEvents, retained content), so the animation internals are irrelevant
-// here and the real module drags in native worklets that don't load in jest.
+jest.mock('../../hooks/useLayoutMode', () => ({
+  useLayoutMode: () => 'phone',
+}));
+
+jest.mock('../../store/authStore', () => ({
+  authStore: (fn: any) => fn({ isLoggedIn: true }),
+}));
+
+jest.mock('../../store/playerStore', () => ({
+  playerStore: (fn: any) => fn({ currentTrack: null }),
+}));
+
+jest.mock('../../store/musicCacheStore', () => ({
+  musicCacheStore: (fn: any) => fn({ downloadQueue: [] }),
+}));
+
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 20, left: 0, right: 0 }),
+}));
+
 jest.mock('react-native-reanimated', () => {
   const RN = require('react-native');
   return {
@@ -15,6 +32,7 @@ jest.mock('react-native-reanimated', () => {
     useAnimatedStyle: () => ({}),
     useSharedValue: () => ({ value: 0 }),
     withTiming: () => 0,
+    withSpring: () => 0,
   };
 });
 
@@ -51,47 +69,41 @@ describe('ProcessingOverlay', () => {
     expect(screen.queryByTestId(BACKDROP)).toBeNull();
   });
 
-  it('shows content and blocks touches while processing', () => {
+  it('renders nothing when status is processing or success (fullscreen loaders disabled)', () => {
     render(<ProcessingOverlay />);
     setStore({ status: 'processing', label: 'Loading' });
-    expect(screen.getByTestId(BACKDROP).props.pointerEvents).toBe('auto');
-    expect(screen.getByText('Loading')).toBeTruthy();
-  });
+    expect(screen.queryByTestId(BACKDROP)).toBeNull();
 
-  it('stops blocking the instant status is idle and never renders an empty box', () => {
-    render(<ProcessingOverlay />);
-    setStore({ status: 'processing', label: 'Loading' });
-    setStore({ status: 'idle', label: '' });
-    const backdrop = screen.getByTestId(BACKDROP); // still mounted, fading out
-    // Touches pass through immediately — independent of the fade animation.
-    expect(backdrop.props.pointerEvents).toBe('none');
-    // Retains the last content — never the empty idle card.
-    expect(screen.getByText('Loading')).toBeTruthy();
-  });
-
-  it('unmounts after the fade via a JS timer, even if the animation never completes', () => {
-    render(<ProcessingOverlay />);
-    setStore({ status: 'processing', label: 'Loading' });
-    setStore({ status: 'idle', label: '' });
-    expect(screen.queryByTestId(BACKDROP)).not.toBeNull();
-    act(() => {
-      jest.advanceTimersByTime(400);
-    });
+    setStore({ status: 'success', label: 'Done' });
     expect(screen.queryByTestId(BACKDROP)).toBeNull();
   });
 
-  it('cancels the pending unmount when re-shown within the fade window', () => {
+  it('renders non-blocking error toast when status is error', () => {
     render(<ProcessingOverlay />);
-    setStore({ status: 'processing', label: 'A' });
-    setStore({ status: 'idle', label: '' }); // schedules unmount (~330ms)
+    setStore({ status: 'error', label: 'Failed to load songs' });
+
+    const wrapper = screen.getByTestId(BACKDROP);
+    // Non-blocking touches pass through
+    expect(wrapper.props.pointerEvents).toBe('box-none');
+    expect(screen.getByText('Failed to load songs')).toBeTruthy();
+  });
+
+  it('auto-dismisses after 3 seconds', () => {
+    render(<ProcessingOverlay />);
+    setStore({ status: 'error', label: 'Network error' });
+    expect(screen.getByTestId(BACKDROP)).toBeTruthy();
+
     act(() => {
-      jest.advanceTimersByTime(150);
+      jest.advanceTimersByTime(3000);
     });
-    setStore({ status: 'processing', label: 'B' }); // re-show cancels the unmount
+
+    // Dismiss transition started (hide called)
+    expect(processingOverlayStore.getState().status).toBe('idle');
+
+    // After animation buffer, unmounts
     act(() => {
-      jest.advanceTimersByTime(300); // past the original unmount deadline
+      jest.advanceTimersByTime(300);
     });
-    expect(screen.queryByTestId(BACKDROP)).not.toBeNull();
-    expect(screen.getByText('B')).toBeTruthy();
+    expect(screen.queryByTestId(BACKDROP)).toBeNull();
   });
 });

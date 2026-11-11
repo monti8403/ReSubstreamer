@@ -326,12 +326,12 @@ export function ArtistDetailScreen() {
               disabled={artistPlayMode === 'topSongs' && !topSongsSettled}
               onPress={() => {
                 if (artistPlayMode === 'allSongs') {
-                  playAllByArtist(artist.id, artist.name, true);
+                  playAllByArtist(artist.id, artist.name, true, topSongs);
                 } else if (topSongs.length > 1) {
                   const shuffled = shuffleArray(topSongs);
                   playTrack(shuffled[0], shuffled);
                 } else {
-                  playMoreByArtist(artist.id, artist.name);
+                  playMoreByArtist(artist.id, artist.name, topSongs);
                 }
               }}
             />
@@ -339,11 +339,11 @@ export function ArtistDetailScreen() {
               disabled={artistPlayMode === 'topSongs' && !topSongsSettled}
               onPress={() => {
                 if (artistPlayMode === 'allSongs') {
-                  playAllByArtist(artist.id, artist.name, false);
+                  playAllByArtist(artist.id, artist.name, false, topSongs);
                 } else if (topSongs.length > 0) {
                   playTrack(topSongs[0], topSongs);
                 } else {
-                  playMoreByArtist(artist.id, artist.name);
+                  playMoreByArtist(artist.id, artist.name, topSongs);
                 }
               }}
             />

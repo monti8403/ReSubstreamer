@@ -238,15 +238,13 @@ describe('resetAllStores', () => {
     withTransactionSync.mockRestore();
   });
 
-  it('leaves the processing overlay alone — logout runs behind it', async () => {
-    // Logout shows the overlay, then calls this. Resetting it here would blank the
-    // only progress the user can see, half way through a multi-second teardown.
-    processingOverlayStore.getState().show('Logging out…');
+  it('leaves processingOverlayStore status intact during reset', async () => {
+    processingOverlayStore.getState().showError('An error occurred');
 
     await resetAllStores();
 
-    expect(processingOverlayStore.getState().status).toBe('processing');
-    expect(processingOverlayStore.getState().label).toBe('Logging out…');
+    expect(processingOverlayStore.getState().status).toBe('error');
+    expect(processingOverlayStore.getState().label).toBe('An error occurred');
     processingOverlayStore.getState().hide();
   });
 });

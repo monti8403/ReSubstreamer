@@ -236,8 +236,6 @@ export function AddToPlaylistSheet() {
 
       handleClose();
       void refreshPlaylistLibrary();
-      processingOverlayStore.getState().show(t('creating'));
-      processingOverlayStore.getState().showSuccess(t('playlistCreated'));
     } catch {
       setBusy(false);
       setError(t('failedToCreatePlaylist'));

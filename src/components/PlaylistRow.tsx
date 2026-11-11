@@ -55,7 +55,6 @@ export const PlaylistRow = memo(function PlaylistRow({ playlist }: { playlist: P
         confirmLabel: t('delete'),
         destructive: true,
         onConfirm: async () => {
-          processingOverlayStore.getState().show(t('deleting'));
           try {
             const success = await deletePlaylist(playlist.id);
             if (!success) throw new Error('API returned false');
@@ -68,8 +67,6 @@ export const PlaylistRow = memo(function PlaylistRow({ playlist }: { playlist: P
             if (playlist.id in musicCacheStore.getState().cachedItems) {
               deleteCachedItem(playlist.id);
             }
-
-            processingOverlayStore.getState().showSuccess(t('playlistDeleted'));
           } catch {
             processingOverlayStore.getState().showError(t('failedToDeletePlaylist'));
           }

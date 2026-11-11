@@ -1,50 +1,59 @@
 import Ionicons from "@react-native-vector-icons/ionicons/static";
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
+  withSpring,
   withTiming,
 } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { useTheme } from '../hooks/useTheme';
+import { useLayoutMode } from '../hooks/useLayoutMode';
+import { authStore } from '../store/authStore';
+import { musicCacheStore } from '../store/musicCacheStore';
+import { playerStore } from '../store/playerStore';
+import { processingOverlayStore } from '../store/processingOverlayStore';
+import { BANNER_HEIGHT } from './DownloadBanner';
 import { absoluteFill } from '../utils/styles';
-import {
-  processingOverlayStore,
-  type OverlayStatus,
-} from '../store/processingOverlayStore';
 
-const FADE_MS = 250;
-const SUCCESS_DISPLAY_MS = 1200;
-const ERROR_DISPLAY_MS = 2000;
-/** Extra time past the fade before unmounting, so the exit animation finishes. */
-const UNMOUNT_BUFFER_MS = 80;
+const FADE_MS = 200;
+const AUTO_DISMISS_MS = 3000;
+const UNMOUNT_BUFFER_MS = 60;
+const BOTTOM_OFFSET = 24;
+const MINI_PLAYER_HEIGHT = 56;
 
 export function ProcessingOverlay() {
   const status = processingOverlayStore((s) => s.status);
   const label = processingOverlayStore((s) => s.label);
   const hide = processingOverlayStore((s) => s.hide);
-  const { colors } = useTheme();
 
-  const shown = status !== 'idle';
+  const insets = useSafeAreaInsets();
+  const isLoggedIn = authStore((s) => s.isLoggedIn);
+  const hasCurrentTrack = playerStore((s) => s.currentTrack !== null);
+  const isWide = useLayoutMode() === 'wide';
+  const miniPlayerVisible = isLoggedIn && hasCurrentTrack && !isWide;
+  const hasDownloads = musicCacheStore((s) =>
+    s.downloadQueue.some(
+      (q) => q.status === 'downloading' || q.status === 'queued' || q.status === 'error',
+    ),
+  );
+  const bottomOffset =
+    Math.max(insets.bottom, 16) +
+    BOTTOM_OFFSET +
+    (miniPlayerVisible ? MINI_PLAYER_HEIGHT : 0) +
+    (hasDownloads ? BANNER_HEIGHT : 0);
 
-  // Stay mounted through the fade-out, then unmount deterministically via a JS
-  // timer (in the effect) — never via the Reanimated completion callback, which
-  // can stall on Fabric and leave the card stuck on screen.
+  // The toast ONLY displays for real error states — never for loading or success!
+  const shown = status === 'error' && !!label;
+
   const [mounted, setMounted] = useState(shown);
-
-  // Retain the last real content so the fade-out never renders the empty `idle`
-  // card (idle has no spinner/icon/label). The card always shows a spinner or a
-  // result until it is fully gone.
-  const lastContent = useRef<{ status: OverlayStatus; label: string }>({
-    status: 'processing',
-    label: '',
-  });
-  if (shown) lastContent.current = { status, label };
-  const display = shown ? { status, label } : lastContent.current;
+  const lastContent = useRef<{ label: string }>({ label: '' });
+  if (shown) lastContent.current = { label };
+  const display = shown ? { label } : lastContent.current;
 
   const opacity = useSharedValue(0);
-  const scale = useSharedValue(0.9);
+  const translateY = useSharedValue(16);
   const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wasShown = useRef(false);
@@ -54,8 +63,6 @@ export function ProcessingOverlay() {
       clearTimeout(dismissTimer.current);
       dismissTimer.current = null;
     }
-    // Clearing here cancels a pending unmount when a new op re-shows within the
-    // fade window (so a rapid idle→processing isn't unmounted mid-show).
     if (unmountTimer.current) {
       clearTimeout(unmountTimer.current);
       unmountTimer.current = null;
@@ -63,26 +70,21 @@ export function ProcessingOverlay() {
 
     if (shown) {
       setMounted(true);
-      // Clean entrance from 0 — reset only on the real not-shown→shown
-      // transition so a `processing→success` change doesn't re-fade, and a
-      // previously-stalled value can't leak in.
       if (!wasShown.current) {
         opacity.value = 0;
-        scale.value = 0.9;
+        translateY.value = 16;
       }
       wasShown.current = true;
       opacity.value = withTiming(1, { duration: FADE_MS });
-      scale.value = withTiming(1, { duration: FADE_MS });
+      translateY.value = withSpring(0, { damping: 18, stiffness: 220 });
 
-      if (status === 'success' || status === 'error') {
-        const delay = status === 'success' ? SUCCESS_DISPLAY_MS : ERROR_DISPLAY_MS;
-        dismissTimer.current = setTimeout(() => hide(), delay);
-      }
+      dismissTimer.current = setTimeout(() => {
+        hide();
+      }, AUTO_DISMISS_MS);
     } else {
       wasShown.current = false;
       opacity.value = withTiming(0, { duration: FADE_MS });
-      scale.value = withTiming(0.9, { duration: FADE_MS });
-      // Deterministic unmount, independent of the fade completing.
+      translateY.value = withTiming(16, { duration: FADE_MS });
       unmountTimer.current = setTimeout(
         () => setMounted(false),
         FADE_MS + UNMOUNT_BUFFER_MS,
@@ -93,83 +95,65 @@ export function ProcessingOverlay() {
       if (dismissTimer.current) clearTimeout(dismissTimer.current);
       if (unmountTimer.current) clearTimeout(unmountTimer.current);
     };
-  }, [shown, status, hide, opacity, scale]);
+  }, [shown, hide, opacity, translateY]);
 
-  const backdropStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
   const cardStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
-    transform: [{ scale: scale.value }],
+    transform: [{ translateY: translateY.value }],
   }));
 
   if (!mounted) return null;
 
-  const icon = getIcon(display.status);
-
   return (
     <Animated.View
       testID="processingOverlayBackdrop"
-      style={[styles.backdrop, backdropStyle]}
-      // Blocking is driven by React `status`, not the animated value: the instant
-      // the op ends (idle) touches pass through even if the fade stalls, so a
-      // stuck fade can never trap the UI.
-      pointerEvents={shown ? 'auto' : 'none'}
+      style={[styles.wrapper, { bottom: bottomOffset }]}
+      pointerEvents="box-none"
     >
-      <Animated.View style={[styles.card, { backgroundColor: colors.card }, cardStyle]}>
-        {display.status === 'processing' ? (
-          <ActivityIndicator size="large" color={colors.textPrimary} />
-        ) : icon ? (
-          <Ionicons
-            name={icon.name}
-            size={40}
-            color={display.status === 'error' ? colors.red : colors.primary}
-          />
-        ) : null}
-        {display.label ? (
-          <Animated.Text style={[styles.label, { color: colors.textPrimary }]}>
-            {display.label}
-          </Animated.Text>
-        ) : null}
+      <Animated.View
+        testID="processingOverlayCard"
+        style={[styles.card, cardStyle]}
+        pointerEvents="none"
+      >
+        <Ionicons name="alert-circle" size={18} color="#EF4444" />
+        <Text style={styles.label} numberOfLines={2}>
+          {display.label}
+        </Text>
       </Animated.View>
     </Animated.View>
   );
 }
 
-function getIcon(status: OverlayStatus) {
-  switch (status) {
-    case 'success':
-      return { name: 'checkmark-circle' as const };
-    case 'error':
-      return { name: 'close-circle' as const };
-    default:
-      return null;
-  }
-}
-
 const styles = StyleSheet.create({
-  backdrop: {
+  wrapper: {
     ...absoluteFill,
-    zIndex: 9999,
+    top: undefined,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    zIndex: 9999,
   },
   card: {
-    borderRadius: 16,
-    paddingHorizontal: 36,
-    paddingVertical: 28,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 16,
-    minWidth: 140,
+    backgroundColor: '#1E1E1E',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.4)',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 8,
+    maxWidth: '88%',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 10,
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    elevation: 8,
   },
   label: {
-    fontSize: 16,
+    color: '#FFFFFF',
+    fontSize: 13.5,
     fontWeight: '600',
-    textAlign: 'center',
+    lineHeight: 18,
+    flexShrink: 1,
   },
 });
