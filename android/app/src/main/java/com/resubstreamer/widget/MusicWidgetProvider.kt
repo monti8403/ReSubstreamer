@@ -85,7 +85,18 @@ class MusicWidgetProvider : AppWidgetProvider() {
                 val options = appWidgetManager.getAppWidgetOptions(appWidgetId)
                 val minHeight = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0) ?: 0
                 val maxHeight = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0) ?: 0
-                val isExpanded = minHeight >= 90 || maxHeight >= 100
+                val isPortrait = context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+
+                // Size bucket: Compact for 4x1/4x2 (minHeight < 130dp), Expanded for 4x3 (minHeight >= 130dp)
+                val isExpanded = if (minHeight > 0 || maxHeight > 0) {
+                    if (isPortrait) {
+                        maxHeight >= 170 || minHeight >= 130
+                    } else {
+                        minHeight >= 120
+                    }
+                } else {
+                    false
+                }
 
                 val layoutId = if (isExpanded) R.layout.widget_expanded else R.layout.widget_compact
                 val views = RemoteViews(context.packageName, layoutId)
@@ -177,7 +188,7 @@ class MusicWidgetProvider : AppWidgetProvider() {
 
                 // Populate Recents if expanded
                 if (isExpanded) {
-                    populateRecentCards(context, views, recentItemsJson)
+                    populateRecentCards(context, views, recentItemsJson, appWidgetId)
                 }
 
                 // Render views immediately
@@ -213,7 +224,7 @@ class MusicWidgetProvider : AppWidgetProvider() {
             )
         }
 
-        private fun populateRecentCards(context: Context, views: RemoteViews, recentItemsJson: String) {
+        private fun populateRecentCards(context: Context, views: RemoteViews, recentItemsJson: String, appWidgetId: Int) {
             val cardIds = intArrayOf(R.id.card_recent_1, R.id.card_recent_2, R.id.card_recent_3, R.id.card_recent_4)
             val titleIds = intArrayOf(R.id.recent_title_1, R.id.recent_title_2, R.id.recent_title_3, R.id.recent_title_4)
             val coverIds = intArrayOf(R.id.recent_cover_1, R.id.recent_cover_2, R.id.recent_cover_3, R.id.recent_cover_4)
@@ -250,7 +261,7 @@ class MusicWidgetProvider : AppWidgetProvider() {
                                             if (bmp != null) {
                                                 views.setImageViewBitmap(coverIds[i], bmp)
                                                 AppWidgetManager.getInstance(context).updateAppWidget(
-                                                    ComponentName(context, MusicWidgetProvider::class.java),
+                                                    appWidgetId,
                                                     views
                                                 )
                                             }
