@@ -42,10 +42,16 @@ export async function syncWidgetState(): Promise<void> {
   if (Platform.OS !== 'android' || !MusicWidgetModule) return;
 
   try {
-    const { currentTrack, playbackState } = playerStore.getState();
+    const { currentTrack, playbackState, queueLoading, retrying } = playerStore.getState();
     const { songIds, overrides } = favoritesStore.getState();
     const { widgetTheme, widgetShuffleMode } = playbackSettingsStore.getState();
     const { recentItems } = recentPlaysStore.getState();
+
+    const isLoading =
+      playbackState === 'buffering' ||
+      playbackState === 'loading' ||
+      queueLoading === true ||
+      retrying === true;
 
     const isStarred = currentTrack
       ? currentTrack.id in overrides
@@ -79,6 +85,7 @@ export async function syncWidgetState(): Promise<void> {
       album: currentTrack?.album ?? '',
       coverUri,
       isPlaying: playbackState === 'playing',
+      isLoading,
       isStarred,
       isShuffleActive: false,
       widgetTheme,
@@ -260,7 +267,12 @@ export function initWidgetSyncService(): () => void {
 
   // Subscribe to relevant state stores
   const unsubPlayer = playerStore.subscribe((state, prev) => {
-    if (state.currentTrack !== prev.currentTrack || state.playbackState !== prev.playbackState) {
+    if (
+      state.currentTrack !== prev.currentTrack ||
+      state.playbackState !== prev.playbackState ||
+      state.queueLoading !== prev.queueLoading ||
+      state.retrying !== prev.retrying
+    ) {
       scheduleWidgetSync();
     }
   });

@@ -48,7 +48,11 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
             ACTION_PLAY_PAUSE -> {
                 val controller = MusicWidgetMediaManager.mediaController
                 val isCurrentlyPlaying = controller?.isPlaying ?: prefs.getBoolean("is_playing", false)
-                prefs.edit().putBoolean("is_playing", !isCurrentlyPlaying).putBoolean("is_loading", false).apply()
+                if (isCurrentlyPlaying) {
+                    prefs.edit().putBoolean("is_playing", false).putBoolean("is_loading", false).apply()
+                } else {
+                    prefs.edit().putBoolean("is_playing", true).putBoolean("is_loading", true).apply()
+                }
                 MusicWidgetProvider.updateAllWidgets(context)
 
                 if (controller != null && controller.currentMediaItem != null) {
@@ -60,12 +64,16 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
                 }
             }
             ACTION_NEXT -> {
+                prefs.edit().putBoolean("is_loading", true).apply()
+                MusicWidgetProvider.updateAllWidgets(context)
                 val controller = MusicWidgetMediaManager.mediaController
                 if (controller != null && controller.currentMediaItem != null) {
                     MusicWidgetMediaManager.skipToNext()
                 }
             }
             ACTION_PREV -> {
+                prefs.edit().putBoolean("is_loading", true).apply()
+                MusicWidgetProvider.updateAllWidgets(context)
                 val controller = MusicWidgetMediaManager.mediaController
                 if (controller != null && controller.currentMediaItem != null) {
                     MusicWidgetMediaManager.skipToPrevious()
@@ -77,7 +85,10 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
                 MusicWidgetProvider.updateAllWidgets(context)
             }
             ACTION_SHUFFLE -> {
-                // Show loading spinner immediately in place of the play button
+                prefs.edit().putBoolean("is_loading", true).apply()
+                MusicWidgetProvider.updateAllWidgets(context)
+            }
+            ACTION_PLAY_RECENT -> {
                 prefs.edit().putBoolean("is_loading", true).apply()
                 MusicWidgetProvider.updateAllWidgets(context)
             }

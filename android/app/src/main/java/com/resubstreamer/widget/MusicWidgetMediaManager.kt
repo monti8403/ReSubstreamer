@@ -84,11 +84,18 @@ object MusicWidgetMediaManager {
         try {
             val mediaItem = controller.currentMediaItem
             val isPlaying = controller.isPlaying
+            val playbackState = controller.playbackState
+            val isBuffering = (playbackState == Player.STATE_BUFFERING)
+
             val prefs = context.getSharedPreferences(MusicWidgetModule.PREFS_NAME, Context.MODE_PRIVATE)
             val editor = prefs.edit()
 
             editor.putBoolean("is_playing", isPlaying)
-            editor.putBoolean("is_loading", false)
+            if (isBuffering) {
+                editor.putBoolean("is_loading", true)
+            } else if (isPlaying || playbackState == Player.STATE_READY || playbackState == Player.STATE_ENDED) {
+                editor.putBoolean("is_loading", false)
+            }
 
             if (mediaItem != null) {
                 val metadata = mediaItem.mediaMetadata
@@ -148,3 +155,4 @@ object MusicWidgetMediaManager {
         }
     }
 }
+
