@@ -2,10 +2,26 @@ import Ionicons from "@react-native-vector-icons/ionicons/static";
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useCallback, useMemo } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Dimensions,
+  LayoutChangeEvent,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Animated, {
+  Extrapolation,
+  interpolate,
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 
 import { CachedImage } from '@/components/CachedImage';
 import { MarqueeText } from '@/components/MarqueeText';
@@ -77,43 +93,193 @@ export function PlayerPhoneMini() {
   const router = useRouter();
   const openPlayer = useCallback(() => router.push('/player'), [router]);
 
-  // Gestures for mini player: Swipe up to expand, swipe left/right to change track, tap to open
+  // --- Horizontal swipe animation & gesture locking shared values ---
+  const trackTranslateX = useSharedValue(0);
+  const trackOpacity = useSharedValue(1);
+  const gestureDirection = useSharedValue(0); // 0: undetermined, 1: horizontal, 2: vertical
+  const isAnimatingChange = useSharedValue(false);
+  const trackAreaWidth = useSharedValue(Dimensions.get('window').width);
+
+  const handleLeftContainerLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      const w = event.nativeEvent.layout.width;
+      if (w > 0) {
+        trackAreaWidth.value = w;
+      }
+    },
+    [trackAreaWidth],
+  );
+
+  const animatedTrackStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ translateX: trackTranslateX.value }],
+      opacity: trackOpacity.value,
+    };
+  });
+
+  // Gestures for mini player:
+  // - Swipe up -> open full player
+  // - Horizontal swipe -> 1:1 finger tracking with fade, threshold exit & spring entry
+  // - Tap -> open full player
   const miniPanGesture = useMemo(() => {
     return Gesture.Pan()
-      .activeOffsetX([-20, 20])
-      .activeOffsetY([-20, 20])
+      .activeOffsetX([-10, 10])
+      .activeOffsetY([-10, 10])
       .cancelsTouchesInView(true)
-      .onEnd((event) => {
+      .onBegin(() => {
         'worklet';
+        if (isAnimatingChange.value) return;
+        gestureDirection.value = 0;
+      })
+      .onStart(() => {
+        'worklet';
+        if (isAnimatingChange.value) return;
+        gestureDirection.value = 0;
+      })
+      .onUpdate((event) => {
+        'worklet';
+        if (isAnimatingChange.value) return;
+
         const absX = Math.abs(event.translationX);
         const absY = Math.abs(event.translationY);
 
-        // Vertical swipe up -> open full player
-        if (event.translationY < -25 || event.velocityY < -300) {
-          runOnJS(openPlayer)();
+        // Direction locking: lock into horizontal or vertical on initial dominant movement
+        if (gestureDirection.value === 0) {
+          if (absX > 6 || absY > 6) {
+            if (absX > absY) {
+              gestureDirection.value = 1; // Locked to HORIZONTAL
+            } else {
+              gestureDirection.value = 2; // Locked to VERTICAL
+            }
+          }
+        }
+
+        // Horizontal tracking: 1:1 finger movement + proportional fade
+        if (gestureDirection.value === 1) {
+          trackTranslateX.value = event.translationX;
+          const width = trackAreaWidth.value > 0 ? trackAreaWidth.value : 300;
+          trackOpacity.value = interpolate(
+            absX,
+            [0, width * 0.5],
+            [1, 0.4],
+            Extrapolation.CLAMP,
+          );
+        }
+      })
+      .onEnd((event) => {
+        'worklet';
+        if (isAnimatingChange.value) return;
+
+        const absX = Math.abs(event.translationX);
+        const absY = Math.abs(event.translationY);
+
+        // Vertical gesture: open full player
+        if (gestureDirection.value === 2 || (gestureDirection.value === 0 && absY > absX)) {
+          if (event.translationY < -25 || event.velocityY < -300) {
+            runOnJS(openPlayer)();
+          }
+          gestureDirection.value = 0;
           return;
         }
 
-        // Horizontal swipe -> change track (left = next, right = prev)
-        if (absX > absY && absX > 30) {
-          if ((event.translationX < -35 || event.velocityX < -280) && canSkipNext) {
-            runOnJS(skipToNext)();
+        // Horizontal gesture: check threshold for track skip
+        if (gestureDirection.value === 1 || (gestureDirection.value === 0 && absX > absY)) {
+          const isSwipeLeft = event.translationX < -65 || event.velocityX < -500;
+          const isSwipeRight = event.translationX > 65 || event.velocityX > 500;
+          const width = trackAreaWidth.value > 0 ? trackAreaWidth.value : 300;
+          const exitDistance = width + 20;
+
+          // Swipe left (next track)
+          if (isSwipeLeft && canSkipNext) {
+            isAnimatingChange.value = true;
+            trackOpacity.value = withTiming(0, { duration: 140 });
+            trackTranslateX.value = withTiming(-exitDistance, { duration: 140 }, (finished) => {
+              if (finished) {
+                trackTranslateX.value = exitDistance;
+                trackOpacity.value = 0.4;
+                runOnJS(skipToNext)();
+                trackTranslateX.value = withSpring(
+                  0,
+                  { damping: 20, stiffness: 220 },
+                  (springDone) => {
+                    if (springDone) {
+                      isAnimatingChange.value = false;
+                    }
+                  },
+                );
+                trackOpacity.value = withSpring(1, { damping: 20, stiffness: 220 });
+              } else {
+                isAnimatingChange.value = false;
+              }
+            });
+            gestureDirection.value = 0;
             return;
           }
-          if ((event.translationX > 35 || event.velocityX > 280) && canSkipPrevious) {
-            runOnJS(skipToPrevious)();
+
+          // Swipe right (previous track)
+          if (isSwipeRight && canSkipPrevious) {
+            isAnimatingChange.value = true;
+            trackOpacity.value = withTiming(0, { duration: 140 });
+            trackTranslateX.value = withTiming(exitDistance, { duration: 140 }, (finished) => {
+              if (finished) {
+                trackTranslateX.value = -exitDistance;
+                trackOpacity.value = 0.4;
+                runOnJS(skipToPrevious)();
+                trackTranslateX.value = withSpring(
+                  0,
+                  { damping: 20, stiffness: 220 },
+                  (springDone) => {
+                    if (springDone) {
+                      isAnimatingChange.value = false;
+                    }
+                  },
+                );
+                trackOpacity.value = withSpring(1, { damping: 20, stiffness: 220 });
+              } else {
+                isAnimatingChange.value = false;
+              }
+            });
+            gestureDirection.value = 0;
             return;
           }
+
+          // Threshold NOT reached or cannot skip: snap back
+          trackTranslateX.value = withSpring(0, { damping: 20, stiffness: 220 });
+          trackOpacity.value = withSpring(1, { damping: 20, stiffness: 220 });
+          gestureDirection.value = 0;
+          return;
+        }
+
+        trackTranslateX.value = withSpring(0, { damping: 20, stiffness: 220 });
+        trackOpacity.value = withSpring(1, { damping: 20, stiffness: 220 });
+        gestureDirection.value = 0;
+      })
+      .onFinalize(() => {
+        'worklet';
+        if (!isAnimatingChange.value && trackTranslateX.value !== 0) {
+          trackTranslateX.value = withSpring(0, { damping: 20, stiffness: 220 });
+          trackOpacity.value = withSpring(1, { damping: 20, stiffness: 220 });
+          gestureDirection.value = 0;
         }
       });
-  }, [openPlayer, canSkipNext, canSkipPrevious]);
+  }, [
+    isAnimatingChange,
+    gestureDirection,
+    trackTranslateX,
+    trackOpacity,
+    trackAreaWidth,
+    openPlayer,
+    canSkipNext,
+    canSkipPrevious,
+  ]);
 
   const miniTapGesture = useMemo(() => {
     return Gesture.Tap().onEnd(() => {
       'worklet';
+      if (isAnimatingChange.value) return;
       runOnJS(openPlayer)();
     });
-  }, [openPlayer]);
+  }, [openPlayer, isAnimatingChange]);
 
   const miniGesture = useMemo(() => {
     return Gesture.Exclusive(miniPanGesture, miniTapGesture);
@@ -164,41 +330,44 @@ export function PlayerPhoneMini() {
         />
       </Animated.View>
 
-      {/* Tappable and swipeable area: cover art + track info */}
-      <GestureDetector gesture={miniGesture}>
-        <View style={styles.touchable}>
-          {/* Cover art (or placeholder while loading) */}
-          {queueLoading ? (
-            <View style={[styles.cover, styles.coverPlaceholder, { backgroundColor: 'rgba(150,150,150,0.25)' }]}>
-              <WaveformLogo size={16} color="rgba(150,150,150,1)" />
-            </View>
-          ) : (
-            <CachedImage
-              coverArtId={songCoverArtId}
-              size={300}
-              style={styles.cover}
-              resizeMode="cover"
-            />
-          )}
-
-          {/* Track info */}
-          <View style={styles.info}>
-            <MarqueeText style={marqueeStyle}>
-              {queueLoading ? t('loading') : currentTrack.title}
-            </MarqueeText>
-            {!queueLoading && (
-              <Text style={[styles.artist, { color: colors.textSecondary }]} numberOfLines={1}>
-                {currentTrack.artist ?? t('unknownArtist')}
-              </Text>
+      {/* Zona Sinistra (flex: 1, overflow: 'hidden'): [Copertina, Titolo, Artista] */}
+      <View testID="mini-left-zone" style={styles.leftContainer} onLayout={handleLeftContainerLayout}>
+        <GestureDetector gesture={miniGesture}>
+          <Animated.View testID="mini-track-content" style={[styles.trackContent, animatedTrackStyle]}>
+            {/* Cover art (or placeholder while loading) */}
+            {queueLoading ? (
+              <View style={[styles.cover, styles.coverPlaceholder, { backgroundColor: 'rgba(150,150,150,0.25)' }]}>
+                <WaveformLogo size={16} color="rgba(150,150,150,1)" />
+              </View>
+            ) : (
+              <CachedImage
+                coverArtId={songCoverArtId}
+                size={300}
+                style={styles.cover}
+                resizeMode="cover"
+              />
             )}
-          </View>
-        </View>
-      </GestureDetector>
 
-      {/* Transport controls */}
+            {/* Track info */}
+            <View style={styles.info}>
+              <MarqueeText style={marqueeStyle}>
+                {queueLoading ? t('loading') : currentTrack.title}
+              </MarqueeText>
+              {!queueLoading && (
+                <Text style={[styles.artist, { color: colors.textSecondary }]} numberOfLines={1}>
+                  {currentTrack.artist ?? t('unknownArtist')}
+                </Text>
+              )}
+            </View>
+          </Animated.View>
+        </GestureDetector>
+      </View>
+
+      {/* Zona Destra (Fissa): Contiene i pulsanti ⏪ ▶ ⏩ */}
       <View style={styles.controls}>
         {/* Skip to previous */}
         <Pressable
+          testID="mini-prev"
           onPress={handleSkipPrevious}
           hitSlop={8}
           disabled={!canSkipPrevious}
@@ -214,6 +383,7 @@ export function PlayerPhoneMini() {
 
         {/* Play / Pause / Buffering */}
         <Pressable
+          testID="mini-play-pause"
           onPress={togglePlayPause}
           hitSlop={8}
           style={({ pressed }) => [styles.playButton, pressed && styles.pressed]}
@@ -231,6 +401,7 @@ export function PlayerPhoneMini() {
 
         {/* Skip to next */}
         <Pressable
+          testID="mini-next"
           onPress={handleSkipNext}
           hitSlop={8}
           disabled={!canSkipNext}
@@ -268,8 +439,16 @@ const styles = StyleSheet.create({
   progressFill: {
     height: '100%',
   },
-  touchable: {
+  leftContainer: {
     flex: 1,
+    height: '100%',
+    overflow: 'hidden',
+    justifyContent: 'center',
+    minWidth: 0,
+  },
+  trackContent: {
+    flex: 1,
+    height: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     minWidth: 0,
