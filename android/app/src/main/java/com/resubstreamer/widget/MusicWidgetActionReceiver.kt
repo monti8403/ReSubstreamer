@@ -65,8 +65,6 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
                 }
             }
             ACTION_NEXT -> {
-                prefs.edit().putBoolean("is_loading", true).apply()
-                MusicWidgetProvider.updateAllWidgets(context)
                 if (!isJsActive) {
                     val controller = MusicWidgetMediaManager.mediaController
                     if (controller != null && controller.currentMediaItem != null) {
@@ -75,8 +73,6 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
                 }
             }
             ACTION_PREV -> {
-                prefs.edit().putBoolean("is_loading", true).apply()
-                MusicWidgetProvider.updateAllWidgets(context)
                 if (!isJsActive) {
                     val controller = MusicWidgetMediaManager.mediaController
                     if (controller != null && controller.currentMediaItem != null) {
@@ -94,8 +90,7 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
                 MusicWidgetProvider.updateAllWidgets(context)
             }
             ACTION_PLAY_RECENT -> {
-                prefs.edit().putBoolean("is_loading", true).apply()
-                MusicWidgetProvider.updateAllWidgets(context)
+                // Let true playback state govern loading, no artificial stuck spinner
             }
         }
 

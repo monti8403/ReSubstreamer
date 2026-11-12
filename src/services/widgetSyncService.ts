@@ -103,11 +103,22 @@ export async function syncWidgetState(): Promise<void> {
     // Resolve cover URIs for recent/suggested items if needed
     const resolvedRecents = await Promise.all(
       effectiveRecents.slice(0, 4).map(async (item) => {
-        if (!item.coverUri && item.id) {
-          const res = await resolveDisplayImage(item.id, 200, { offline: false });
-          if (res?.uri) return { ...item, coverUri: res.uri };
+        // If already a resolved local file or web URL, keep it
+        if (
+          item.coverUri &&
+          (item.coverUri.startsWith('file://') ||
+            item.coverUri.startsWith('http://') ||
+            item.coverUri.startsWith('https://'))
+        ) {
+          return item;
         }
-        return item;
+        // Otherwise resolve coverArt ID (or item ID) to a real authenticated URL or local cache file URI
+        const artId = item.coverUri || item.id;
+        const res = await resolveDisplayImage(artId, 200, { offline: false });
+        return {
+          ...item,
+          coverUri: res?.uri ?? '',
+        };
       })
     );
 

@@ -86,8 +86,10 @@ class MusicWidgetProvider : AppWidgetProvider() {
                 val minHeight = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0) ?: 0
                 val maxHeight = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0) ?: 0
 
-                // Size bucket: Compact for 4x1 (maxHeight < 110dp and minHeight < 75dp), Expanded for 4x2 / 4x3
-                val isExpanded = (maxHeight >= 110) || (minHeight >= 75)
+                // Size bucket:
+                // 4x1 (1 row) has maxHeight ~110-125dp and minHeight ~70-85dp -> Compact (widget_compact)
+                // 4x2 / 4x3 (2+ rows) have maxHeight >= 160dp or minHeight >= 120dp -> Expanded with recents (widget_expanded)
+                val isExpanded = (maxHeight >= 160) || (minHeight >= 120)
 
                 val layoutId = if (isExpanded) R.layout.widget_expanded else R.layout.widget_compact
                 val views = RemoteViews(context.packageName, layoutId)
@@ -107,8 +109,9 @@ class MusicWidgetProvider : AppWidgetProvider() {
                 views.setTextViewText(R.id.widget_title, title)
                 views.setTextViewText(R.id.widget_artist, artist)
 
-                // Play/Pause / Loading spinner
-                if (isLoading) {
+                // Play/Pause / Loading spinner: spinner ONLY shows when genuinely buffering/loading and NOT playing
+                val showSpinner = isLoading && !isPlaying
+                if (showSpinner) {
                     views.setViewVisibility(R.id.btn_play_pause, View.GONE)
                     views.setViewVisibility(R.id.widget_loading_spinner, View.VISIBLE)
                 } else {
@@ -340,8 +343,16 @@ class MusicWidgetProvider : AppWidgetProvider() {
                             if (File(coverUri).exists()) BitmapFactory.decodeFile(coverUri) else null
                         }
                         coverUri.startsWith("http://") || coverUri.startsWith("https://") -> {
-                            val stream = URL(coverUri).openStream()
-                            BitmapFactory.decodeStream(stream)
+                            try {
+                                val conn = URL(coverUri).openConnection() as java.net.HttpURLConnection
+                                conn.connectTimeout = 5000
+                                conn.readTimeout = 5000
+                                conn.instanceFollowRedirects = true
+                                conn.inputStream.use { BitmapFactory.decodeStream(it) }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed loading cover from URL $coverUri: ${e.message}")
+                                null
+                            }
                         }
                         else -> null
                     } ?: return@withContext null

@@ -40,11 +40,12 @@ class MusicWidgetModule(context: ReactApplicationContext) : ReactContextBaseJava
         if (state.hasKey("artist")) editor.putString("artist", state.getString("artist"))
         if (state.hasKey("album")) editor.putString("album", state.getString("album"))
         if (state.hasKey("coverUri")) editor.putString("cover_uri", state.getString("coverUri"))
-        if (state.hasKey("isPlaying")) editor.putBoolean("is_playing", state.getBoolean("isPlaying"))
-        if (state.hasKey("isLoading")) {
-            editor.putBoolean("is_loading", state.getBoolean("isLoading"))
-        } else if (state.hasKey("isPlaying") && state.getBoolean("isPlaying")) {
+        val isPlaying = if (state.hasKey("isPlaying")) state.getBoolean("isPlaying") else false
+        if (state.hasKey("isPlaying")) editor.putBoolean("is_playing", isPlaying)
+        if (isPlaying) {
             editor.putBoolean("is_loading", false)
+        } else if (state.hasKey("isLoading")) {
+            editor.putBoolean("is_loading", state.getBoolean("isLoading"))
         }
         if (state.hasKey("isStarred")) editor.putBoolean("is_starred", state.getBoolean("isStarred"))
         if (state.hasKey("isShuffleActive")) editor.putBoolean("is_shuffle_active", state.getBoolean("isShuffleActive"))
