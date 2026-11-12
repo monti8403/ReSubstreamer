@@ -5,10 +5,20 @@
     android:layout_height="match_parent">
 
     <ImageView
-        android:id="@+id/widget_bg_image"
+        android:id="@+id/widget_bg_oled"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:scaleType="fitXY"
+        android:src="@drawable/widget_bg_oled"
+        android:visibility="gone"
+        android:contentDescription="@null" />
+
+    <ImageView
+        android:id="@+id/widget_bg_dynamic"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="fitXY"
+        android:src="@drawable/widget_bg_dynamic"
         android:contentDescription="@null" />
 
     <LinearLayout

@@ -90,12 +90,21 @@ object MusicWidgetMediaManager {
             val prefs = context.getSharedPreferences(MusicWidgetModule.PREFS_NAME, Context.MODE_PRIVATE)
             val editor = prefs.edit()
 
-            editor.putBoolean("is_playing", isPlaying)
-            if (isBuffering) {
-                editor.putBoolean("is_loading", true)
+            val prevPlaying = prefs.getBoolean("is_playing", false)
+            val prevLoading = prefs.getBoolean("is_loading", false)
+            val prevTrackId = prefs.getString("track_id", null)
+
+            val newLoading = if (isBuffering) {
+                true
             } else if (isPlaying || playbackState == Player.STATE_READY || playbackState == Player.STATE_ENDED) {
-                editor.putBoolean("is_loading", false)
+                false
+            } else {
+                prevLoading
             }
+
+            var hasChange = (prevPlaying != isPlaying) || (prevLoading != newLoading)
+            editor.putBoolean("is_playing", isPlaying)
+            editor.putBoolean("is_loading", newLoading)
 
             if (mediaItem != null) {
                 val metadata = mediaItem.mediaMetadata
@@ -105,15 +114,29 @@ object MusicWidgetMediaManager {
                 val artworkUri = metadata.artworkUri?.toString()
                 val trackId = mediaItem.mediaId
 
-                if (!title.isNullOrEmpty()) editor.putString("title", title)
-                if (!artist.isNullOrEmpty()) editor.putString("artist", artist)
+                if (!title.isNullOrEmpty() && title != prefs.getString("title", null)) {
+                    editor.putString("title", title)
+                    hasChange = true
+                }
+                if (!artist.isNullOrEmpty() && artist != prefs.getString("artist", null)) {
+                    editor.putString("artist", artist)
+                    hasChange = true
+                }
                 if (!album.isNullOrEmpty()) editor.putString("album", album)
-                if (!artworkUri.isNullOrEmpty()) editor.putString("cover_uri", artworkUri)
-                if (!trackId.isNullOrEmpty()) editor.putString("track_id", trackId)
+                if (!artworkUri.isNullOrEmpty() && artworkUri != prefs.getString("cover_uri", null)) {
+                    editor.putString("cover_uri", artworkUri)
+                    hasChange = true
+                }
+                if (!trackId.isNullOrEmpty() && trackId != prevTrackId) {
+                    editor.putString("track_id", trackId)
+                    hasChange = true
+                }
             }
 
             editor.apply()
-            MusicWidgetProvider.updateAllWidgets(context)
+            if (hasChange) {
+                MusicWidgetProvider.updateAllWidgets(context)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "syncFromController error: ${e.message}")
         }

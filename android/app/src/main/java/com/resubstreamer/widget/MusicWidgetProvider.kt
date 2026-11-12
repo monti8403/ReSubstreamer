@@ -85,18 +85,9 @@ class MusicWidgetProvider : AppWidgetProvider() {
                 val options = appWidgetManager.getAppWidgetOptions(appWidgetId)
                 val minHeight = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0) ?: 0
                 val maxHeight = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0) ?: 0
-                val isPortrait = context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
 
-                // Size bucket: Compact for 4x1/4x2 (minHeight < 130dp), Expanded for 4x3 (minHeight >= 130dp)
-                val isExpanded = if (minHeight > 0 || maxHeight > 0) {
-                    if (isPortrait) {
-                        maxHeight >= 170 || minHeight >= 130
-                    } else {
-                        minHeight >= 120
-                    }
-                } else {
-                    false
-                }
+                // Size bucket: Compact for 4x1 (maxHeight < 110dp and minHeight < 75dp), Expanded for 4x2 / 4x3
+                val isExpanded = (maxHeight >= 110) || (minHeight >= 75)
 
                 val layoutId = if (isExpanded) R.layout.widget_expanded else R.layout.widget_compact
                 val views = RemoteViews(context.packageName, layoutId)
@@ -180,7 +171,7 @@ class MusicWidgetProvider : AppWidgetProvider() {
                 // Check cached cover data
                 val cachedData = if (!coverUri.isNullOrEmpty()) coverCache.get(coverUri) else null
                 val defaultDominant = if (isOled) Color.BLACK else Color.parseColor("#181818")
-                val defaultVibrant = Color.parseColor("#1DB954")
+                val defaultVibrant = if (isOled) Color.parseColor("#262626") else Color.parseColor("#333333")
                 val activeData = cachedData ?: CoverColorData(null, null, defaultDominant, defaultVibrant)
 
                 // Apply cover & zero-bitmap tint theme
@@ -307,17 +298,23 @@ class MusicWidgetProvider : AppWidgetProvider() {
                 views.setImageViewResource(R.id.widget_cover, R.drawable.ic_widget_default_cover)
             }
 
-            // 2. Play button circle background tinted with zero bitmap allocation
-            views.setInt(R.id.btn_play_bg, "setColorFilter", data.vibrantColor)
-
-            // 3. Widget Background tinted with zero bitmap allocation (0 bytes IPC)
+            // 2. Play button circle background
             if (isOled) {
-                views.setImageViewResource(R.id.widget_bg_image, R.drawable.widget_bg_oled)
-                views.setInt(R.id.widget_bg_image, "setColorFilter", Color.TRANSPARENT)
+                // In OLED mode, keep play button sleek neutral dark without dynamic color jumps
+                views.setInt(R.id.btn_play_bg, "setColorFilter", Color.parseColor("#262626"))
             } else {
+                views.setInt(R.id.btn_play_bg, "setColorFilter", data.vibrantColor)
+            }
+
+            // 3. Widget Background: switch between dedicated OLED and Dynamic ImageViews
+            if (isOled) {
+                views.setViewVisibility(R.id.widget_bg_oled, View.VISIBLE)
+                views.setViewVisibility(R.id.widget_bg_dynamic, View.GONE)
+            } else {
+                views.setViewVisibility(R.id.widget_bg_oled, View.GONE)
+                views.setViewVisibility(R.id.widget_bg_dynamic, View.VISIBLE)
                 val darkenedDominant = ColorUtils.blendARGB(data.dominantColor, Color.BLACK, 0.75f)
-                views.setImageViewResource(R.id.widget_bg_image, R.drawable.widget_bg_dynamic)
-                views.setInt(R.id.widget_bg_image, "setColorFilter", darkenedDominant)
+                views.setInt(R.id.widget_bg_dynamic, "setColorFilter", darkenedDominant)
             }
         }
 

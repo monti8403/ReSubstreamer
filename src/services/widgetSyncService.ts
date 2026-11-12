@@ -3,7 +3,8 @@ import { getTrackPlayer } from 'react-native-queue-player';
 import { playerStore } from '../store/playerStore';
 import { favoritesStore } from '../store/favoritesStore';
 import { playbackSettingsStore } from '../store/playbackSettingsStore';
-import { recentPlaysStore } from '../store/recentPlaysStore';
+import { recentPlaysStore, type RecentWidgetItem } from '../store/recentPlaysStore';
+import { albumListsStore } from '../store/albumListsStore';
 import { offlineModeStore } from '../store/offlineModeStore';
 import { connectivityStore } from '../store/connectivityStore';
 import { getDb } from '../store/persistence/db';
@@ -25,14 +26,19 @@ import { shuffleArray } from '../utils/arrayHelpers';
 
 const { MusicWidgetModule } = NativeModules;
 
+let syncTimer: ReturnType<typeof setTimeout> | null = null;
+
 /**
- * Immediately synchronize the React Native state to the native
- * Android SharedPreferences and AppWidget.
- * No setTimeout debounce so background/standby threads never delay sync.
+ * Synchronize the React Native state to the native Android SharedPreferences and AppWidget,
+ * debounced by 40ms to collapse multiple rapid micro-state changes into a single smooth update.
  */
 export function scheduleWidgetSync(): void {
   if (Platform.OS !== 'android' || !MusicWidgetModule) return;
-  void syncWidgetState();
+  if (syncTimer) clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => {
+    syncTimer = null;
+    void syncWidgetState();
+  }, 40);
 }
 
 /**
@@ -67,9 +73,36 @@ export async function syncWidgetState(): Promise<void> {
       }
     }
 
-    // Resolve cover URIs for recent items if needed
+    // Build suggested/recent items: start with recorded recent items
+    const rawRecents = recentItems ?? [];
+    const effectiveRecents: RecentWidgetItem[] = [...rawRecents];
+
+    // If fewer than 4 recent items, fill remaining slots with suggested albums from albumListsStore
+    if (effectiveRecents.length < 4) {
+      const { recentlyPlayed, recentlyAdded, frequentlyPlayed, randomSelection } = albumListsStore.getState();
+      const candidates = [
+        ...recentlyPlayed,
+        ...recentlyAdded,
+        ...frequentlyPlayed,
+        ...randomSelection,
+      ];
+      for (const alb of candidates) {
+        if (effectiveRecents.length >= 4) break;
+        if (!effectiveRecents.some((r) => r.id === alb.id)) {
+          effectiveRecents.push({
+            id: alb.id,
+            type: 'album',
+            title: alb.name || '',
+            subtitle: alb.artist || '',
+            coverUri: alb.coverArt,
+          });
+        }
+      }
+    }
+
+    // Resolve cover URIs for recent/suggested items if needed
     const resolvedRecents = await Promise.all(
-      recentItems.map(async (item) => {
+      effectiveRecents.slice(0, 4).map(async (item) => {
         if (!item.coverUri && item.id) {
           const res = await resolveDisplayImage(item.id, 200, { offline: false });
           if (res?.uri) return { ...item, coverUri: res.uri };
@@ -196,12 +229,12 @@ export async function handleWidgetAction(action: string, extras?: Record<string,
       if (playbackState === 'playing') {
         await getTrackPlayer().pause();
       } else if (currentTrack && queue.length > 0) {
-        await togglePlayPause();
+        await getTrackPlayer().play();
       } else {
         restorePersistedQueueAfterBoot();
         const stateAfter = playerStore.getState();
         if (stateAfter.currentTrack && stateAfter.queue.length > 0) {
-          await togglePlayPause();
+          await getTrackPlayer().play();
         } else {
           await executeShuffle();
         }

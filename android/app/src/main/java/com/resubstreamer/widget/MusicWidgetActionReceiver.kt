@@ -43,19 +43,20 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
         // Ensure MediaManager is initialized
         MusicWidgetMediaManager.initialize(context)
 
+        val reactContext = MusicWidgetModule.reactContext
+        val isJsActive = (reactContext != null && reactContext.hasActiveReactInstance())
+
         // Optimistic UI updates
         when (action) {
             ACTION_PLAY_PAUSE -> {
                 val controller = MusicWidgetMediaManager.mediaController
                 val isCurrentlyPlaying = controller?.isPlaying ?: prefs.getBoolean("is_playing", false)
-                if (isCurrentlyPlaying) {
-                    prefs.edit().putBoolean("is_playing", false).putBoolean("is_loading", false).apply()
-                } else {
-                    prefs.edit().putBoolean("is_playing", true).putBoolean("is_loading", true).apply()
-                }
+                val willPlay = !isCurrentlyPlaying
+                prefs.edit().putBoolean("is_playing", willPlay).putBoolean("is_loading", false).apply()
                 MusicWidgetProvider.updateAllWidgets(context)
 
-                if (controller != null && controller.currentMediaItem != null) {
+                // Only invoke directly from native if React Native JS engine is not active
+                if (!isJsActive && controller != null && controller.currentMediaItem != null) {
                     if (isCurrentlyPlaying) {
                         controller.pause()
                     } else {
@@ -66,17 +67,21 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
             ACTION_NEXT -> {
                 prefs.edit().putBoolean("is_loading", true).apply()
                 MusicWidgetProvider.updateAllWidgets(context)
-                val controller = MusicWidgetMediaManager.mediaController
-                if (controller != null && controller.currentMediaItem != null) {
-                    MusicWidgetMediaManager.skipToNext()
+                if (!isJsActive) {
+                    val controller = MusicWidgetMediaManager.mediaController
+                    if (controller != null && controller.currentMediaItem != null) {
+                        MusicWidgetMediaManager.skipToNext()
+                    }
                 }
             }
             ACTION_PREV -> {
                 prefs.edit().putBoolean("is_loading", true).apply()
                 MusicWidgetProvider.updateAllWidgets(context)
-                val controller = MusicWidgetMediaManager.mediaController
-                if (controller != null && controller.currentMediaItem != null) {
-                    MusicWidgetMediaManager.skipToPrevious()
+                if (!isJsActive) {
+                    val controller = MusicWidgetMediaManager.mediaController
+                    if (controller != null && controller.currentMediaItem != null) {
+                        MusicWidgetMediaManager.skipToPrevious()
+                    }
                 }
             }
             ACTION_STAR -> {
@@ -94,8 +99,7 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
             }
         }
 
-        val reactContext = MusicWidgetModule.reactContext
-        if (reactContext != null && reactContext.hasActiveReactInstance()) {
+        if (isJsActive && reactContext != null) {
             try {
                 val params = Arguments.createMap().apply {
                     putString("action", action)

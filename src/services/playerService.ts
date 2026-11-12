@@ -24,6 +24,7 @@ import {
 import { backgroundPlaybackPromptStore } from '../store/backgroundPlaybackPromptStore';
 import { playbackToastStore } from '../store/playbackToastStore';
 import { playerStore } from '../store/playerStore';
+import { recentPlaysStore } from '../store/recentPlaysStore';
 import { appStateStore } from '../store/appStateStore';
 import { equalizerSettingsStore, EQ_CUSTOM_PRESET_LABEL } from '../store/equalizerSettingsStore';
 import { sleepTimerStore } from '../store/sleepTimerStore';
@@ -547,6 +548,20 @@ export async function playTrack(
     await tp.setQueue(rnTracks, startIndex);
     await tp.play();
     persistQueue(filteredQueue, startIndex);
+
+    if (track.album || track.parent) {
+      try {
+        recentPlaysStore.getState().recordRecentPlay({
+          id: track.parent || sourcePlaylistId || track.id,
+          type: sourcePlaylistId ? 'playlist' : 'album',
+          title: track.album || track.title,
+          subtitle: track.artist || '',
+          coverUri: track.coverArt,
+        });
+      } catch {
+        // non-blocking
+      }
+    }
   } catch {
     playbackToastStore.getState().fail();
   } finally {
