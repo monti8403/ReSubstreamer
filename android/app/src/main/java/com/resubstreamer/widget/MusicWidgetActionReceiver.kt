@@ -49,14 +49,13 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
         // Optimistic UI updates
         when (action) {
             ACTION_PLAY_PAUSE -> {
-                val controller = MusicWidgetMediaManager.mediaController
-                if (controller != null && controller.currentMediaItem != null) {
-                    val isCurrentlyPlaying = controller.isPlaying
+                if (MusicWidgetMediaManager.isConnected && MusicWidgetMediaManager.hasActiveMediaItem) {
+                    val isCurrentlyPlaying = MusicWidgetMediaManager.isPlaying
                     val willPlay = !isCurrentlyPlaying
                     if (isCurrentlyPlaying) {
-                        controller.pause()
+                        MusicWidgetMediaManager.pause(context)
                     } else {
-                        controller.play()
+                        MusicWidgetMediaManager.play(context)
                     }
                     prefs.edit()
                         .putBoolean("is_playing", willPlay)
@@ -77,17 +76,15 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
             }
             ACTION_NEXT -> {
                 prefs.edit().putBoolean("is_loading", false).putLong("loading_timestamp", 0L).apply()
-                val controller = MusicWidgetMediaManager.mediaController
-                if (controller != null && controller.currentMediaItem != null) {
-                    MusicWidgetMediaManager.skipToNext()
+                if (MusicWidgetMediaManager.isConnected && MusicWidgetMediaManager.hasActiveMediaItem) {
+                    MusicWidgetMediaManager.skipToNext(context)
                     return
                 }
             }
             ACTION_PREV -> {
                 prefs.edit().putBoolean("is_loading", false).putLong("loading_timestamp", 0L).apply()
-                val controller = MusicWidgetMediaManager.mediaController
-                if (controller != null && controller.currentMediaItem != null) {
-                    MusicWidgetMediaManager.skipToPrevious()
+                if (MusicWidgetMediaManager.isConnected && MusicWidgetMediaManager.hasActiveMediaItem) {
+                    MusicWidgetMediaManager.skipToPrevious(context)
                     return
                 }
             }

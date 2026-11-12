@@ -18,6 +18,11 @@ import com.google.common.util.concurrent.ListenableFuture
  * - Real-time track changes (auto-advance) update the widget immediately without relying on JS.
  * - Play/Pause and playback state changes update the widget RemoteViews instantly.
  * - Transport controls (Next, Prev, Play, Pause) can be executed natively in milliseconds.
+ *
+ * Thread Safety:
+ * MediaController methods (isPlaying, play, pause, etc.) must only be called on the application
+ * main thread (Looper.getMainLooper()). Background threads (such as React Native modules) must read
+ * the @Volatile state flags (isPlaying, hasActiveMediaItem, isConnected) to avoid IllegalStateException.
  */
 object MusicWidgetMediaManager {
 
@@ -25,12 +30,28 @@ object MusicWidgetMediaManager {
     private var controllerFuture: ListenableFuture<MediaController>? = null
 
     @Volatile
+    private var applicationContext: Context? = null
+
+    @Volatile
     var mediaController: MediaController? = null
         private set
 
+    @Volatile
+    var isPlaying: Boolean = false
+        private set
+
+    @Volatile
+    var hasActiveMediaItem: Boolean = false
+        private set
+
+    @Volatile
+    var isConnected: Boolean = false
+        private set
+
     fun initialize(context: Context) {
-        if (mediaController != null) return
         val appContext = context.applicationContext
+        applicationContext = appContext
+        if (mediaController != null) return
 
         ContextCompat.getMainExecutor(appContext).execute {
             if (mediaController != null || controllerFuture != null) return@execute
@@ -48,16 +69,21 @@ object MusicWidgetMediaManager {
                     try {
                         val controller = future.get()
                         mediaController = controller
+                        isConnected = true
+                        isPlaying = controller.isPlaying
+                        hasActiveMediaItem = (controller.currentMediaItem != null)
                         Log.d(TAG, "MediaController successfully connected to PlaybackService")
 
                         controller.addListener(object : Player.Listener {
                             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                                hasActiveMediaItem = (mediaItem != null)
                                 Log.d(TAG, "onMediaItemTransition: title=${mediaItem?.mediaMetadata?.title}, reason=$reason")
                                 syncFromController(appContext, controller)
                             }
 
-                            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                                Log.d(TAG, "onIsPlayingChanged: isPlaying=$isPlaying")
+                            override fun onIsPlayingChanged(playing: Boolean) {
+                                isPlaying = playing
+                                Log.d(TAG, "onIsPlayingChanged: isPlaying=$playing")
                                 syncFromController(appContext, controller)
                             }
 
@@ -71,11 +97,13 @@ object MusicWidgetMediaManager {
                     } catch (e: Exception) {
                         Log.w(TAG, "Failed to connect MediaController: ${e.message}")
                         controllerFuture = null
+                        isConnected = false
                     }
                 }, ContextCompat.getMainExecutor(appContext))
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to initialize SessionToken / MediaController: ${e.message}")
                 controllerFuture = null
+                isConnected = false
             }
         }
     }
@@ -83,8 +111,11 @@ object MusicWidgetMediaManager {
     fun syncFromController(context: Context, controller: MediaController) {
         try {
             val mediaItem = controller.currentMediaItem
-            val isPlaying = controller.isPlaying
+            val playing = controller.isPlaying
             val playbackState = controller.playbackState
+
+            isPlaying = playing
+            hasActiveMediaItem = (mediaItem != null)
 
             val prefs = context.getSharedPreferences(MusicWidgetModule.PREFS_NAME, Context.MODE_PRIVATE)
             val editor = prefs.edit()
@@ -94,14 +125,14 @@ object MusicWidgetMediaManager {
             val prevTrackId = prefs.getString("track_id", null)
 
             // Never set loading = true on normal buffering to prevent stuck spinners during track skips
-            val newLoading = if (isPlaying || playbackState == Player.STATE_READY || playbackState == Player.STATE_ENDED) {
+            val newLoading = if (playing || playbackState == Player.STATE_READY || playbackState == Player.STATE_ENDED) {
                 false
             } else {
                 prevLoading
             }
 
-            var hasChange = (prevPlaying != isPlaying) || (prevLoading != newLoading)
-            editor.putBoolean("is_playing", isPlaying)
+            var hasChange = (prevPlaying != playing) || (prevLoading != newLoading)
+            editor.putBoolean("is_playing", playing)
             editor.putBoolean("is_loading", newLoading)
             if (!newLoading) {
                 editor.putLong("loading_timestamp", 0L)
@@ -143,40 +174,67 @@ object MusicWidgetMediaManager {
         }
     }
 
-    fun play() {
-        mediaController?.let { controller ->
-            if (!controller.isPlaying) {
-                controller.play()
+    fun play(context: Context? = null) {
+        val ctx = context?.applicationContext ?: applicationContext ?: return
+        ContextCompat.getMainExecutor(ctx).execute {
+            try {
+                mediaController?.let { controller ->
+                    if (!controller.isPlaying) {
+                        controller.play()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "play error: ${e.message}")
             }
         }
     }
 
-    fun pause() {
-        mediaController?.let { controller ->
-            if (controller.isPlaying) {
-                controller.pause()
+    fun pause(context: Context? = null) {
+        val ctx = context?.applicationContext ?: applicationContext ?: return
+        ContextCompat.getMainExecutor(ctx).execute {
+            try {
+                mediaController?.let { controller ->
+                    if (controller.isPlaying) {
+                        controller.pause()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "pause error: ${e.message}")
             }
         }
     }
 
-    fun skipToNext() {
-        mediaController?.let { controller ->
-            if (controller.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)) {
-                controller.seekToNextMediaItem()
-            } else if (controller.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT)) {
-                controller.seekToNext()
+    fun skipToNext(context: Context? = null) {
+        val ctx = context?.applicationContext ?: applicationContext ?: return
+        ContextCompat.getMainExecutor(ctx).execute {
+            try {
+                mediaController?.let { controller ->
+                    if (controller.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)) {
+                        controller.seekToNextMediaItem()
+                    } else if (controller.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT)) {
+                        controller.seekToNext()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "skipToNext error: ${e.message}")
             }
         }
     }
 
-    fun skipToPrevious() {
-        mediaController?.let { controller ->
-            if (controller.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)) {
-                controller.seekToPreviousMediaItem()
-            } else if (controller.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS)) {
-                controller.seekToPrevious()
+    fun skipToPrevious(context: Context? = null) {
+        val ctx = context?.applicationContext ?: applicationContext ?: return
+        ContextCompat.getMainExecutor(ctx).execute {
+            try {
+                mediaController?.let { controller ->
+                    if (controller.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)) {
+                        controller.seekToPreviousMediaItem()
+                    } else if (controller.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS)) {
+                        controller.seekToPrevious()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "skipToPrevious error: ${e.message}")
             }
         }
     }
 }
-

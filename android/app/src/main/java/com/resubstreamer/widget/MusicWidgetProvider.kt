@@ -99,8 +99,11 @@ class MusicWidgetProvider : AppWidgetProvider() {
                 val title = prefs.getString("title", null)?.ifEmpty { null } ?: context.getString(R.string.widget_no_track)
                 val artist = prefs.getString("artist", null)?.ifEmpty { null } ?: context.getString(R.string.widget_ready_to_play)
                 val coverUri = prefs.getString("cover_uri", null)
-                val controller = MusicWidgetMediaManager.mediaController
-                val isPlaying = controller?.isPlaying ?: prefs.getBoolean("is_playing", false)
+                val isPlaying = if (MusicWidgetMediaManager.isConnected) {
+                    MusicWidgetMediaManager.isPlaying
+                } else {
+                    prefs.getBoolean("is_playing", false)
+                }
                 val isStarred = prefs.getBoolean("is_starred", false)
                 val isLoading = prefs.getBoolean("is_loading", false)
                 val theme = prefs.getString("widget_theme", "dynamic") ?: "dynamic"
