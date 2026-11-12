@@ -48,6 +48,16 @@ object MusicWidgetMediaManager {
     var isConnected: Boolean = false
         private set
 
+    fun computeIsPlaying(controller: MediaController): Boolean {
+        val playWhenReady = controller.playWhenReady
+        val playbackState = controller.playbackState
+        return playWhenReady && playbackState != Player.STATE_ENDED && playbackState != Player.STATE_IDLE
+    }
+
+    fun setOptimisticPlaying(playing: Boolean) {
+        isPlaying = playing
+    }
+
     fun initialize(context: Context) {
         val appContext = context.applicationContext
         applicationContext = appContext
@@ -70,7 +80,7 @@ object MusicWidgetMediaManager {
                         val controller = future.get()
                         mediaController = controller
                         isConnected = true
-                        isPlaying = controller.isPlaying
+                        isPlaying = computeIsPlaying(controller)
                         hasActiveMediaItem = (controller.currentMediaItem != null)
                         Log.d(TAG, "MediaController successfully connected to PlaybackService")
 
@@ -82,13 +92,17 @@ object MusicWidgetMediaManager {
                             }
 
                             override fun onIsPlayingChanged(playing: Boolean) {
-                                isPlaying = playing
                                 Log.d(TAG, "onIsPlayingChanged: isPlaying=$playing")
                                 syncFromController(appContext, controller)
                             }
 
                             override fun onPlaybackStateChanged(playbackState: Int) {
                                 Log.d(TAG, "onPlaybackStateChanged: state=$playbackState")
+                                syncFromController(appContext, controller)
+                            }
+
+                            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                                Log.d(TAG, "onPlayWhenReadyChanged: playWhenReady=$playWhenReady, reason=$reason")
                                 syncFromController(appContext, controller)
                             }
                         })
@@ -111,7 +125,7 @@ object MusicWidgetMediaManager {
     fun syncFromController(context: Context, controller: MediaController) {
         try {
             val mediaItem = controller.currentMediaItem
-            val playing = controller.isPlaying
+            val playing = computeIsPlaying(controller)
             val playbackState = controller.playbackState
 
             isPlaying = playing
@@ -176,13 +190,10 @@ object MusicWidgetMediaManager {
 
     fun play(context: Context? = null) {
         val ctx = context?.applicationContext ?: applicationContext ?: return
+        isPlaying = true
         ContextCompat.getMainExecutor(ctx).execute {
             try {
-                mediaController?.let { controller ->
-                    if (!controller.isPlaying) {
-                        controller.play()
-                    }
-                }
+                mediaController?.play()
             } catch (e: Exception) {
                 Log.w(TAG, "play error: ${e.message}")
             }
@@ -191,13 +202,10 @@ object MusicWidgetMediaManager {
 
     fun pause(context: Context? = null) {
         val ctx = context?.applicationContext ?: applicationContext ?: return
+        isPlaying = false
         ContextCompat.getMainExecutor(ctx).execute {
             try {
-                mediaController?.let { controller ->
-                    if (controller.isPlaying) {
-                        controller.pause()
-                    }
-                }
+                mediaController?.pause()
             } catch (e: Exception) {
                 Log.w(TAG, "pause error: ${e.message}")
             }

@@ -49,37 +49,37 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
         // Optimistic UI updates
         when (action) {
             ACTION_PLAY_PAUSE -> {
+                val currentPlaying = if (MusicWidgetMediaManager.isConnected) {
+                    MusicWidgetMediaManager.isPlaying
+                } else {
+                    prefs.getBoolean("is_playing", false)
+                }
+                val willPlay = !currentPlaying
+                MusicWidgetMediaManager.setOptimisticPlaying(willPlay)
+                prefs.edit()
+                    .putBoolean("is_playing", willPlay)
+                    .putBoolean("is_loading", false)
+                    .putLong("loading_timestamp", 0L)
+                    .apply()
+                MusicWidgetProvider.updateAllWidgets(context)
+
                 if (MusicWidgetMediaManager.isConnected && MusicWidgetMediaManager.hasActiveMediaItem) {
-                    val isCurrentlyPlaying = MusicWidgetMediaManager.isPlaying
-                    val willPlay = !isCurrentlyPlaying
-                    if (isCurrentlyPlaying) {
-                        MusicWidgetMediaManager.pause(context)
-                        prefs.edit()
-                            .putBoolean("is_playing", false)
-                            .putBoolean("is_loading", false)
-                            .putLong("loading_timestamp", 0L)
-                            .apply()
-                    } else {
+                    if (willPlay) {
                         MusicWidgetMediaManager.play(context)
-                        prefs.edit()
-                            .putBoolean("is_playing", true)
-                            .putBoolean("is_loading", false)
-                            .putLong("loading_timestamp", 0L)
-                            .apply()
+                    } else {
+                        MusicWidgetMediaManager.pause(context)
                     }
-                    MusicWidgetProvider.updateAllWidgets(context)
                     return
                 }
+
                 // Fallback for cold start / no media loaded: show spinner while JS loads queue
-                val willPlay = !prefs.getBoolean("is_playing", false)
-                val editor = prefs.edit().putBoolean("is_playing", willPlay)
                 if (willPlay) {
-                    editor.putBoolean("is_loading", true).putLong("loading_timestamp", System.currentTimeMillis())
-                } else {
-                    editor.putBoolean("is_loading", false).putLong("loading_timestamp", 0L)
+                    prefs.edit()
+                        .putBoolean("is_loading", true)
+                        .putLong("loading_timestamp", System.currentTimeMillis())
+                        .apply()
+                    MusicWidgetProvider.updateAllWidgets(context)
                 }
-                editor.apply()
-                MusicWidgetProvider.updateAllWidgets(context)
             }
             ACTION_NEXT -> {
                 prefs.edit().putBoolean("is_loading", false).putLong("loading_timestamp", 0L).apply()

@@ -40,8 +40,8 @@ class MusicWidgetModule(context: ReactApplicationContext) : ReactContextBaseJava
         if (state.hasKey("artist")) editor.putString("artist", state.getString("artist"))
         if (state.hasKey("album")) editor.putString("album", state.getString("album"))
         if (state.hasKey("coverUri")) editor.putString("cover_uri", state.getString("coverUri"))
-        val nativePlaying = if (MusicWidgetMediaManager.isConnected) MusicWidgetMediaManager.isPlaying else null
-        val isPlaying = nativePlaying ?: (if (state.hasKey("isPlaying")) state.getBoolean("isPlaying") else false)
+        val isPlaying = if (state.hasKey("isPlaying")) state.getBoolean("isPlaying") else prefs.getBoolean("is_playing", false)
+        MusicWidgetMediaManager.setOptimisticPlaying(isPlaying)
         editor.putBoolean("is_playing", isPlaying)
         if (isPlaying) {
             editor.putBoolean("is_loading", false)

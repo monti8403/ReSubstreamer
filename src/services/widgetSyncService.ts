@@ -128,7 +128,7 @@ export async function syncWidgetState(): Promise<void> {
       artist: currentTrack?.artist ?? '',
       album: currentTrack?.album ?? '',
       coverUri,
-      isPlaying: playbackState === 'playing',
+      isPlaying: playbackState === 'playing' || playbackState === 'buffering',
       isLoading,
       isStarred,
       isShuffleActive: false,
@@ -352,7 +352,7 @@ export async function handleWidgetAction(action: string, extras?: Record<string,
   switch (action) {
     case 'com.resubstreamer.widget.ACTION_PLAY_PAUSE': {
       const { currentTrack, playbackState, queue } = playerStore.getState();
-      if (playbackState === 'playing') {
+      if (playbackState === 'playing' || playbackState === 'buffering') {
         await getTrackPlayer().pause();
       } else if (currentTrack && queue.length > 0) {
         await getTrackPlayer().play();
