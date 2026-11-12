@@ -208,20 +208,28 @@ async function executeShuffle(): Promise<void> {
 /**
  * Play a recent item (album, playlist, or artist) tapped from the widget.
  */
-async function playRecentItem(id: string, type: string): Promise<void> {
+async function playRecentItem(id: string, type: string, title?: string): Promise<void> {
   try {
     if (type === 'album') {
       const album = await fetchAlbumDetail(id);
       if (album?.song && album.song.length > 0) {
         await playTrack(album.song[0], album.song, id);
+        return;
       }
     } else if (type === 'playlist') {
       const playlist = await fetchPlaylistDetail(id);
       if (playlist?.entry && playlist.entry.length > 0) {
         await playTrack(playlist.entry[0], playlist.entry, id);
+        return;
       }
     } else if (type === 'artist') {
-      await playArtistSongs(id, false);
+      await playArtistSongs(id, false, title);
+      return;
+    }
+
+    // Resilient fallback if type was misclassified or direct fetch had 0 songs
+    if (type !== 'artist' && title) {
+      await playArtistSongs(id, false, title);
     }
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -273,8 +281,9 @@ export async function handleWidgetAction(action: string, extras?: Record<string,
     case 'com.resubstreamer.widget.ACTION_PLAY_RECENT': {
       const recentId = extras?.recentId;
       const recentType = extras?.recentType;
+      const recentTitle = extras?.recentTitle;
       if (recentId && recentType) {
-        await playRecentItem(recentId, recentType);
+        await playRecentItem(recentId, recentType, recentTitle);
       }
       break;
     }
@@ -297,7 +306,7 @@ let isInitialized = false;
  */
 export function initWidgetSyncService(): () => void {
   if (Platform.OS !== 'android' || !MusicWidgetModule || isInitialized) {
-    return () => {};
+    return () => { };
   }
   isInitialized = true;
 

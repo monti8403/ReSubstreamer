@@ -549,10 +549,10 @@ export async function playTrack(
     await tp.play();
     persistQueue(filteredQueue, startIndex);
 
-    if (track.album || track.parent) {
+    if (track.album || track.parent || sourcePlaylistId) {
       try {
         recentPlaysStore.getState().recordRecentPlay({
-          id: track.parent || sourcePlaylistId || track.id,
+          id: sourcePlaylistId ? sourcePlaylistId : (track.albumId || track.parent || track.id),
           type: sourcePlaylistId ? 'playlist' : 'album',
           title: track.album || track.title,
           subtitle: track.artist || '',

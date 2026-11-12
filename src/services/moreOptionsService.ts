@@ -495,17 +495,23 @@ async function fetchAllArtistSongs(
 
   // Local-first inside the fetcher: only hits the server when we don't hold the albums.
   const db = getDb();
-  const albums = (await fetchArtistBase(artistId))?.albums;
+  const artistBase = await fetchArtistBase(artistId);
+  const albums = artistBase?.albums;
+  const effectiveArtistName = artistName || artistBase?.artist?.name || '';
   if (!albums?.length) {
-    processingOverlayStore.getState().showError(i18n.t('noSongsFoundByArtist', { artist: artistName }));
+    if (effectiveArtistName) {
+      const top = await getTopSongs(effectiveArtistName, 50);
+      if (top && top.length > 0) return top;
+    }
+    processingOverlayStore.getState().showError(i18n.t('noSongsFoundByArtist', { artist: effectiveArtistName }));
     return null;
   }
 
   // Fetch songs from each album (normalized detail where available, else server).
   const albumSongs = await Promise.all(
     albums.map(async (album) => {
-      const cachedSongs = db ? (await getAlbumDetail(db, album.id))?.songs : undefined;
-      if (cachedSongs?.length) return cachedSongs;
+      const cached = db ? await getAlbumDetail(db, album.id) : null;
+      if (cached) return cached.songs;
       const fetched = await getAlbum(album.id);
       return fetched?.song ?? [];
     }),
@@ -513,14 +519,18 @@ async function fetchAllArtistSongs(
 
   // Flatten and filter to only this artist's songs (handles compilations)
   const songs = albumSongs.flat().filter(
-    (s) => s.artistId === artistId || s.artist === artistName,
+    (s) =>
+      (s.artistId && s.artistId === artistId) ||
+      (effectiveArtistName && s.artist?.toLowerCase() === effectiveArtistName.toLowerCase()),
   );
 
-  if (songs.length === 0) {
-    processingOverlayStore.getState().showError(i18n.t('noSongsFoundByArtist', { artist: artistName }));
+  const effectiveSongs = songs.length > 0 ? songs : albumSongs.flat();
+
+  if (effectiveSongs.length === 0) {
+    processingOverlayStore.getState().showError(i18n.t('noSongsFoundByArtist', { artist: effectiveArtistName }));
     return null;
   }
-  return songs;
+  return effectiveSongs;
 }
 
 /**
@@ -746,20 +756,29 @@ export async function handleRemoveSongDownload(song: Child): Promise<void> {
 /**
  * Convenience entry point to play or shuffle an artist's songs by id.
  */
-export async function playArtistSongs(artistId: string, shuffle: boolean): Promise<void> {
+export async function playArtistSongs(
+  artistId: string,
+  shuffle: boolean,
+  fallbackArtistName?: string,
+): Promise<void> {
   const db = getDb();
-  let artistName = '';
+  let artistName = fallbackArtistName ?? '';
+  let startingTracks: Child[] | undefined;
   if (db) {
     try {
       const topCached = await getArtistTopSongsRow(db, artistId);
       if (topCached?.songs?.length) {
-        artistName = topCached.songs[0].artist ?? '';
-        await playAllByArtist(artistId, artistName, shuffle, topCached.songs);
-        return;
+        artistName = topCached.songs[0].artist ?? artistName;
+        startingTracks = topCached.songs;
+      } else {
+        const base = await getArtistBase(db, artistId);
+        if (base?.artist?.name) {
+          artistName = base.artist.name;
+        }
       }
     } catch {
       // non-critical
     }
   }
-  await playAllByArtist(artistId, artistName, shuffle);
+  await playAllByArtist(artistId, artistName, shuffle, startingTracks);
 }

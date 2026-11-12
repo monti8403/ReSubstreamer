@@ -99,7 +99,8 @@ class MusicWidgetProvider : AppWidgetProvider() {
                 val title = prefs.getString("title", null)?.ifEmpty { null } ?: context.getString(R.string.widget_no_track)
                 val artist = prefs.getString("artist", null)?.ifEmpty { null } ?: context.getString(R.string.widget_ready_to_play)
                 val coverUri = prefs.getString("cover_uri", null)
-                val isPlaying = prefs.getBoolean("is_playing", false)
+                val controller = MusicWidgetMediaManager.mediaController
+                val isPlaying = controller?.isPlaying ?: prefs.getBoolean("is_playing", false)
                 val isStarred = prefs.getBoolean("is_starred", false)
                 val isLoading = prefs.getBoolean("is_loading", false)
                 val theme = prefs.getString("widget_theme", "dynamic") ?: "dynamic"
@@ -196,16 +197,35 @@ class MusicWidgetProvider : AppWidgetProvider() {
                 // Render views immediately
                 appWidgetManager.updateAppWidget(appWidgetId, views)
 
-                // If cover is not yet cached, fetch and downscale in background coroutine
-                if (cachedData == null && !coverUri.isNullOrEmpty()) {
-                    coroutineScope.launch {
-                        val loadedData = loadCoverAndExtractColors(context, coverUri)
-                        if (loadedData != null) {
-                            coverCache.put(coverUri, loadedData)
-                            withContext(Dispatchers.Main) {
-                                applyCoverAndTheme(context, views, loadedData, isOled)
-                                appWidgetManager.updateAppWidget(appWidgetId, views)
+                // Collect missing covers (main cover and recent items)
+                val missingUris = mutableListOf<String>()
+                if (!coverUri.isNullOrEmpty() && coverCache.get(coverUri) == null) {
+                    missingUris.add(coverUri)
+                }
+                if (isExpanded) {
+                    try {
+                        val array = JSONArray(recentItemsJson)
+                        for (i in 0 until minOf(4, array.length())) {
+                            val uri = array.getJSONObject(i).optString("coverUri", "")
+                            if (uri.isNotEmpty() && coverCache.get(uri) == null && !missingUris.contains(uri)) {
+                                missingUris.add(uri)
                             }
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                if (missingUris.isNotEmpty()) {
+                    coroutineScope.launch {
+                        withContext(Dispatchers.IO) {
+                            for (uri in missingUris) {
+                                val loaded = loadCoverAndExtractColors(context, uri)
+                                if (loaded != null) {
+                                    coverCache.put(uri, loaded)
+                                }
+                            }
+                        }
+                        withContext(Dispatchers.Main) {
+                            updateWidget(context, appWidgetManager, appWidgetId)
                         }
                     }
                 }
@@ -244,38 +264,23 @@ class MusicWidgetProvider : AppWidgetProvider() {
                         views.setViewVisibility(cardIds[i], View.VISIBLE)
                         views.setTextViewText(titleIds[i], title)
 
-                        // Set default cover initially
-                        views.setImageViewResource(coverIds[i], R.drawable.ic_widget_default_cover)
-
-                        // Load card cover if cached
-                        if (coverUri.isNotEmpty()) {
-                            val cached = coverCache.get(coverUri)
-                            if (cached != null) {
-                                val bmp = if (type == "artist") cached.circularBitmap else (cached.recentRoundedBitmap ?: cached.mainRoundedBitmap)
-                                if (bmp != null) views.setImageViewBitmap(coverIds[i], bmp)
+                        // Set default cover initially or cached
+                        val cached = if (coverUri.isNotEmpty()) coverCache.get(coverUri) else null
+                        if (cached != null) {
+                            val bmp = if (type == "artist") cached.circularBitmap else (cached.recentRoundedBitmap ?: cached.mainRoundedBitmap)
+                            if (bmp != null) {
+                                views.setImageViewBitmap(coverIds[i], bmp)
                             } else {
-                                coroutineScope.launch {
-                                    val loaded = loadCoverAndExtractColors(context, coverUri)
-                                    if (loaded != null) {
-                                        coverCache.put(coverUri, loaded)
-                                        withContext(Dispatchers.Main) {
-                                            val bmp = if (type == "artist") loaded.circularBitmap else (loaded.recentRoundedBitmap ?: loaded.mainRoundedBitmap)
-                                            if (bmp != null) {
-                                                views.setImageViewBitmap(coverIds[i], bmp)
-                                                AppWidgetManager.getInstance(context).updateAppWidget(
-                                                    appWidgetId,
-                                                    views
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
+                                views.setImageViewResource(coverIds[i], R.drawable.ic_widget_default_cover)
                             }
+                        } else {
+                            views.setImageViewResource(coverIds[i], R.drawable.ic_widget_default_cover)
                         }
 
-                        // PendingIntent to play this recent item
+                        // PendingIntent to play this recent item with unique Data URI
                         val playIntent = Intent(context, MusicWidgetActionReceiver::class.java).apply {
                             action = MusicWidgetActionReceiver.ACTION_PLAY_RECENT
+                            data = Uri.parse("resubstreamer://widget/recent/$i/$id")
                             putExtra("recent_id", id)
                             putExtra("recent_type", type)
                             putExtra("recent_title", title)
@@ -287,6 +292,8 @@ class MusicWidgetProvider : AppWidgetProvider() {
                             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                         )
                         views.setOnClickPendingIntent(cardIds[i], pending)
+                        views.setOnClickPendingIntent(coverIds[i], pending)
+                        views.setOnClickPendingIntent(titleIds[i], pending)
                     } else {
                         views.setViewVisibility(cardIds[i], View.GONE)
                     }
