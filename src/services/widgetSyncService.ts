@@ -53,11 +53,10 @@ export async function syncWidgetState(): Promise<void> {
     const { widgetTheme, widgetShuffleMode } = playbackSettingsStore.getState();
     const { recentItems } = recentPlaysStore.getState();
 
+    // Only signal loading to widget when queue is actively cold-loading and no track exists yet
     const isLoading =
-      playbackState === 'buffering' ||
-      playbackState === 'loading' ||
-      queueLoading === true ||
-      retrying === true;
+      Boolean(queueLoading && !currentTrack) ||
+      Boolean(retrying && !currentTrack);
 
     const isStarred = currentTrack
       ? currentTrack.id in overrides

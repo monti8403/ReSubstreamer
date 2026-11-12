@@ -44,8 +44,15 @@ class MusicWidgetModule(context: ReactApplicationContext) : ReactContextBaseJava
         if (state.hasKey("isPlaying")) editor.putBoolean("is_playing", isPlaying)
         if (isPlaying) {
             editor.putBoolean("is_loading", false)
+            editor.putLong("loading_timestamp", 0L)
         } else if (state.hasKey("isLoading")) {
-            editor.putBoolean("is_loading", state.getBoolean("isLoading"))
+            val loading = state.getBoolean("isLoading")
+            editor.putBoolean("is_loading", loading)
+            if (loading) {
+                editor.putLong("loading_timestamp", System.currentTimeMillis())
+            } else {
+                editor.putLong("loading_timestamp", 0L)
+            }
         }
         if (state.hasKey("isStarred")) editor.putBoolean("is_starred", state.getBoolean("isStarred"))
         if (state.hasKey("isShuffleActive")) editor.putBoolean("is_shuffle_active", state.getBoolean("isShuffleActive"))

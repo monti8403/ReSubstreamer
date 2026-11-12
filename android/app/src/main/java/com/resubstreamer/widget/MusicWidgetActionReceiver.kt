@@ -52,7 +52,11 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
                 val controller = MusicWidgetMediaManager.mediaController
                 val isCurrentlyPlaying = controller?.isPlaying ?: prefs.getBoolean("is_playing", false)
                 val willPlay = !isCurrentlyPlaying
-                prefs.edit().putBoolean("is_playing", willPlay).putBoolean("is_loading", false).apply()
+                prefs.edit()
+                    .putBoolean("is_playing", willPlay)
+                    .putBoolean("is_loading", false)
+                    .putLong("loading_timestamp", 0L)
+                    .apply()
                 MusicWidgetProvider.updateAllWidgets(context)
 
                 // Only invoke directly from native if React Native JS engine is not active
@@ -65,6 +69,7 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
                 }
             }
             ACTION_NEXT -> {
+                prefs.edit().putBoolean("is_loading", false).putLong("loading_timestamp", 0L).apply()
                 if (!isJsActive) {
                     val controller = MusicWidgetMediaManager.mediaController
                     if (controller != null && controller.currentMediaItem != null) {
@@ -73,6 +78,7 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
                 }
             }
             ACTION_PREV -> {
+                prefs.edit().putBoolean("is_loading", false).putLong("loading_timestamp", 0L).apply()
                 if (!isJsActive) {
                     val controller = MusicWidgetMediaManager.mediaController
                     if (controller != null && controller.currentMediaItem != null) {
@@ -86,8 +92,7 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
                 MusicWidgetProvider.updateAllWidgets(context)
             }
             ACTION_SHUFFLE -> {
-                prefs.edit().putBoolean("is_loading", true).apply()
-                MusicWidgetProvider.updateAllWidgets(context)
+                // Do not force is_loading = true optimistically to avoid stuck spinner
             }
             ACTION_PLAY_RECENT -> {
                 // Let true playback state govern loading, no artificial stuck spinner

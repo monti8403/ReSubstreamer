@@ -57,7 +57,8 @@ class MusicWidgetProvider : AppWidgetProvider() {
         private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
         data class CoverColorData(
-            val roundedBitmap: Bitmap?,
+            val mainRoundedBitmap: Bitmap?,
+            val recentRoundedBitmap: Bitmap?,
             val circularBitmap: Bitmap?,
             val dominantColor: Int,
             val vibrantColor: Int
@@ -109,8 +110,11 @@ class MusicWidgetProvider : AppWidgetProvider() {
                 views.setTextViewText(R.id.widget_title, title)
                 views.setTextViewText(R.id.widget_artist, artist)
 
-                // Play/Pause / Loading spinner: spinner ONLY shows when genuinely buffering/loading and NOT playing
-                val showSpinner = isLoading && !isPlaying
+                // Play/Pause / Loading spinner: auto-expire stale loading after 2.5s to prevent stuck spinner
+                val loadingTime = prefs.getLong("loading_timestamp", 0L)
+                val isStaleLoading = (loadingTime > 0L) && ((System.currentTimeMillis() - loadingTime) > 2500L)
+                val showSpinner = isLoading && !isPlaying && !isStaleLoading
+
                 if (showSpinner) {
                     views.setViewVisibility(R.id.btn_play_pause, View.GONE)
                     views.setViewVisibility(R.id.widget_loading_spinner, View.VISIBLE)
@@ -121,6 +125,10 @@ class MusicWidgetProvider : AppWidgetProvider() {
                         R.id.btn_play_pause,
                         if (isPlaying) R.drawable.ic_widget_pause else R.drawable.ic_widget_play
                     )
+                    // If loading was stale or we are playing, persist cleared loading state
+                    if (isLoading && (!showSpinner || isPlaying)) {
+                        prefs.edit().putBoolean("is_loading", false).putLong("loading_timestamp", 0L).apply()
+                    }
                 }
 
                 // Star icon
@@ -175,7 +183,7 @@ class MusicWidgetProvider : AppWidgetProvider() {
                 val cachedData = if (!coverUri.isNullOrEmpty()) coverCache.get(coverUri) else null
                 val defaultDominant = if (isOled) Color.BLACK else Color.parseColor("#181818")
                 val defaultVibrant = if (isOled) Color.parseColor("#262626") else Color.parseColor("#333333")
-                val activeData = cachedData ?: CoverColorData(null, null, defaultDominant, defaultVibrant)
+                val activeData = cachedData ?: CoverColorData(null, null, null, defaultDominant, defaultVibrant)
 
                 // Apply cover & zero-bitmap tint theme
                 applyCoverAndTheme(context, views, activeData, isOled)
@@ -243,7 +251,7 @@ class MusicWidgetProvider : AppWidgetProvider() {
                         if (coverUri.isNotEmpty()) {
                             val cached = coverCache.get(coverUri)
                             if (cached != null) {
-                                val bmp = if (type == "artist") cached.circularBitmap else cached.roundedBitmap
+                                val bmp = if (type == "artist") cached.circularBitmap else (cached.recentRoundedBitmap ?: cached.mainRoundedBitmap)
                                 if (bmp != null) views.setImageViewBitmap(coverIds[i], bmp)
                             } else {
                                 coroutineScope.launch {
@@ -251,7 +259,7 @@ class MusicWidgetProvider : AppWidgetProvider() {
                                     if (loaded != null) {
                                         coverCache.put(coverUri, loaded)
                                         withContext(Dispatchers.Main) {
-                                            val bmp = if (type == "artist") loaded.circularBitmap else loaded.roundedBitmap
+                                            val bmp = if (type == "artist") loaded.circularBitmap else (loaded.recentRoundedBitmap ?: loaded.mainRoundedBitmap)
                                             if (bmp != null) {
                                                 views.setImageViewBitmap(coverIds[i], bmp)
                                                 AppWidgetManager.getInstance(context).updateAppWidget(
@@ -295,8 +303,8 @@ class MusicWidgetProvider : AppWidgetProvider() {
             isOled: Boolean
         ) {
             // 1. Cover
-            if (data.roundedBitmap != null) {
-                views.setImageViewBitmap(R.id.widget_cover, data.roundedBitmap)
+            if (data.mainRoundedBitmap != null) {
+                views.setImageViewBitmap(R.id.widget_cover, data.mainRoundedBitmap)
             } else {
                 views.setImageViewResource(R.id.widget_cover, R.drawable.ic_widget_default_cover)
             }
@@ -368,14 +376,16 @@ class MusicWidgetProvider : AppWidgetProvider() {
 
                     // Strictly downscale bitmaps to avoid TransactionTooLargeException
                     val density = context.resources.displayMetrics.density
-                    val targetMainPx = (48 * density).toInt().coerceIn(96, 160)
-                    val targetRecentPx = (36 * density).toInt().coerceIn(72, 120)
+                    val targetMainPx = (52 * density).toInt().coerceIn(104, 180)
+                    val targetRecentPx = (54 * density).toInt().coerceIn(108, 180)
 
-                    val rounded = getRoundedCornerBitmap(rawBitmap, 10f, targetMainPx, context)
+                    val mainRounded = getRoundedCornerBitmap(rawBitmap, 10f, targetMainPx, context)
+                    val recentRounded = getRoundedCornerBitmap(rawBitmap, 8f, targetRecentPx, context)
                     val circular = getCircularBitmap(rawBitmap, targetRecentPx)
 
                     CoverColorData(
-                        roundedBitmap = rounded,
+                        mainRoundedBitmap = mainRounded,
+                        recentRoundedBitmap = recentRounded,
                         circularBitmap = circular,
                         dominantColor = dominant,
                         vibrantColor = vibrant

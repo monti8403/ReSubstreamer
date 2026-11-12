@@ -85,7 +85,6 @@ object MusicWidgetMediaManager {
             val mediaItem = controller.currentMediaItem
             val isPlaying = controller.isPlaying
             val playbackState = controller.playbackState
-            val isBuffering = (playbackState == Player.STATE_BUFFERING)
 
             val prefs = context.getSharedPreferences(MusicWidgetModule.PREFS_NAME, Context.MODE_PRIVATE)
             val editor = prefs.edit()
@@ -94,9 +93,8 @@ object MusicWidgetMediaManager {
             val prevLoading = prefs.getBoolean("is_loading", false)
             val prevTrackId = prefs.getString("track_id", null)
 
-            val newLoading = if (isBuffering) {
-                true
-            } else if (isPlaying || playbackState == Player.STATE_READY || playbackState == Player.STATE_ENDED) {
+            // Never set loading = true on normal buffering to prevent stuck spinners during track skips
+            val newLoading = if (isPlaying || playbackState == Player.STATE_READY || playbackState == Player.STATE_ENDED) {
                 false
             } else {
                 prevLoading
@@ -105,6 +103,9 @@ object MusicWidgetMediaManager {
             var hasChange = (prevPlaying != isPlaying) || (prevLoading != newLoading)
             editor.putBoolean("is_playing", isPlaying)
             editor.putBoolean("is_loading", newLoading)
+            if (!newLoading) {
+                editor.putLong("loading_timestamp", 0L)
+            }
 
             if (mediaItem != null) {
                 val metadata = mediaItem.mediaMetadata
