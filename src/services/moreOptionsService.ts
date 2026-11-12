@@ -13,7 +13,7 @@ import { offlineModeStore } from '../store/offlineModeStore';
 import { layoutPreferencesStore } from '../store/layoutPreferencesStore';
 import { refreshPlaylistLibrary } from './normalizedLibrarySync';
 import { getDb } from '../store/persistence/db';
-import { getAlbumDetail, getArtistTopSongsRow, getPlaylistDetail } from '../db/repository/details';
+import { getAlbumDetail, getArtistBase, getArtistTopSongsRow, getPlaylistDetail } from '../db/repository/details';
 import { processingOverlayStore } from '../store/processingOverlayStore';
 import { playerStore } from '../store/playerStore';
 import { shuffleArray } from '../utils/arrayHelpers';
