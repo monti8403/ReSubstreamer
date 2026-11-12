@@ -4,7 +4,7 @@ import { kvStorage } from './persistence';
 
 export interface RecentWidgetItem {
   id: string;
-  type: 'album' | 'playlist' | 'artist';
+  type: 'album' | 'playlist' | 'artist' | 'song';
   title: string;
   subtitle?: string;
   coverUri?: string;

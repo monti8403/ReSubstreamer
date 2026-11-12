@@ -262,6 +262,7 @@ class MusicWidgetProvider : AppWidgetProvider() {
                         val id = obj.optString("id", "")
                         val type = obj.optString("type", "album")
                         val title = obj.optString("title", "")
+                        val subtitle = obj.optString("subtitle", "")
                         val coverUri = obj.optString("coverUri", "")
 
                         views.setViewVisibility(cardIds[i], View.VISIBLE)
@@ -283,10 +284,11 @@ class MusicWidgetProvider : AppWidgetProvider() {
                         // PendingIntent to play this recent item with unique Data URI
                         val playIntent = Intent(context, MusicWidgetActionReceiver::class.java).apply {
                             action = MusicWidgetActionReceiver.ACTION_PLAY_RECENT
-                            data = Uri.parse("resubstreamer://widget/recent/$i/$id")
+                            data = Uri.parse("resubstreamer://widget/recent/$i/" + Uri.encode(id))
                             putExtra("recent_id", id)
                             putExtra("recent_type", type)
                             putExtra("recent_title", title)
+                            putExtra("recent_subtitle", subtitle)
                         }
                         val pending = PendingIntent.getBroadcast(
                             context,

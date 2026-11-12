@@ -54,24 +54,31 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
                     val willPlay = !isCurrentlyPlaying
                     if (isCurrentlyPlaying) {
                         MusicWidgetMediaManager.pause(context)
+                        prefs.edit()
+                            .putBoolean("is_playing", false)
+                            .putBoolean("is_loading", false)
+                            .putLong("loading_timestamp", 0L)
+                            .apply()
                     } else {
                         MusicWidgetMediaManager.play(context)
+                        prefs.edit()
+                            .putBoolean("is_playing", true)
+                            .putBoolean("is_loading", false)
+                            .putLong("loading_timestamp", 0L)
+                            .apply()
                     }
-                    prefs.edit()
-                        .putBoolean("is_playing", willPlay)
-                        .putBoolean("is_loading", false)
-                        .putLong("loading_timestamp", 0L)
-                        .apply()
                     MusicWidgetProvider.updateAllWidgets(context)
                     return
                 }
-                // Fallback for cold start / no media loaded: update UI and forward to JS
+                // Fallback for cold start / no media loaded: show spinner while JS loads queue
                 val willPlay = !prefs.getBoolean("is_playing", false)
-                prefs.edit()
-                    .putBoolean("is_playing", willPlay)
-                    .putBoolean("is_loading", false)
-                    .putLong("loading_timestamp", 0L)
-                    .apply()
+                val editor = prefs.edit().putBoolean("is_playing", willPlay)
+                if (willPlay) {
+                    editor.putBoolean("is_loading", true).putLong("loading_timestamp", System.currentTimeMillis())
+                } else {
+                    editor.putBoolean("is_loading", false).putLong("loading_timestamp", 0L)
+                }
+                editor.apply()
                 MusicWidgetProvider.updateAllWidgets(context)
             }
             ACTION_NEXT -> {
@@ -94,10 +101,18 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
                 MusicWidgetProvider.updateAllWidgets(context)
             }
             ACTION_SHUFFLE -> {
-                // Do not force is_loading = true optimistically to avoid stuck spinner
+                prefs.edit()
+                    .putBoolean("is_loading", true)
+                    .putLong("loading_timestamp", System.currentTimeMillis())
+                    .apply()
+                MusicWidgetProvider.updateAllWidgets(context)
             }
             ACTION_PLAY_RECENT -> {
-                // Let true playback state govern loading, no artificial stuck spinner
+                prefs.edit()
+                    .putBoolean("is_loading", true)
+                    .putLong("loading_timestamp", System.currentTimeMillis())
+                    .apply()
+                MusicWidgetProvider.updateAllWidgets(context)
             }
         }
 
@@ -108,6 +123,7 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
                     intent.getStringExtra("recent_id")?.let { putString("recentId", it) }
                     intent.getStringExtra("recent_type")?.let { putString("recentType", it) }
                     intent.getStringExtra("recent_title")?.let { putString("recentTitle", it) }
+                    intent.getStringExtra("recent_subtitle")?.let { putString("recentSubtitle", it) }
                 }
                 reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                     .emit("onWidgetAction", params)
@@ -124,6 +140,7 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
                 intent.getStringExtra("recent_id")?.let { putExtra("recentId", it) }
                 intent.getStringExtra("recent_type")?.let { putExtra("recentType", it) }
                 intent.getStringExtra("recent_title")?.let { putExtra("recentTitle", it) }
+                intent.getStringExtra("recent_subtitle")?.let { putExtra("recentSubtitle", it) }
             }
             HeadlessJsTaskService.acquireWakeLockNow(context)
             context.startService(serviceIntent)

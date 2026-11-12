@@ -11,9 +11,12 @@ import { getDb } from '../store/persistence/db';
 import { listAllStarredSongs, starredItemOf } from '../db/repository/favorites';
 import { listDownloadedSongs, downloadedSongRowToChild } from '../db/repository/downloads';
 import { fetchAlbumDetail, fetchPlaylistDetail } from './detailFetchService';
+import { getPlaylistDetail } from '../db/repository/details';
+import { SONG_LIST_COLS, type SongListRow, hydrateSongRows, songListRowToChild } from '../db/repository/songs';
+import { musicCacheStore, getSongEnvelope } from '../store/musicCacheStore';
 import { playArtistSongs, toggleStar } from './moreOptionsService';
 import { resolveDisplayImage } from './imageCacheService';
-import { getRandomSongs } from './subsonicService';
+import { getRandomSongs, type Child } from './subsonicService';
 import {
   playTrack,
   shuffleQueue,
@@ -53,10 +56,8 @@ export async function syncWidgetState(): Promise<void> {
     const { widgetTheme, widgetShuffleMode } = playbackSettingsStore.getState();
     const { recentItems } = recentPlaysStore.getState();
 
-    // Only signal loading to widget when queue is actively cold-loading and no track exists yet
-    const isLoading =
-      Boolean(queueLoading && !currentTrack) ||
-      Boolean(retrying && !currentTrack);
+    // Signal loading to widget when queue is actively loading
+    const isLoading = Boolean(queueLoading) || Boolean(retrying && !currentTrack);
 
     const isStarred = currentTrack
       ? currentTrack.id in overrides
@@ -91,7 +92,7 @@ export async function syncWidgetState(): Promise<void> {
           effectiveRecents.push({
             id: alb.id,
             type: 'album',
-            title: alb.name || '',
+            title: alb.name || (alb as any).title || '',
             subtitle: alb.artist || '',
             coverUri: alb.coverArt,
           });
@@ -206,34 +207,141 @@ async function executeShuffle(): Promise<void> {
 }
 
 /**
- * Play a recent item (album, playlist, or artist) tapped from the widget.
+ * Play a recent item (album, playlist, artist, or song) tapped from the widget.
+ * Ultra-resilient: probes offline cache -> online detail -> local DB fallback -> artist fallback -> shuffle.
  */
-async function playRecentItem(id: string, type: string, title?: string): Promise<void> {
+async function playRecentItem(
+  id: string,
+  type: string,
+  title?: string,
+  subtitle?: string,
+): Promise<void> {
   try {
+    // 1. First probe offline downloads / cached music items
+    const cacheState = musicCacheStore.getState();
+    const cachedItem =
+      cacheState.cachedItems[id] ??
+      cacheState.cachedItems[`${type}:${id}`] ??
+      cacheState.cachedItems[`album:${id}`] ??
+      cacheState.cachedItems[`playlist:${id}`];
+
+    if (cachedItem && cachedItem.songIds?.length > 0) {
+      const songs = cachedItem.songIds
+        .map((sId) => getSongEnvelope(sId))
+        .filter((s): s is Child => s !== null);
+      if (songs.length > 0) {
+        await playTrack(songs[0], songs, id);
+        return;
+      }
+    }
+
+    // 2. Check if id itself is a cached/downloaded single song
+    const singleCachedSong = getSongEnvelope(id);
+    if (singleCachedSong) {
+      await playTrack(singleCachedSong, [singleCachedSong]);
+      return;
+    }
+
+    // 3. Album flow
     if (type === 'album') {
       const album = await fetchAlbumDetail(id);
       if (album?.song && album.song.length > 0) {
         await playTrack(album.song[0], album.song, id);
         return;
       }
-    } else if (type === 'playlist') {
+
+      // Local DB fallback: query songs with album_id or matching album title
+      const db = getDb();
+      if (db) {
+        try {
+          const rows = await db.getAllAsync<SongListRow>(
+            `SELECT ${SONG_LIST_COLS} FROM songs WHERE album_id = ? OR (album = ? AND album != '') ORDER BY disc_number, track, sort_title`,
+            [id, title ?? ''],
+          );
+          if (rows && rows.length > 0) {
+            await hydrateSongRows(db, rows);
+            const songs = rows.map(songListRowToChild);
+            if (songs.length > 0) {
+              await playTrack(songs[0], songs, id);
+              return;
+            }
+          }
+        } catch {
+          // non-critical
+        }
+      }
+
+      // If album lookup failed but we have artist name in subtitle, try artist songs
+      if (subtitle) {
+        await playArtistSongs(id, false, subtitle);
+        const q = playerStore.getState().queue;
+        if (q.length > 0) return;
+      }
+    }
+
+    // 4. Playlist flow
+    if (type === 'playlist') {
       const playlist = await fetchPlaylistDetail(id);
       if (playlist?.entry && playlist.entry.length > 0) {
         await playTrack(playlist.entry[0], playlist.entry, id);
         return;
       }
-    } else if (type === 'artist') {
-      await playArtistSongs(id, false, title);
-      return;
+
+      const db = getDb();
+      if (db) {
+        try {
+          const d = await getPlaylistDetail(db, id);
+          if (d && d.entry && d.entry.length > 0) {
+            await playTrack(d.entry[0], d.entry, id);
+            return;
+          }
+        } catch {
+          // non-critical
+        }
+      }
     }
 
-    // Resilient fallback if type was misclassified or direct fetch had 0 songs
-    if (type !== 'artist' && title) {
+    // 5. Artist flow
+    if (type === 'artist') {
       await playArtistSongs(id, false, title);
+      const q = playerStore.getState().queue;
+      if (q.length > 0) return;
     }
+
+    // 6. Single song flow
+    if (type === 'song') {
+      const db = getDb();
+      if (db) {
+        try {
+          const row = await db.getFirstAsync<SongListRow>(
+            `SELECT ${SONG_LIST_COLS} FROM songs WHERE id = ?`,
+            [id],
+          );
+          if (row) {
+            await hydrateSongRows(db, [row]);
+            const song = songListRowToChild(row);
+            await playTrack(song, [song]);
+            return;
+          }
+        } catch {
+          // non-critical
+        }
+      }
+    }
+
+    // 7. Resilient fallback: title could be artist or album
+    if (title) {
+      await playArtistSongs(id, false, title);
+      const q = playerStore.getState().queue;
+      if (q.length > 0) return;
+    }
+
+    // 8. If absolutely nothing else worked, start shuffle
+    await executeShuffle();
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn(`[widgetSyncService] playRecentItem failed for ${type} ${id}:`, e);
+    await executeShuffle();
   }
 }
 
@@ -282,8 +390,9 @@ export async function handleWidgetAction(action: string, extras?: Record<string,
       const recentId = extras?.recentId;
       const recentType = extras?.recentType;
       const recentTitle = extras?.recentTitle;
+      const recentSubtitle = extras?.recentSubtitle;
       if (recentId && recentType) {
-        await playRecentItem(recentId, recentType, recentTitle);
+        await playRecentItem(recentId, recentType, recentTitle, recentSubtitle);
       }
       break;
     }

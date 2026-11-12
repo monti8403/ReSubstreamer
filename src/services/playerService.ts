@@ -549,12 +549,15 @@ export async function playTrack(
     await tp.play();
     persistQueue(filteredQueue, startIndex);
 
-    if (track.album || track.parent || sourcePlaylistId) {
+    if (track.album || track.parent || sourcePlaylistId || track.id) {
       try {
+        const itemType = sourcePlaylistId ? 'playlist' : (track.albumId || track.album ? 'album' : 'song');
+        const itemId = sourcePlaylistId ? sourcePlaylistId : (track.albumId || track.parent || track.id);
+        const itemTitle = sourcePlaylistId ? (track.album || track.title) : (track.album || track.title);
         recentPlaysStore.getState().recordRecentPlay({
-          id: sourcePlaylistId ? sourcePlaylistId : (track.albumId || track.parent || track.id),
-          type: sourcePlaylistId ? 'playlist' : 'album',
-          title: track.album || track.title,
+          id: itemId,
+          type: itemType,
+          title: itemTitle,
           subtitle: track.artist || '',
           coverUri: track.coverArt,
         });
