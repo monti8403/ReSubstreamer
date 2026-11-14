@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4ddbf233-8996-4242-9fdd-84d1f3338f24",
+  "id": "562cac7e-214c-4edd-a2fa-99b79334703d",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "album_artists": {
@@ -1483,7 +1483,16 @@
           "autoincrement": false
         }
       },
-      "indexes": {},
+      "indexes": {
+        "idx_cached_albums_sort_title": {
+          "name": "idx_cached_albums_sort_title",
+          "columns": [
+            "sort_title",
+            "item_id"
+          ],
+          "isUnique": false
+        }
+      },
       "foreignKeys": {
         "cached_albums_item_id_cached_items_item_id_fk": {
           "name": "cached_albums_item_id_cached_items_item_id_fk",
@@ -1742,7 +1751,16 @@
           "default": 0
         }
       },
-      "indexes": {},
+      "indexes": {
+        "idx_cached_items_type": {
+          "name": "idx_cached_items_type",
+          "columns": [
+            "type",
+            "item_id"
+          ],
+          "isUnique": false
+        }
+      },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
@@ -2585,6 +2603,23 @@
           "name": "idx_cached_songs_album_id",
           "columns": [
             "album_id"
+          ],
+          "isUnique": false
+        },
+        "idx_cached_songs_sort_title": {
+          "name": "idx_cached_songs_sort_title",
+          "columns": [
+            "sort_title",
+            "song_id"
+          ],
+          "isUnique": false
+        },
+        "idx_cached_songs_sort_artist": {
+          "name": "idx_cached_songs_sort_artist",
+          "columns": [
+            "sort_artist",
+            "sort_title",
+            "song_id"
           ],
           "isUnique": false
         }
@@ -6283,6 +6318,14 @@
           "notNull": true,
           "autoincrement": false
         },
+        "is_user_queue": {
+          "name": "is_user_queue",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
         "song_id": {
           "name": "song_id",
           "type": "text",
@@ -7176,6 +7219,14 @@
           "name": "idx_scrobble_events_hour",
           "columns": [
             "hour"
+          ],
+          "isUnique": false
+        },
+        "idx_scrobble_events_song_time": {
+          "name": "idx_scrobble_events_song_time",
+          "columns": [
+            "song_id",
+            "\"time\" desc"
           ],
           "isUnique": false
         }
@@ -8288,6 +8339,14 @@
     "columns": {}
   },
   "internal": {
-    "indexes": {}
+    "indexes": {
+      "idx_scrobble_events_song_time": {
+        "columns": {
+          "\"time\" desc": {
+            "isExpression": true
+          }
+        }
+      }
+    }
   }
 }

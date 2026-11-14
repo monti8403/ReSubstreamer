@@ -16,7 +16,6 @@ import { BannerStack } from '../../components/BannerStack';
 import { BottomChrome } from '../../components/BottomChrome';
 import { GradientBackground } from '../../components/GradientBackground';
 import { SearchableHeader } from '../../components/SearchableHeader';
-import { SearchResultsOverlay } from '../../components/SearchResultsOverlay';
 import { useTheme } from '../../hooks/useTheme';
 import { searchStore } from '../../store/searchStore';
 
@@ -112,7 +111,6 @@ export default function TabLayout() {
           }}
         />
       </Tabs>
-      <SearchResultsOverlay />
     </GradientBackground>
   );
 }

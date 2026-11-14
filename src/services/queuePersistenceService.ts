@@ -11,6 +11,7 @@
 // different track zeroes it.
 import {
   deleteSnapshot,
+  readSnapshotAsync,
   readSnapshotSync,
   replaceSnapshotTracks,
   updateSnapshotIndex,
@@ -35,6 +36,7 @@ const QUEUE_DEBOUNCE_MS = 1500;
 interface PersistedQueue {
   queue: Child[];
   currentTrackIndex: number;
+  userQueueTrackIds?: string[];
 }
 
 interface PersistedPosition {
@@ -50,6 +52,7 @@ let liveQueue: Child[] = [];
 let liveIndex = 0;
 let livePosition = 0;
 let livePositionTrackId: string | null = null;
+let liveUserQueueTrackIds: string[] = [];
 /** True once memory is authoritative — after the first read or any write. */
 let liveLoaded = false;
 /** True while a queue change is waiting on the debounce, i.e. the song rows are
@@ -58,17 +61,43 @@ let queueDirty = false;
 
 let lastPositionPersistTime = 0;
 let queueTimer: ReturnType<typeof setTimeout> | null = null;
+let loadInFlight: Promise<void> | null = null;
+let liveWriteGeneration = 0;
 
-/** Seed memory from the stored row, once per process — the cold-start restore. */
-function ensureLoaded(): void {
-  if (liveLoaded) return;
-  liveLoaded = true;
-  const snapshot = readSnapshotSync(SNAPSHOT_LIVE_ID);
+function applyLoadedSnapshot(snapshot: Awaited<ReturnType<typeof readSnapshotAsync>>): void {
   if (snapshot === null || snapshot.tracks.length === 0) return;
   liveQueue = snapshot.tracks;
   liveIndex = Math.min(Math.max(0, snapshot.currentIndex), snapshot.tracks.length - 1);
   livePosition = snapshot.positionSec ?? 0;
   livePositionTrackId = liveQueue[liveIndex]?.id ?? null;
+  liveUserQueueTrackIds = snapshot.userQueueTrackIds ?? [];
+}
+
+/** Seed memory asynchronously from the stored row once per process — avoids blocking JS at boot. */
+async function ensureLoadedAsync(): Promise<void> {
+  if (liveLoaded) return;
+  if (loadInFlight) {
+    await loadInFlight;
+    return;
+  }
+  const genAtStart = liveWriteGeneration;
+  const run = (async () => {
+    const snapshot = await readSnapshotAsync(SNAPSHOT_LIVE_ID);
+    if (liveWriteGeneration !== genAtStart) return;
+    liveLoaded = true;
+    applyLoadedSnapshot(snapshot);
+  })().finally(() => {
+    loadInFlight = null;
+  });
+  loadInFlight = run;
+  await run;
+}
+
+/** Seed memory synchronously from the stored row, once per process. */
+function ensureLoaded(): void {
+  if (liveLoaded) return;
+  liveLoaded = true;
+  applyLoadedSnapshot(readSnapshotSync(SNAPSHOT_LIVE_ID));
 }
 
 /**
@@ -77,6 +106,7 @@ function ensureLoaded(): void {
  */
 function setCursor(queue: Child[], index: number): void {
   const previousTrackId = liveQueue[liveIndex]?.id;
+  liveWriteGeneration += 1;
   liveLoaded = true;
   liveQueue = queue;
   liveIndex = index;
@@ -101,6 +131,7 @@ function flushQueueWrite(): void {
   if (!queueDirty) return;
   queueDirty = false;
   const tracks = liveQueue;
+  const userQueueIds = liveUserQueueTrackIds;
   const meta = {
     id: SNAPSHOT_LIVE_ID,
     kind: 'live' as const,
@@ -111,7 +142,7 @@ function flushQueueWrite(): void {
   };
   void (async () => {
     await upsertSnapshot(meta);
-    await replaceSnapshotTracks(SNAPSHOT_LIVE_ID, tracks);
+    await replaceSnapshotTracks(SNAPSHOT_LIVE_ID, tracks, userQueueIds);
   })();
 }
 
@@ -121,8 +152,13 @@ function flushQueueWrite(): void {
 
 /** Record a queue CHANGE — tracks added, removed, reordered or replaced. Rewrites
  *  every song row, so it is debounced; readers see the new queue immediately. */
-export function persistQueue(queue: Child[], currentTrackIndex: number): void {
+export function persistQueue(
+  queue: Child[],
+  currentTrackIndex: number,
+  userQueueTrackIds: readonly string[] = [],
+): void {
   setCursor(queue, currentTrackIndex);
+  liveUserQueueTrackIds = userQueueTrackIds.slice();
   queueDirty = true;
   clearQueueTimer();
   queueTimer = setTimeout(flushQueueWrite, QUEUE_DEBOUNCE_MS);
@@ -156,6 +192,7 @@ function clampPersistedPosition(position: number, duration?: number): number {
 }
 
 function setPosition(position: number, trackId: string, duration?: number): void {
+  liveWriteGeneration += 1;
   liveLoaded = true;
   livePosition = clampPersistedPosition(position, duration);
   livePositionTrackId = trackId;
@@ -190,11 +227,13 @@ export function clearPersistedQueue(): void {
   // Cancel any pending queue write so it can't land after the removal.
   clearQueueTimer();
   queueDirty = false;
+  liveWriteGeneration += 1;
   liveLoaded = true;
   liveQueue = [];
   liveIndex = 0;
   livePosition = 0;
   livePositionTrackId = null;
+  liveUserQueueTrackIds = [];
   lastPositionPersistTime = 0;
   void deleteSnapshot(SNAPSHOT_LIVE_ID);
 }
@@ -203,15 +242,35 @@ export function clearPersistedQueue(): void {
 /*  Reads                                                              */
 /* ------------------------------------------------------------------ */
 
+function buildPersistedQueueResult(): PersistedQueue | null {
+  if (liveQueue.length === 0) return null;
+  return {
+    queue: liveQueue,
+    currentTrackIndex: liveIndex,
+    ...(liveUserQueueTrackIds.length > 0 ? { userQueueTrackIds: liveUserQueueTrackIds } : {}),
+  };
+}
+
+/** Asynchronous queue restore off the JS thread via `readSnapshotAsync`. */
+export async function getPersistedQueueAsync(): Promise<PersistedQueue | null> {
+  await ensureLoadedAsync();
+  return buildPersistedQueueResult();
+}
+
+/** Asynchronous resume position restore via `readSnapshotAsync`. */
+export async function getPersistedPositionAsync(): Promise<PersistedPosition | null> {
+  await ensureLoadedAsync();
+  if (livePositionTrackId === null) return null;
+  return { position: livePosition, trackId: livePositionTrackId };
+}
+
 /**
- * The queue to restore, SYNCHRONOUSLY — `restorePersistedQueue` seeds the store on
- * the JS thread so the mini player paints immediately. The `Child` objects are whole:
- * a restored queue becomes the scrobble write path's source.
+ * The queue to restore, SYNCHRONOUSLY. Prefer {@link getPersistedQueueAsync} on
+ * startup paths so large queues never block the JS thread.
  */
 export function getPersistedQueue(): PersistedQueue | null {
   ensureLoaded();
-  if (liveQueue.length === 0) return null;
-  return { queue: liveQueue, currentTrackIndex: liveIndex };
+  return buildPersistedQueueResult();
 }
 
 /** The resume position and the track it was measured on. */

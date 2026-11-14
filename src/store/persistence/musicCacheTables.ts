@@ -634,69 +634,6 @@ export function addColumnIfMissing(
 }
 
 /* ------------------------------------------------------------------ */
-/*  Hydrate                                                            */
-/* ------------------------------------------------------------------ */
-
-/**
- * Read all cached song rows into a Record keyed by song_id. Used once at
- * launch to populate the store's in-memory mirror.
- */
-export function hydrateCachedSongs(): Record<string, CachedSongRow> {
-  const db = getDb();
-  if (db === null) return {};
-  try {
-    const rows = db.getAllSync<RawSongRow>(
-      `SELECT song_id, title, artist, album, album_id, cover_art, bytes,
-              duration, suffix, bit_rate, bit_depth, sampling_rate,
-              format_captured_at, downloaded_at
-         FROM cached_songs;`,
-    );
-    const out: Record<string, CachedSongRow> = {};
-    for (const row of rows) {
-      if (!row.song_id) continue;
-      out[row.song_id] = mapSongRow(row);
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-/**
- * Read all cached items with their songId arrays joined in position order.
- * Implemented as two queries + merge in JS (simpler than GROUP_CONCAT).
- */
-export function hydrateCachedItems(): Record<string, CachedItemRow> {
-  const db = getDb();
-  if (db === null) return {};
-  try {
-    const items = db.getAllSync<RawItemRow>(
-      `SELECT item_id, type, name, artist, cover_art_id, expected_song_count,
-              parent_album_id, last_sync_at, downloaded_at, derived
-         FROM cached_items;`,
-    );
-    const edges = db.getAllSync<{ item_id: string; song_id: string }>(
-      'SELECT item_id, song_id FROM cached_item_songs ORDER BY item_id, position ASC;',
-    );
-    const edgesByItem = new Map<string, string[]>();
-    for (const edge of edges) {
-      const list = edgesByItem.get(edge.item_id);
-      if (list) list.push(edge.song_id);
-      else edgesByItem.set(edge.item_id, [edge.song_id]);
-    }
-    const out: Record<string, CachedItemRow> = {};
-    for (const row of items) {
-      if (!row.item_id) continue;
-      const songIds = edgesByItem.get(row.item_id) ?? [];
-      out[row.item_id] = mapItemRow(row, songIds);
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-/* ------------------------------------------------------------------ */
 /*  Async hydrate (boot path — off the JS thread)                      */
 /* ------------------------------------------------------------------ */
 
@@ -1723,6 +1660,49 @@ export function readQueuedSongStatus(songId: string): 'queued' | 'downloading' |
   } catch {
     return null;
   }
+}
+
+const ACTIVE_QUEUED_SONG_MAP_SQL = `SELECT s.queue_id AS queue_id, s.song_id AS song_id, q.status AS status
+     FROM download_queue_songs s
+     JOIN download_queue q ON q.queue_id = s.queue_id
+    WHERE q.status IN ('queued', 'downloading')
+    ORDER BY q.queue_position;`;
+
+/**
+ * Bulk-load the active `'queued' | 'downloading'` song-status lookup and per-queueId
+ * song-ID lists on a background op-SQLite thread during store hydration, so UI row
+ * selectors read from RAM in O(1) without ever running synchronous SQLite queries.
+ */
+export async function readActiveQueuedSongMapAsync(): Promise<{
+  statuses: Record<string, 'queued' | 'downloading'>;
+  byQueueId: Map<string, string[]>;
+}> {
+  const db = getDb();
+  const statuses: Record<string, 'queued' | 'downloading'> = {};
+  const byQueueId = new Map<string, string[]>();
+  if (db === null) return { statuses, byQueueId };
+  try {
+    const rows = await db.getAllAsync<{
+      queue_id: string;
+      song_id: string;
+      status: string;
+    }>(ACTIVE_QUEUED_SONG_MAP_SQL);
+    for (const r of rows) {
+      if (r.status !== 'queued' && r.status !== 'downloading') continue;
+      if (statuses[r.song_id] === undefined) {
+        statuses[r.song_id] = r.status;
+      }
+      let ids = byQueueId.get(r.queue_id);
+      if (!ids) {
+        ids = [];
+        byQueueId.set(r.queue_id, ids);
+      }
+      ids.push(r.song_id);
+    }
+  } catch {
+    /* best-effort */
+  }
+  return { statuses, byQueueId };
 }
 
 /**

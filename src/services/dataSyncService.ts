@@ -336,7 +336,7 @@ async function startupOrResumeFlow(): Promise<void> {
         // surface any new albums + their songs. Detect errors are swallowed — fire
         // the song sync either way.
         fireAndForget(
-          detectChanges().then((result) => {
+          detectChanges({ reuseFreshRecentlyAdded: true }).then((result) => {
             if (result.changedAlbumIds.length > 0) {
               // Hand the already-computed result to onScanCompleted so it
               // doesn't re-run detectChanges against now-spent markers (which
@@ -602,7 +602,9 @@ let detectChangesInFlight: Promise<{
   newestAlbums: AlbumID3[];
 }> | null = null;
 
-export function detectChanges(): Promise<{
+export function detectChanges(options?: {
+  reuseFreshRecentlyAdded?: boolean;
+}): Promise<{
   changedAlbumIds: string[];
   newestAlbums: AlbumID3[];
 }> {
@@ -612,13 +614,15 @@ export function detectChanges(): Promise<{
   // Coalesce concurrent callers onto a single probe and hand every one the SAME
   // result. A loser that returned empty would mask the changes the winner found.
   if (detectChangesInFlight) return detectChangesInFlight;
-  detectChangesInFlight = runDetectChanges().finally(() => {
+  detectChangesInFlight = runDetectChanges(options).finally(() => {
     detectChangesInFlight = null;
   });
   return detectChangesInFlight;
 }
 
-async function runDetectChanges(): Promise<{
+async function runDetectChanges(options?: {
+  reuseFreshRecentlyAdded?: boolean;
+}): Promise<{
   changedAlbumIds: string[];
   newestAlbums: AlbumID3[];
 }> {
@@ -642,10 +646,22 @@ async function runDetectChanges(): Promise<{
       primaryTriggered = scanTimeChanged || countChanged;
     }
 
-    // Fallback probe — we also run this even when primary was triggered, so
-    // we can collect the actual new IDs. One `getRecentlyAddedAlbums` call is
-    // cheap and uniform across servers.
-    const newest: AlbumID3[] = await getRecentlyAddedAlbums(50);
+    // Fallback probe — reuse `albumListsStore.recentlyAdded` when it was just
+    // refreshed at boot (within 10s) so startup doesn't fire a duplicate
+    // `getRecentlyAddedAlbums` network request.
+    const albumListsState = albumListsStore.getState();
+    const recentlyAdded = albumListsState?.recentlyAdded;
+    const lastRefreshedAt = albumListsState?.lastRefreshedAt;
+    const recentlyUpdatedFresh =
+      options?.reuseFreshRecentlyAdded === true &&
+      Array.isArray(recentlyAdded) &&
+      recentlyAdded.length > 0 &&
+      typeof lastRefreshedAt === 'number' &&
+      lastRefreshedAt > 0 &&
+      Date.now() - lastRefreshedAt < 10_000;
+    const newest: AlbumID3[] = recentlyUpdatedFresh
+      ? recentlyAdded
+      : await getRecentlyAddedAlbums(50);
     const changedAlbumIds: string[] = [];
 
     if (newest.length > 0) {

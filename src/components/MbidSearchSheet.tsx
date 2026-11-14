@@ -215,16 +215,12 @@ export function MbidSearchSheet() {
 
       if (type === 'artist') {
         await runWithOverlay(() => fetchArtistBio(entityId, { reresolve: true }), {
-          loading: t('updatingArtist'),
-          success: t('mbidOverrideSaved'),
           error: t('failedToUpdateArtist'),
         });
         // The refetch dual-wrote fresh normalized detail — tell an open artist screen to re-read.
         bumpDetailChanged('artist', entityId);
       } else {
         await runWithOverlay(() => albumInfoStore.getState().fetchAlbumInfo(entityId), {
-          loading: t('updatingAlbum'),
-          success: t('mbidOverrideSaved'),
           error: t('failedToUpdateAlbum'),
         });
       }

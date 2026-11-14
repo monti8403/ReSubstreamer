@@ -65,20 +65,42 @@ async function candidates<R extends { id: string }>(
       out.push(r);
     }
   };
-  const order = `ORDER BY length(${cfg.exactCol}), "id"`;
   const base = `SELECT ${cfg.columns} FROM "${cfg.table}"`;
   try {
-    push(await db.getAllAsync<R>(`${base} WHERE ${cfg.exactCol} = ? ${order} LIMIT ${CAP_EXACT}`, [norm]));
-    push(
-      await db.getAllAsync<R>(`${base} WHERE ${cfg.exactCol} LIKE ? ${order} LIMIT ${CAP_PREFIX}`, [`${norm}%`]),
-    );
-    const infix = infixClause(cfg.normCols, tokens);
-    if (infix) {
-      push(await db.getAllAsync<R>(`${base} WHERE ${infix.sql} ${order} LIMIT ${CAP_INFIX}`, infix.params));
-    }
-    const phon = infixClause(cfg.dmetaCols, dmetaTokens);
-    if (phon) {
-      push(await db.getAllAsync<R>(`${base} WHERE ${phon.sql} ${order} LIMIT ${CAP_PHONETIC}`, phon.params));
+    const [exactRows, prefixRows] = await Promise.all([
+      db.getAllAsync<R>(
+        `${base} WHERE ${cfg.exactCol} = ? ORDER BY "id" LIMIT ${CAP_EXACT}`,
+        [norm],
+      ),
+      db.getAllAsync<R>(
+        `${base} WHERE ${cfg.exactCol} LIKE ? ORDER BY ${cfg.exactCol}, "id" LIMIT ${CAP_PREFIX}`,
+        [`${norm}%`],
+      ),
+    ]);
+    push(exactRows);
+    push(prefixRows);
+
+    // Skip expensive full-scan infix/phonetic LIKE '%...%' queries when the
+    // indexed exact + prefix tiers already yielded a full candidate batch.
+    if (out.length < CAP_EXACT) {
+      const infix = infixClause(cfg.normCols, tokens);
+      const phon = infixClause(cfg.dmetaCols, dmetaTokens);
+      const [infixRows, phonRows] = await Promise.all([
+        infix
+          ? db.getAllAsync<R>(
+              `${base} WHERE ${infix.sql} ORDER BY "id" LIMIT ${CAP_INFIX}`,
+              infix.params,
+            )
+          : Promise.resolve([] as R[]),
+        phon
+          ? db.getAllAsync<R>(
+              `${base} WHERE ${phon.sql} ORDER BY "id" LIMIT ${CAP_PHONETIC}`,
+              phon.params,
+            )
+          : Promise.resolve([] as R[]),
+      ]);
+      push(infixRows);
+      push(phonRows);
     }
     // Inside the same best-effort guard: a hydration failure must degrade the rows'
     // fidelity, never fail the search.

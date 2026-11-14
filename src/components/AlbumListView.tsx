@@ -1,5 +1,5 @@
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
-import { useEffect, useCallback, useMemo, useRef } from 'react';
+import { memo, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -43,12 +43,18 @@ export const albumIdentity = (album: AlbumID3): AlbumID3 => album;
  * appending a page converts the appended rows only — the accumulated array is never
  * re-mapped, and the screen holds no second array of envelopes.
  */
-function AlbumListItem<T>({ item, toAlbum }: { item: T; toAlbum: (item: T) => AlbumID3 }) {
+const AlbumListItem = memo(function AlbumListItem<T>({
+  item,
+  toAlbum,
+}: {
+  item: T;
+  toAlbum: (item: T) => AlbumID3;
+}) {
   const album = useMemo(() => toAlbum(item), [item, toAlbum]);
   return <AlbumRow album={album} />;
-}
+}) as <T>(props: { item: T; toAlbum: (item: T) => AlbumID3 }) => ReactNode;
 
-function AlbumGridItem<T>({
+const AlbumGridItem = memo(function AlbumGridItem<T>({
   item,
   toAlbum,
   index,
@@ -66,7 +72,12 @@ function AlbumGridItem<T>({
       <AlbumCard album={album} />
     </View>
   );
-}
+}) as <T>(props: {
+  item: T;
+  toAlbum: (item: T) => AlbumID3;
+  index: number;
+  columns: number;
+}) => ReactNode;
 
 /* ------------------------------------------------------------------ */
 /*  AlbumListView                                                     */

@@ -211,7 +211,7 @@ export function AddToPlaylistSheet() {
 
           void refreshPlaylistLibrary();
         },
-        { loading: t('adding'), success: t('addedToPlaylist'), error: t('failedToAddToPlaylist') },
+        { error: t('failedToAddToPlaylist') },
       );
     },
     [target, busy, handleClose],

@@ -133,7 +133,6 @@ describe('PlayerPhoneMini', () => {
       queueLoading: false,
       currentTrackIndex: 0,
       queue: [mockTrack, { ...mockTrack, id: 'track-2', title: 'Next Song' }],
-      playbackHistory: [],
       error: null,
     });
     playbackSettingsStore.setState({

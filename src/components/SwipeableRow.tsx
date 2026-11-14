@@ -90,6 +90,8 @@ export interface SwipeableRowProps {
   disabled?: boolean;
   /** When true, renders smaller action discs and typography suited for compact rows. */
   compact?: boolean;
+  /** Preset dimensions for swipe action buttons. Overrides `compact` when set. */
+  actionSize?: 'default' | 'queue' | 'compact';
   /** Horizontal drag distance (in points) required to activate the swipe. Defaults to 20. */
   dragOffset?: number;
   children: React.ReactNode;
@@ -99,12 +101,11 @@ export interface SwipeableRowProps {
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
 
-const ACTION_WIDTH = 74;
-const ACTION_WIDTH_COMPACT = 60;
-const ICON_SIZE = 22;
-const ICON_SIZE_COMPACT = 18;
-const ICON_DISC_SIZE = 46;
-const ICON_DISC_SIZE_COMPACT = 34;
+const ACTION_METRICS = {
+  default: { width: 74, discSize: 46, iconSize: 22, fontSize: 12, gap: 4 },
+  queue: { width: 64, discSize: 36, iconSize: 18, fontSize: 11, gap: 3 },
+  compact: { width: 60, discSize: 34, iconSize: 18, fontSize: 10, gap: 2 },
+} as const;
 
 /** Progress threshold beyond which a swipe counts as "full" (1.5x action panel width). */
 const FULL_SWIPE_PROGRESS_THRESHOLD = 1.5;
@@ -137,26 +138,26 @@ export const SwipeableRow = memo(function SwipeableRow({
   onPress,
   disabled = false,
   compact = false,
+  actionSize,
   dragOffset,
   children,
 }: SwipeableRowProps) {
+  const resolvedActionSize = actionSize ?? (compact ? 'compact' : 'default');
   const { colors } = useTheme();
   const effectiveRestingBg = restingBackgroundColor ?? colors.card;
   const swipeableRef = useRef<SwipeableMethods>(null);
   const isOpenRef = useRef(false);
   const pendingFullSwipeCloseRef = useRef(false);
+  const pendingFullSwipeActionRef = useRef<SwipeAction | null>(null);
+  const pendingFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const hasRight = rightActions.length > 0;
   const hasLeft = leftActions.length > 0;
 
-  // SharedValues for UI-thread operations (haptic, icon pop) – race-free
+  // SharedValues for UI-thread operations (haptic, icon pop, swipe bg) – race-free & 0 runOnJS per frame
   const fullSwipeRightTriggered = useSharedValue(false);
   const fullSwipeLeftTriggered = useSharedValue(false);
-
-  // RN core Animated value for swipe background reveal — bridged from
-  // Reanimated's progress SharedValue via ActionPanel, so it stays off
-  // Reanimated's shadow-tree commit-hook walk.
-  const swipeBgOpacity = useRef(new RNAnimated.Value(0)).current;
+  const swipeProgress = useSharedValue(0);
 
   // JS refs for JS-thread reads (callbacks) – set via runOnJS to guarantee ordering
   const fullSwipeRightRef = useRef(false);
@@ -170,10 +171,16 @@ export const SwipeableRow = memo(function SwipeableRow({
     fullSwipeLeftRef.current = v;
   }, []);
 
-  const updateSwipeBgOpacity = useCallback((progress: number) => {
-    // Map progress 0→0.5 to opacity 0→1, clamped at 1
-    swipeBgOpacity.setValue(Math.min(1, progress * 2));
-  }, [swipeBgOpacity]);
+  const clearFallbackTimer = useCallback(() => {
+    if (pendingFallbackTimerRef.current !== null) {
+      clearTimeout(pendingFallbackTimerRef.current);
+      pendingFallbackTimerRef.current = null;
+    }
+  }, []);
+
+  const swipeBgAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: Math.min(1, swipeProgress.value * 2),
+  }));
 
   /* ---- Swipeable event handlers ---- */
 
@@ -184,6 +191,15 @@ export const SwipeableRow = memo(function SwipeableRow({
     }
   }, []);
 
+  const triggerPendingAction = useCallback(() => {
+    clearFallbackTimer();
+    const pending = pendingFullSwipeActionRef.current;
+    if (pending) {
+      pendingFullSwipeActionRef.current = null;
+      pending.onPress();
+    }
+  }, [clearFallbackTimer]);
+
   const handleSwipeableWillOpen = useCallback(
     (direction: 'left' | 'right') => {
       if (
@@ -193,15 +209,22 @@ export const SwipeableRow = memo(function SwipeableRow({
       ) {
         fullSwipeRightRef.current = false;
         const action = rightActions[0];
-        action?.onPress();
-        if (!action?.removesRow) {
+        if (!action) return;
+        pendingFullSwipeActionRef.current = action;
+        if (!action.removesRow) {
           pendingFullSwipeCloseRef.current = true;
-          setTimeout(() => {
-            if (pendingFullSwipeCloseRef.current) {
-              pendingFullSwipeCloseRef.current = false;
-              swipeableRef.current?.close();
-            }
+          clearFallbackTimer();
+          pendingFallbackTimerRef.current = setTimeout(() => {
+            pendingFullSwipeCloseRef.current = false;
+            swipeableRef.current?.close();
+            triggerPendingAction();
           }, FULL_SWIPE_CLOSE_TIMEOUT);
+        } else {
+          clearFallbackTimer();
+          pendingFallbackTimerRef.current = setTimeout(
+            triggerPendingAction,
+            FULL_SWIPE_CLOSE_TIMEOUT,
+          );
         }
         return;
       }
@@ -212,50 +235,78 @@ export const SwipeableRow = memo(function SwipeableRow({
       ) {
         fullSwipeLeftRef.current = false;
         const action = leftActions[leftActions.length - 1];
-        action?.onPress();
-        if (!action?.removesRow) {
+        if (!action) return;
+        pendingFullSwipeActionRef.current = action;
+        if (!action.removesRow) {
           pendingFullSwipeCloseRef.current = true;
-          setTimeout(() => {
-            if (pendingFullSwipeCloseRef.current) {
-              pendingFullSwipeCloseRef.current = false;
-              swipeableRef.current?.close();
-            }
+          clearFallbackTimer();
+          pendingFallbackTimerRef.current = setTimeout(() => {
+            pendingFullSwipeCloseRef.current = false;
+            swipeableRef.current?.close();
+            triggerPendingAction();
           }, FULL_SWIPE_CLOSE_TIMEOUT);
+        } else {
+          clearFallbackTimer();
+          pendingFallbackTimerRef.current = setTimeout(
+            triggerPendingAction,
+            FULL_SWIPE_CLOSE_TIMEOUT,
+          );
         }
       }
     },
-    [enableFullSwipeRight, enableFullSwipeLeft, rightActions, leftActions],
+    [
+      enableFullSwipeRight,
+      enableFullSwipeLeft,
+      rightActions,
+      leftActions,
+      clearFallbackTimer,
+      triggerPendingAction,
+    ],
   );
 
   useEffect(() => {
     return () => {
+      clearFallbackTimer();
       pendingFullSwipeCloseRef.current = false;
+      pendingFullSwipeActionRef.current = null;
       if (_activeRef === swipeableRef.current) {
         _activeRef = null;
       }
     };
-  }, []);
+  }, [clearFallbackTimer]);
 
   const handleSwipeableOpen = useCallback(() => {
+    clearFallbackTimer();
+    const pending = pendingFullSwipeActionRef.current;
     if (pendingFullSwipeCloseRef.current) {
       pendingFullSwipeCloseRef.current = false;
       swipeableRef.current?.close();
+      // Wait for handleSwipeableClose to run non-removing mutations (e.g. moveQueueItemToUserQueue)
+      // so row reorder animations never fight the swipe spring.
+      if (pending) {
+        pendingFallbackTimerRef.current = setTimeout(triggerPendingAction, 260);
+      }
+      return;
+    }
+    if (pending?.removesRow) {
+      triggerPendingAction();
       return;
     }
     isOpenRef.current = true;
     _activeRef = swipeableRef.current;
-  }, []);
+  }, [clearFallbackTimer, triggerPendingAction]);
 
   const handleSwipeableClose = useCallback(() => {
     isOpenRef.current = false;
     fullSwipeRightRef.current = false;
     fullSwipeLeftRef.current = false;
     pendingFullSwipeCloseRef.current = false;
-    swipeBgOpacity.setValue(0);
+    swipeProgress.value = 0;
     if (_activeRef === swipeableRef.current) {
       _activeRef = null;
     }
-  }, [swipeBgOpacity]);
+    triggerPendingAction();
+  }, [swipeProgress, triggerPendingAction]);
 
   /* ---- Tap / long-press handlers ---- */
 
@@ -321,16 +372,16 @@ export const SwipeableRow = memo(function SwipeableRow({
       <ActionPanel
         actions={rightActions}
         progress={progress}
+        swipeProgress={swipeProgress}
         methods={methods}
         enableFullSwipe={enableFullSwipeRight}
         fullSwipeActionIndex={0}
         fullSwipeTriggered={fullSwipeRightTriggered}
         onFullSwipeChange={setFullSwipeRight}
-        onProgressChange={updateSwipeBgOpacity}
-        compact={compact}
+        actionSize={resolvedActionSize}
       />
     ),
-    [rightActions, enableFullSwipeRight, fullSwipeRightTriggered, setFullSwipeRight, updateSwipeBgOpacity, compact],
+    [rightActions, enableFullSwipeRight, fullSwipeRightTriggered, setFullSwipeRight, swipeProgress, resolvedActionSize],
   );
 
   // renderRightActions = shown when swiping LEFT = our leftActions
@@ -344,16 +395,16 @@ export const SwipeableRow = memo(function SwipeableRow({
       <ActionPanel
         actions={leftActions}
         progress={progress}
+        swipeProgress={swipeProgress}
         methods={methods}
         enableFullSwipe={enableFullSwipeLeft}
         fullSwipeActionIndex={leftActions.length - 1}
         fullSwipeTriggered={fullSwipeLeftTriggered}
         onFullSwipeChange={setFullSwipeLeft}
-        onProgressChange={updateSwipeBgOpacity}
-        compact={compact}
+        actionSize={resolvedActionSize}
       />
     ),
-    [leftActions, enableFullSwipeLeft, fullSwipeLeftTriggered, setFullSwipeLeft, updateSwipeBgOpacity, compact],
+    [leftActions, enableFullSwipeLeft, fullSwipeLeftTriggered, setFullSwipeLeft, swipeProgress, resolvedActionSize],
   );
 
   const swipeContainerStyle = useMemo(
@@ -404,8 +455,8 @@ export const SwipeableRow = memo(function SwipeableRow({
           {effectiveRestingBg !== 'transparent' && (
             <View style={[styles.swipeBg, { backgroundColor: effectiveRestingBg }]} />
           )}
-          <RNAnimated.View
-            style={[styles.swipeBg, { backgroundColor: colors.inputBg, opacity: swipeBgOpacity }]}
+          <Animated.View
+            style={[styles.swipeBg, { backgroundColor: colors.inputBg }, swipeBgAnimatedStyle]}
           />
           {children}
         </RNAnimated.View>
@@ -418,38 +469,39 @@ export const SwipeableRow = memo(function SwipeableRow({
 /*  ActionPanel – row of action buttons behind the swiped content      */
 /* ------------------------------------------------------------------ */
 
+type ResolvedActionSize = 'default' | 'queue' | 'compact';
+
 interface ActionPanelProps {
   actions: SwipeAction[];
   progress: SharedValue<number>;
+  swipeProgress: SharedValue<number>;
   methods: SwipeableMethods;
   enableFullSwipe: boolean;
   /** Which action index receives the pop animation on full swipe. */
   fullSwipeActionIndex: number;
   fullSwipeTriggered: SharedValue<boolean>;
   onFullSwipeChange: (triggered: boolean) => void;
-  /** Called from the UI thread (via runOnJS) with current progress value. */
-  onProgressChange: (progress: number) => void;
-  compact?: boolean;
+  actionSize: ResolvedActionSize;
 }
 
 function ActionPanel({
   actions,
   progress,
+  swipeProgress,
   methods,
   enableFullSwipe,
   fullSwipeActionIndex,
   fullSwipeTriggered,
   onFullSwipeChange,
-  onProgressChange,
-  compact,
+  actionSize,
 }: ActionPanelProps) {
   const iconPopScale = useSharedValue(1);
 
-  // Bridge Reanimated progress → JS callback for RN core Animated swipe bg
+  // Keep swipe background progress strictly on the UI thread (zero runOnJS calls per frame).
   useAnimatedReaction(
     () => progress.value,
     (current) => {
-      runOnJS(onProgressChange)(current);
+      swipeProgress.value = current;
     },
   );
 
@@ -492,7 +544,7 @@ function ActionPanel({
           progress={progress}
           methods={methods}
           popScale={enableFullSwipe && index === fullSwipeActionIndex ? iconPopScale : undefined}
-          compact={compact}
+          actionSize={actionSize}
         />
       ))}
     </View>
@@ -508,7 +560,7 @@ interface ActionButtonProps {
   progress: SharedValue<number>;
   methods: SwipeableMethods;
   popScale?: SharedValue<number>;
-  compact?: boolean;
+  actionSize: ResolvedActionSize;
 }
 
 const ActionButton = memo(function ActionButton({
@@ -516,7 +568,7 @@ const ActionButton = memo(function ActionButton({
   progress,
   methods,
   popScale,
-  compact = false,
+  actionSize,
 }: ActionButtonProps) {
   const discStyle = useAnimatedStyle(() => {
     const baseScale = interpolate(
@@ -541,35 +593,41 @@ const ActionButton = memo(function ActionButton({
     methods.close();
   }, [action, methods]);
 
-  const discSize = compact ? ICON_DISC_SIZE_COMPACT : ICON_DISC_SIZE;
-  const iconSize = compact ? ICON_SIZE_COMPACT : ICON_SIZE;
+  const metrics = ACTION_METRICS[actionSize];
 
   return (
     <Pressable
       onPress={handlePress}
-      style={[styles.actionButton, compact && styles.actionButtonCompact]}
+      style={[
+        styles.actionButton,
+        { width: metrics.width, gap: metrics.gap },
+      ]}
     >
       <Animated.View
         style={[
           styles.iconDisc,
           {
             backgroundColor: action.color,
-            width: discSize,
-            height: discSize,
-            borderRadius: discSize / 2,
+            width: metrics.discSize,
+            height: metrics.discSize,
+            borderRadius: metrics.discSize / 2,
           },
           discStyle,
         ]}
       >
         {action.iconFamily === 'mdi' ? (
-          <MaterialCommunityIcons name={action.icon as MaterialCommunityIconsName} size={iconSize} color="#fff" />
+          <MaterialCommunityIcons name={action.icon as MaterialCommunityIconsName} size={metrics.iconSize} color="#fff" />
         ) : (
-          <Ionicons name={action.icon as IoniconsName} size={iconSize} color="#fff" />
+          <Ionicons name={action.icon as IoniconsName} size={metrics.iconSize} color="#fff" />
         )}
       </Animated.View>
       {action.label != null && (
         <Animated.Text
-          style={[styles.actionLabel, compact && styles.actionLabelCompact, labelStyle]}
+          style={[
+            styles.actionLabel,
+            { fontSize: metrics.fontSize },
+            labelStyle,
+          ]}
           numberOfLines={1}
         >
           {action.label}
@@ -592,29 +650,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   actionButton: {
-    width: ACTION_WIDTH,
+    width: ACTION_METRICS.default.width,
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 4,
-  },
-  actionButtonCompact: {
-    width: ACTION_WIDTH_COMPACT,
-    gap: 2,
+    gap: ACTION_METRICS.default.gap,
   },
   iconDisc: {
-    width: ICON_DISC_SIZE,
-    height: ICON_DISC_SIZE,
-    borderRadius: ICON_DISC_SIZE / 2,
+    width: ACTION_METRICS.default.discSize,
+    height: ACTION_METRICS.default.discSize,
+    borderRadius: ACTION_METRICS.default.discSize / 2,
     justifyContent: 'center',
     alignItems: 'center',
   },
   actionLabel: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: ACTION_METRICS.default.fontSize,
     fontWeight: '600',
     letterSpacing: 0.1,
-  },
-  actionLabelCompact: {
-    fontSize: 10,
   },
 });

@@ -89,6 +89,7 @@ jest.mock('react-native-reanimated', () => {
     },
     useSharedValue: (init: number) => ({ value: init }),
     useAnimatedStyle: (fn: () => object) => fn(),
+    LinearTransition: { duration: () => ({}) },
     withTiming: (val: number) => val,
     withRepeat: (val: number) => val,
     withSpring: (val: number) => val,

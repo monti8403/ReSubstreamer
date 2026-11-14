@@ -58,7 +58,6 @@ import {
   type CacheBrowserFilter,
 } from '../store/persistence/imageCacheTable';
 import { isDbHealthy } from '../store/persistence/db';
-import { hydrateCachedItems, hydrateCachedSongs } from '../store/persistence/musicCacheTables';
 import { musicCacheStore } from '../store/musicCacheStore';
 import { layoutPreferencesStore } from '../store/layoutPreferencesStore';
 import {
@@ -2080,13 +2079,14 @@ function hydrateCachedItemsForRecache(): {
    */
   songCoverArtIds: string[];
 } {
-  const items = Object.values(hydrateCachedItems()).map((r) => ({
+  const { cachedItems, cachedSongs } = musicCacheStore.getState();
+  const items = Object.values(cachedItems).map((r) => ({
     type: r.type,
     coverArtId: r.coverArtId ?? null,
   }));
   const songCoverArtIds: string[] = [];
   const seen = new Set<string>();
-  for (const s of Object.values(hydrateCachedSongs())) {
+  for (const s of Object.values(cachedSongs)) {
     const id = resolveSongCoverArt(s);
     if (!id || seen.has(id)) continue;
     seen.add(id);

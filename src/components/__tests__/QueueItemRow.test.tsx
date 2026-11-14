@@ -104,6 +104,7 @@ describe('QueueItemRow', () => {
     );
 
     expect(mockCapturedProps.enableFullSwipeRight).toBe(true);
+    expect(mockCapturedProps.actionSize).toBe('queue');
     expect(mockCapturedProps.rightActions).toHaveLength(1);
     expect(mockCapturedProps.rightActions[0].icon).toBe('playlist-play');
 
@@ -188,5 +189,21 @@ describe('QueueItemRow', () => {
       />,
     );
     expect(queryByTestId('queue-item-drag-handle')).toBeNull();
+  });
+
+  it('respects explicit isInUserQueue prop without reading userQueueTrackIds from store', () => {
+    const track = makeTrack('s1');
+    render(
+      <QueueItemRow
+        track={track}
+        index={1}
+        isActive={false}
+        isInUserQueue={true}
+        colors={mockColors}
+        onPress={jest.fn()}
+      />,
+    );
+    expect(mockCapturedProps.enableFullSwipeRight).toBe(false);
+    expect(mockCapturedProps.rightActions).toHaveLength(0);
   });
 });

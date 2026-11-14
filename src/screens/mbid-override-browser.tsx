@@ -63,14 +63,10 @@ const OverrideRow = memo(function OverrideRow({
       // `reresolve`: the override just changed, so the resolution has to be redone even
       // though we already hold a bio.
       await runWithOverlay(() => fetchArtistBio(entityId, { reresolve: true }), {
-        loading: t('updatingArtist'),
-        success: t('artistUpdated'),
         error: t('failedToUpdateArtist'),
       });
     } else if (type === 'album' && db && (await getAlbumInfoRow(db, entityId)) != null) {
       await runWithOverlay(() => albumInfoStore.getState().fetchAlbumInfo(entityId), {
-        loading: t('updatingAlbum'),
-        success: t('albumUpdated'),
         error: t('failedToUpdateAlbum'),
       });
     }

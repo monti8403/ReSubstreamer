@@ -73,6 +73,7 @@ const mockScrobbleAnalytics = () => ({
     totalPlays: mockDbScrobbles.length,
     totalListeningSeconds: mockDbScrobbles.reduce((s, x) => s + (x.song?.duration ?? 0), 0),
     uniqueArtists: {} as Record<string, true>,
+    uniqueArtistCount: 0,
   },
   aggregates: {
     artistCounts: {},

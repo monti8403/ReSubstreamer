@@ -69,15 +69,6 @@ describe('ProcessingOverlay', () => {
     expect(screen.queryByTestId(BACKDROP)).toBeNull();
   });
 
-  it('renders nothing when status is processing or success (fullscreen loaders disabled)', () => {
-    render(<ProcessingOverlay />);
-    setStore({ status: 'processing', label: 'Loading' });
-    expect(screen.queryByTestId(BACKDROP)).toBeNull();
-
-    setStore({ status: 'success', label: 'Done' });
-    expect(screen.queryByTestId(BACKDROP)).toBeNull();
-  });
-
   it('renders non-blocking error toast when status is error', () => {
     render(<ProcessingOverlay />);
     setStore({ status: 'error', label: 'Failed to load songs' });

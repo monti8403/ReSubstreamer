@@ -10,18 +10,6 @@ afterEach(() => {
 });
 
 describe('processingOverlayStore', () => {
-  it('show is a no-op so fullscreen loaders never appear', () => {
-    processingOverlayStore.getState().show('Working...');
-    expect(processingOverlayStore.getState().status).toBe('idle');
-    expect(processingOverlayStore.getState().label).toBe('');
-  });
-
-  it('showSuccess is a no-op so success popups never appear', () => {
-    processingOverlayStore.getState().showSuccess('Done');
-    expect(processingOverlayStore.getState().status).toBe('idle');
-    expect(processingOverlayStore.getState().label).toBe('');
-  });
-
   it('showError sets error status and label', () => {
     processingOverlayStore.getState().showError('Failed');
     expect(processingOverlayStore.getState().status).toBe('error');
@@ -71,8 +59,6 @@ describe('processingOverlayStore', () => {
     it('runs task without blocking UI and returns result', async () => {
       const task = jest.fn().mockResolvedValue('success-data');
       const result = await runWithOverlay(task, {
-        loading: 'Loading...',
-        success: 'Done',
         error: 'Failed',
       });
 
@@ -84,8 +70,6 @@ describe('processingOverlayStore', () => {
     it('catches task error and triggers non-blocking showError toast', async () => {
       const task = jest.fn().mockRejectedValue(new Error('boom'));
       const result = await runWithOverlay(task, {
-        loading: 'Loading...',
-        success: 'Done',
         error: 'Failed to process',
       });
 

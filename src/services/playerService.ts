@@ -12,7 +12,10 @@
 import { AppState, Platform } from 'react-native';
 import i18n from '../i18n/i18n';
 import { getTrackPlayer, getEqualizer } from 'react-native-queue-player';
+import { setNativeSkipPreviousBehavior } from 'expo-move-to-back';
 import { whenPlayerReady } from './playerReadyState';
+import { getDb } from '../store/persistence/db';
+import { musicCacheStore } from '../store/musicCacheStore';
 
 import { type EffectiveFormat } from '../types/audio';
 import {
@@ -40,7 +43,9 @@ import {
   flushPosition,
   clearPersistedQueue,
   getPersistedQueue,
+  getPersistedQueueAsync,
   getPersistedPosition,
+  getPersistedPositionAsync,
 } from './queuePersistenceService';
 import {
   ensureCoverArtAuth,
@@ -77,12 +82,24 @@ function maybePromptFireBackgroundPlayback(): void {
 /* ------------------------------------------------------------------ */
 
 let isPlayerReady = false;
+let initPromise: Promise<void> | null = null;
 /** The Child[] backing the current native queue, indexed by position. */
 let currentChildQueue: Child[] = [];
 /** Tracks added manually by the user (User Queue), ordered by addition. */
 let userQueueTrackIds: string[] = [];
 /** Maps trackId → playlistId for tracks that originated from a playlist. */
 const trackPlaylistMap = new Map<string, string>();
+/** FIFO mutex serializing queue mutations across JS awaits and the native bridge. */
+let queueMutationTail: Promise<void> = Promise.resolve();
+
+function withQueueMutationLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = queueMutationTail;
+  let release!: () => void;
+  queueMutationTail = new Promise<void>((r) => {
+    release = r;
+  });
+  return prev.then(fn, fn).finally(release);
+}
 /**
  * In-flight promise for an async queue-rehydration after a cold-start restore.
  * Public entry points await this before touching the native queue so a user
@@ -121,16 +138,41 @@ function reportPlay(trackIndex: number): void {
  * both the UI boot AND the headless CarPlay/Siri boot.
  */
 export async function initPlayer(): Promise<void> {
-  await whenPlayerReady;
   if (isPlayerReady) return;
-  isPlayerReady = true;
+  if (initPromise) return initPromise;
 
-  // Lock-screen / notification skip buttons (track vs interval) from settings.
-  await updateRemoteCapabilities();
+  initPromise = (async () => {
+    await whenPlayerReady;
+    if (isPlayerReady) return;
 
-  // Apply persisted playback settings.
-  const settings = playbackSettingsStore.getState();
-  await tp.setRepeatMode(mapRepeatMode(settings.repeatMode));
+    // Ensure async KV-backed playback settings have hydrated before reading them
+    // on cold UI or headless widget starts, then re-apply skipPreviousBehavior natively.
+    const persistApi = (playbackSettingsStore as unknown as {
+      persist?: {
+        hasHydrated?: () => boolean;
+        onFinishHydration?: (cb: () => void) => () => void;
+      };
+    }).persist;
+    if (persistApi?.hasHydrated && !persistApi.hasHydrated() && persistApi.onFinishHydration) {
+      await new Promise<void>((resolve) => {
+        const unsub = persistApi.onFinishHydration!(() => {
+          unsub();
+          resolve();
+        });
+      });
+    }
+
+    isPlayerReady = true;
+
+    // Re-apply skip-previous behavior after KV hydration so native controls match the persisted pref.
+    const settings = playbackSettingsStore.getState();
+    setNativeSkipPreviousBehavior(settings.skipPreviousBehavior);
+
+    // Lock-screen / notification skip buttons (track vs interval) from settings.
+    await updateRemoteCapabilities();
+
+    // Apply persisted playback settings.
+    await tp.setRepeatMode(mapRepeatMode(settings.repeatMode));
   await tp.setPlaybackSpeed(settings.playbackRate);
   // Pitch correction (only effective at rate != 1x). RNQP defaults to 'voice',
   // so the persisted mode must be pushed explicitly (our default is 'none').
@@ -300,6 +342,15 @@ export async function initPlayer(): Promise<void> {
       }
     }
   });
+  })();
+
+  try {
+    await initPromise;
+  } catch (e) {
+    isPlayerReady = false;
+    initPromise = null;
+    throw e;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -352,9 +403,10 @@ function adoptLiveEngineSession(): void {
 
 /**
  * Restore the previous session's queue, driven from the root layout after the
- * animated splash. `restorePersistedQueue()` seeds the Zustand store
- * synchronously so the mini player renders immediately; if a queue exists it
- * kicks off the async hydration that loads it into the native engine.
+ * animated splash. Reads the persisted snapshot asynchronously via
+ * `readSnapshotAsync`, seeds the Zustand store so the mini player renders, then
+ * loads the queue into the native engine. Held behind `hydrationPromise` so
+ * `awaitHydration()` serializes widget / playback callers cleanly.
  */
 export function restorePersistedQueueAfterBoot(): void {
   // A car/Siri browse tap may have started playback in this same process before
@@ -364,31 +416,49 @@ export function restorePersistedQueueAfterBoot(): void {
     adoptLiveEngineSession();
     return;
   }
-  const needsHydration = restorePersistedQueue();
-  if (needsHydration) {
-    hydrationPromise = hydrateRestoredQueue().finally(() => {
-      hydrationPromise = null;
-    });
-  }
+  hydrationPromise = (async () => {
+    const needsHydration = await restorePersistedQueue();
+    if (needsHydration) {
+      await hydrateRestoredQueue();
+    }
+  })().finally(() => {
+    hydrationPromise = null;
+  });
 }
 
 /**
  * Seed the Zustand store + module `currentChildQueue` from the persisted queue
- * so the mini player renders immediately. Does NOT touch the native engine —
- * that's `hydrateRestoredQueue()`. Returns true when a non-empty queue was
- * restored (caller should hydrate).
+ * asynchronously off the JS thread. Does NOT touch the native engine — that's
+ * `hydrateRestoredQueue()`. Returns true when a non-empty queue was restored.
  */
-function restorePersistedQueue(): boolean {
+async function restorePersistedQueue(): Promise<boolean> {
   try {
-    const persisted = getPersistedQueue();
+    const persisted =
+      typeof getPersistedQueueAsync === 'function'
+        ? await getPersistedQueueAsync()
+        : getPersistedQueue();
     if (!persisted) return false;
 
-    const { queue, currentTrackIndex } = persisted;
+    const { queue, currentTrackIndex, userQueueTrackIds: savedUserIds } = persisted;
     if (queue.length === 0) return false;
     const clampedIndex = Math.min(currentTrackIndex, queue.length - 1);
 
     currentChildQueue = queue;
     playerStore.getState().setQueue(queue);
+
+    if (savedUserIds && savedUserIds.length > 0) {
+      const upcomingIds = new Set(queue.slice(clampedIndex + 1).map((c) => c.id));
+      const seen = new Set<string>();
+      userQueueTrackIds = savedUserIds.filter((id) => {
+        if (!upcomingIds.has(id) || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+      playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
+    } else {
+      userQueueTrackIds = [];
+      playerStore.getState().clearUserQueueTrackIds?.();
+    }
 
     const formats: Record<string, EffectiveFormat> = {};
     for (const child of queue) formats[child.id] = stampQueueFormat(child);
@@ -397,7 +467,10 @@ function restorePersistedQueue(): boolean {
     const currentChild = queue[clampedIndex] ?? null;
     playerStore.getState().setCurrentTrack(currentChild, clampedIndex);
 
-    const persistedPosition = getPersistedPosition();
+    const persistedPosition =
+      typeof getPersistedPositionAsync === 'function'
+        ? await getPersistedPositionAsync()
+        : getPersistedPosition();
     if (
       persistedPosition &&
       currentChild &&
@@ -466,6 +539,12 @@ async function hydrateRestoredQueue(): Promise<void> {
       if (idx !== -1) startIndex = idx;
     }
 
+    if (pruned && userQueueTrackIds.length > 0) {
+      const upcomingIds = new Set(filteredQueue.slice(startIndex + 1).map((c) => c.id));
+      userQueueTrackIds = userQueueTrackIds.filter((id) => upcomingIds.has(id));
+      playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
+    }
+
     await tp.setQueue(rnTracks, startIndex);
     if (
       resume &&
@@ -475,7 +554,7 @@ async function hydrateRestoredQueue(): Promise<void> {
       await tp.seekTo(resume.position);
     }
 
-    if (pruned) persistQueue(filteredQueue, startIndex);
+    if (pruned) persistQueue(filteredQueue, startIndex, userQueueTrackIds);
   } catch (e) {
     console.warn('[Player] Queue hydration failed:', e);
     throw e;
@@ -483,7 +562,7 @@ async function hydrateRestoredQueue(): Promise<void> {
 }
 
 /** Await any in-flight cold-start hydration before touching the native queue. */
-async function awaitHydration(): Promise<void> {
+export async function awaitHydration(): Promise<void> {
   await whenPlayerReady;
   if (hydrationPromise) {
     try {
@@ -499,13 +578,31 @@ async function awaitHydration(): Promise<void> {
 /* ------------------------------------------------------------------ */
 
 /**
- * Start playing a track from a given queue. Atomic: builds the playable queue,
- * loads it positioned at the tapped index, then plays.
- *
- * @param sourcePlaylistId  When playback originates from a playlist, pass its
- *   ID so per-track scrobble exclusions work correctly.
+ * Resolve the display title for a source playlist ID from the local music cache
+ * or playlists SQLite table, returning null when unavailable.
  */
-export async function playTrack(
+function resolveSourcePlaylistTitle(playlistId: string): string | null {
+  const cached = musicCacheStore.getState().cachedItems?.[playlistId];
+  if (cached?.name) return cached.name;
+  try {
+    const db = getDb();
+    if (db) {
+      const row = db.getFirstSync<{ name: string | null }>(
+        'SELECT name FROM playlists WHERE id = ?',
+        [playlistId],
+      );
+      if (row?.name) return row.name;
+    }
+  } catch {
+    // DB may be unavailable in unit tests or early cold boot
+  }
+  return null;
+}
+
+/**
+ * Internal implementation of `playTrack`, executed inside the queue mutation mutex.
+ */
+async function playTrackInternal(
   track: Child,
   queue: Child[],
   sourcePlaylistId?: string | null,
@@ -526,7 +623,7 @@ export async function playTrack(
     const { rnTracks, filteredQueue } = await buildPlayableQueue(queue);
     if (rnTracks.length === 0) {
       playbackToastStore.getState().fail();
-      await clearQueue();
+      await clearPlayerStateInternal();
       return;
     }
 
@@ -547,13 +644,15 @@ export async function playTrack(
 
     await tp.setQueue(rnTracks, startIndex);
     await tp.play();
-    persistQueue(filteredQueue, startIndex);
+    persistQueue(filteredQueue, startIndex, userQueueTrackIds);
 
     if (track.album || track.parent || sourcePlaylistId || track.id) {
       try {
         const itemType = sourcePlaylistId ? 'playlist' : (track.albumId || track.album ? 'album' : 'song');
         const itemId = sourcePlaylistId ? sourcePlaylistId : (track.albumId || track.parent || track.id);
-        const itemTitle = sourcePlaylistId ? (track.album || track.title) : (track.album || track.title);
+        const itemTitle = sourcePlaylistId
+          ? (resolveSourcePlaylistTitle(sourcePlaylistId) || track.album || track.title)
+          : (track.album || track.title);
         recentPlaysStore.getState().recordRecentPlay({
           id: itemId,
           type: itemType,
@@ -570,6 +669,21 @@ export async function playTrack(
   } finally {
     playerStore.getState().setQueueLoading(false);
   }
+}
+
+/**
+ * Start playing a track from a given queue. Atomic: builds the playable queue,
+ * loads it positioned at the tapped index, then plays.
+ *
+ * @param sourcePlaylistId  When playback originates from a playlist, pass its
+ *   ID so per-track scrobble exclusions work correctly.
+ */
+export async function playTrack(
+  track: Child,
+  queue: Child[],
+  sourcePlaylistId?: string | null,
+): Promise<void> {
+  return withQueueMutationLock(() => playTrackInternal(track, queue, sourcePlaylistId));
 }
 
 /** Toggle between play and pause. */
@@ -829,8 +943,10 @@ async function clearPlayerStateInternal(): Promise<void> {
 
 /** Stop playback, clear the queue, and reset all player state to defaults. */
 export async function clearQueue(): Promise<void> {
-  await awaitHydration();
-  await clearPlayerStateInternal();
+  return withQueueMutationLock(async () => {
+    await awaitHydration();
+    await clearPlayerStateInternal();
+  });
 }
 
 /**
@@ -841,36 +957,38 @@ export async function clearQueue(): Promise<void> {
  * local URI). No-op when the queue is empty.
  */
 export async function rebuildQueueForServerSwitch(): Promise<void> {
-  await awaitHydration();
-  const queue = currentChildQueue;
-  if (queue.length === 0) return;
+  return withQueueMutationLock(async () => {
+    await awaitHydration();
+    const queue = currentChildQueue;
+    if (queue.length === 0) return;
 
-  const idx = playerStore.getState().currentTrackIndex ?? 0;
-  const position = playerStore.getState().position;
-  const wasPlaying = playerStore.getState().playbackState === 'playing';
+    const idx = playerStore.getState().currentTrackIndex ?? 0;
+    const position = playerStore.getState().position;
+    const wasPlaying = playerStore.getState().playbackState === 'playing';
 
-  try {
-    // Re-establish cover-art auth + the iOS streaming proxy against the NEW
-    // server BEFORE regenerating URLs — the switch nulled the token.
-    await ensureCoverArtAuth();
-    if (Platform.OS === 'ios') {
-      await syncProxyUpstreams();
+    try {
+      // Re-establish cover-art auth + the iOS streaming proxy against the NEW
+      // server BEFORE regenerating URLs — the switch nulled the token.
+      await ensureCoverArtAuth();
+      if (Platform.OS === 'ios') {
+        await syncProxyUpstreams();
+      }
+
+      const { rnTracks, filteredQueue } = await buildPlayableQueue(queue);
+      if (rnTracks.length === 0) return;
+
+      const safeIdx = Math.min(Math.max(0, idx), rnTracks.length - 1);
+      await tp.setQueue(rnTracks, safeIdx);
+      if (position > 0) await tp.seekTo(position);
+      if (wasPlaying) await tp.play();
+
+      currentChildQueue = filteredQueue;
+      playerStore.getState().setQueue(filteredQueue);
+      persistQueue(filteredQueue, safeIdx, userQueueTrackIds);
+    } catch {
+      // Best-effort — a failed switch leaves the prior queue loaded.
     }
-
-    const { rnTracks, filteredQueue } = await buildPlayableQueue(queue);
-    if (rnTracks.length === 0) return;
-
-    const safeIdx = Math.min(Math.max(0, idx), rnTracks.length - 1);
-    await tp.setQueue(rnTracks, safeIdx);
-    if (position > 0) await tp.seekTo(position);
-    if (wasPlaying) await tp.play();
-
-    currentChildQueue = filteredQueue;
-    playerStore.getState().setQueue(filteredQueue);
-    persistQueue(filteredQueue, safeIdx);
-  } catch {
-    // Best-effort — a failed switch leaves the prior queue loaded.
-  }
+  });
 }
 
 /**
@@ -882,34 +1000,36 @@ export async function addToQueue(
   sourcePlaylistId?: string | null,
 ): Promise<void> {
   if (tracks.length === 0) return;
-  await awaitHydration();
+  return withQueueMutationLock(async () => {
+    await awaitHydration();
 
-  if (currentChildQueue.length === 0) {
-    await playTrack(tracks[0], tracks, sourcePlaylistId);
-    return;
-  }
+    if (currentChildQueue.length === 0) {
+      await playTrackInternal(tracks[0], tracks, sourcePlaylistId);
+      return;
+    }
 
-  await waitForTrackMapsReady();
-  await ensureCoverArtAuth();
+    await waitForTrackMapsReady();
+    await ensureCoverArtAuth();
 
-  const { rnTracks, filteredQueue: playable } = await buildPlayableQueue(tracks);
-  if (rnTracks.length === 0) {
-    playbackToastStore.getState().fail();
-    return;
-  }
+    const { rnTracks, filteredQueue: playable } = await buildPlayableQueue(tracks);
+    if (rnTracks.length === 0) {
+      playbackToastStore.getState().fail();
+      return;
+    }
 
-  await tp.addToQueue(rnTracks);
+    await tp.addToQueue(rnTracks);
 
-  if (sourcePlaylistId) {
-    for (const child of playable) trackPlaylistMap.set(child.id, sourcePlaylistId);
-  }
-  for (const child of playable) {
-    playerStore.getState().addQueueFormat(child.id, stampQueueFormat(child));
-  }
+    if (sourcePlaylistId) {
+      for (const child of playable) trackPlaylistMap.set(child.id, sourcePlaylistId);
+    }
+    for (const child of playable) {
+      playerStore.getState().addQueueFormat(child.id, stampQueueFormat(child));
+    }
 
-  currentChildQueue = [...currentChildQueue, ...playable];
-  playerStore.getState().setQueue(currentChildQueue);
-  persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0);
+    currentChildQueue = [...currentChildQueue, ...playable];
+    playerStore.getState().setQueue(currentChildQueue);
+    persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+  });
 }
 
 /**
@@ -943,41 +1063,43 @@ export function getUserQueueTrackIds(): readonly string[] {
  */
 export async function addTracksToUserQueue(tracks: Child[]): Promise<void> {
   if (tracks.length === 0) return;
-  await awaitHydration();
+  return withQueueMutationLock(async () => {
+    await awaitHydration();
 
-  if (currentChildQueue.length === 0) {
-    await playTrack(tracks[0], tracks);
-    return;
-  }
+    if (currentChildQueue.length === 0) {
+      await playTrackInternal(tracks[0], tracks);
+      return;
+    }
 
-  await waitForTrackMapsReady();
-  await ensureCoverArtAuth();
+    await waitForTrackMapsReady();
+    await ensureCoverArtAuth();
 
-  const { rnTracks, filteredQueue: playable } = await buildPlayableQueue(tracks);
-  if (rnTracks.length === 0) {
-    playbackToastStore.getState().fail();
-    return;
-  }
+    const { rnTracks, filteredQueue: playable } = await buildPlayableQueue(tracks);
+    if (rnTracks.length === 0) {
+      playbackToastStore.getState().fail();
+      return;
+    }
 
-  const insertBefore = getUserQueueInsertIndex();
+    const insertBefore = getUserQueueInsertIndex();
 
-  // addToQueue(tracks, insertBefore) inserts BEFORE the given index.
-  await tp.addToQueue(rnTracks, insertBefore);
+    // addToQueue(tracks, insertBefore) inserts BEFORE the given index.
+    await tp.addToQueue(rnTracks, insertBefore);
 
-  for (const child of playable) {
-    playerStore.getState().addQueueFormat(child.id, stampQueueFormat(child));
-  }
+    for (const child of playable) {
+      playerStore.getState().addQueueFormat(child.id, stampQueueFormat(child));
+    }
 
-  const newQueue = [...currentChildQueue];
-  newQueue.splice(insertBefore, 0, ...playable);
-  currentChildQueue = newQueue;
+    const newQueue = [...currentChildQueue];
+    newQueue.splice(insertBefore, 0, ...playable);
+    currentChildQueue = newQueue;
 
-  const newIds = playable.map((c) => c.id);
-  userQueueTrackIds = [...userQueueTrackIds.filter((id) => !newIds.includes(id)), ...newIds];
-  playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
+    const newIds = playable.map((c) => c.id);
+    userQueueTrackIds = [...userQueueTrackIds.filter((id) => !newIds.includes(id)), ...newIds];
+    playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
 
-  playerStore.getState().setQueue(currentChildQueue);
-  persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0);
+    playerStore.getState().setQueue(currentChildQueue);
+    persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+  });
 }
 
 /**
@@ -997,43 +1119,45 @@ export async function addSongToUserQueue(song: Child): Promise<void> {
  * When the queue is empty, behaves like `playTrack`.
  */
 export async function playSongNext(song: Child): Promise<void> {
-  await awaitHydration();
+  return withQueueMutationLock(async () => {
+    await awaitHydration();
 
-  if (currentChildQueue.length === 0) {
-    await playTrack(song, [song]);
-    return;
-  }
+    if (currentChildQueue.length === 0) {
+      await playTrackInternal(song, [song]);
+      return;
+    }
 
-  await waitForTrackMapsReady();
-  await ensureCoverArtAuth();
+    await waitForTrackMapsReady();
+    await ensureCoverArtAuth();
 
-  const { rnTracks, filteredQueue: playable } = await buildPlayableQueue([song]);
-  if (rnTracks.length === 0) {
-    playbackToastStore.getState().fail();
-    return;
-  }
+    const { rnTracks, filteredQueue: playable } = await buildPlayableQueue([song]);
+    if (rnTracks.length === 0) {
+      playbackToastStore.getState().fail();
+      return;
+    }
 
-  const currentIndex = playerStore.getState().currentTrackIndex ?? 0;
-  const insertBefore = Math.min(currentIndex + 1, currentChildQueue.length);
+    const currentIndex = playerStore.getState().currentTrackIndex ?? 0;
+    const insertBefore = Math.min(currentIndex + 1, currentChildQueue.length);
 
-  // addToQueue(tracks, insertBefore) inserts BEFORE the given index.
-  await tp.addToQueue(rnTracks, insertBefore);
+    // addToQueue(tracks, insertBefore) inserts BEFORE the given index.
+    await tp.addToQueue(rnTracks, insertBefore);
 
-  for (const child of playable) {
-    playerStore.getState().addQueueFormat(child.id, stampQueueFormat(child));
-  }
+    for (const child of playable) {
+      playerStore.getState().addQueueFormat(child.id, stampQueueFormat(child));
+    }
 
-  const newQueue = [...currentChildQueue];
-  newQueue.splice(insertBefore, 0, ...playable);
-  currentChildQueue = newQueue;
+    const newQueue = [...currentChildQueue];
+    newQueue.splice(insertBefore, 0, ...playable);
+    currentChildQueue = newQueue;
 
-  // Place at head of user queue
-  userQueueTrackIds = [song.id, ...userQueueTrackIds.filter((id) => id !== song.id)];
-  playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
+    // Place at head of user queue
+    userQueueTrackIds = [song.id, ...userQueueTrackIds.filter((id) => id !== song.id)];
+    playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
 
-  playerStore.getState().setQueue(currentChildQueue);
-  // Re-read the index AFTER the awaited add in case an auto-advance moved it.
-  persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0);
+    playerStore.getState().setQueue(currentChildQueue);
+    // Re-read the index AFTER the awaited add in case an auto-advance moved it.
+    persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+  });
 }
 
 /**
@@ -1041,38 +1165,40 @@ export async function playSongNext(song: Child): Promise<void> {
  * Leaves currently playing track and the upcoming context playlist/album songs intact.
  */
 export async function clearUserQueue(): Promise<void> {
-  await awaitHydration();
-  const currentIndex = playerStore.getState().currentTrackIndex ?? 0;
-  if (currentChildQueue.length === 0 || userQueueTrackIds.length === 0) return;
+  return withQueueMutationLock(async () => {
+    await awaitHydration();
+    const currentIndex = playerStore.getState().currentTrackIndex ?? 0;
+    if (currentChildQueue.length === 0 || userQueueTrackIds.length === 0) return;
 
-  const indicesToRemove: number[] = [];
-  for (let i = currentChildQueue.length - 1; i > currentIndex; i--) {
-    if (userQueueTrackIds.includes(currentChildQueue[i].id)) {
-      indicesToRemove.push(i);
+    const indicesToRemove: number[] = [];
+    for (let i = currentChildQueue.length - 1; i > currentIndex; i--) {
+      if (userQueueTrackIds.includes(currentChildQueue[i].id)) {
+        indicesToRemove.push(i);
+      }
     }
-  }
 
-  if (indicesToRemove.length === 0) {
+    if (indicesToRemove.length === 0) {
+      userQueueTrackIds = [];
+      playerStore.getState().clearUserQueueTrackIds?.();
+      persistQueue(currentChildQueue, currentIndex, userQueueTrackIds);
+      return;
+    }
+
+    await tp.removeFromQueue(indicesToRemove);
+
+    const removedSet = new Set(indicesToRemove);
+    currentChildQueue = currentChildQueue.filter((_, i) => !removedSet.has(i));
     userQueueTrackIds = [];
     playerStore.getState().clearUserQueueTrackIds?.();
-    return;
-  }
+    playerStore.getState().setQueue(currentChildQueue);
 
-  for (const idx of indicesToRemove) {
-    await tp.removeFromQueue([idx]);
-  }
-
-  currentChildQueue = currentChildQueue.filter((_, i) => !indicesToRemove.includes(i));
-  userQueueTrackIds = [];
-  playerStore.getState().clearUserQueueTrackIds?.();
-  playerStore.getState().setQueue(currentChildQueue);
-
-  const nativeIndex = tp.getCurrentTrackIndex();
-  playerStore.getState().setCurrentTrack(
-    playerStore.getState().currentTrack,
-    nativeIndex >= 0 ? nativeIndex : currentIndex,
-  );
-  persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0);
+    const nativeIndex = tp.getCurrentTrackIndex();
+    playerStore.getState().setCurrentTrack(
+      playerStore.getState().currentTrack,
+      nativeIndex >= 0 ? nativeIndex : currentIndex,
+    );
+    persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+  });
 }
 
 /**
@@ -1081,32 +1207,34 @@ export async function clearUserQueue(): Promise<void> {
  * back rather than adjusting by hand. Clears the queue when it was the last.
  */
 export async function removeFromQueue(index: number): Promise<void> {
-  await awaitHydration();
+  return withQueueMutationLock(async () => {
+    await awaitHydration();
 
-  if (index < 0 || index >= currentChildQueue.length) return;
-  if (currentChildQueue.length === 1) {
-    await clearQueue();
-    return;
-  }
+    if (index < 0 || index >= currentChildQueue.length) return;
+    if (currentChildQueue.length === 1) {
+      await clearPlayerStateInternal();
+      return;
+    }
 
-  const removedChild = currentChildQueue[index];
-  if (removedChild) {
-    userQueueTrackIds = userQueueTrackIds.filter((id) => id !== removedChild.id);
-    playerStore.getState().removeUserQueueTrackIds?.([removedChild.id]);
-  }
-  await tp.removeFromQueue([index]);
+    const removedChild = currentChildQueue[index];
+    if (removedChild) {
+      userQueueTrackIds = userQueueTrackIds.filter((id) => id !== removedChild.id);
+      playerStore.getState().removeUserQueueTrackIds?.([removedChild.id]);
+    }
+    await tp.removeFromQueue([index]);
 
-  trackPlaylistMap.delete(removedChild.id);
-  currentChildQueue = currentChildQueue.filter((_, i) => i !== index);
-  playerStore.getState().setQueue(currentChildQueue);
+    trackPlaylistMap.delete(removedChild.id);
+    currentChildQueue = currentChildQueue.filter((_, i) => i !== index);
+    playerStore.getState().setQueue(currentChildQueue);
 
-  // Re-sync the active index from native (recomputed on removal).
-  const nativeIndex = tp.getCurrentTrackIndex();
-  playerStore.getState().setCurrentTrack(
-    playerStore.getState().currentTrack,
-    nativeIndex >= 0 ? nativeIndex : null,
-  );
-  persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0);
+    // Re-sync the active index from native (recomputed on removal).
+    const nativeIndex = tp.getCurrentTrackIndex();
+    playerStore.getState().setCurrentTrack(
+      playerStore.getState().currentTrack,
+      nativeIndex >= 0 ? nativeIndex : null,
+    );
+    persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+  });
 }
 
 /**
@@ -1114,49 +1242,56 @@ export async function removeFromQueue(index: number): Promise<void> {
  * ("Aggiungi alla coda" - placed after previously queued user tracks).
  */
 export async function moveQueueItemToUserQueue(fromIndex: number): Promise<void> {
-  await awaitHydration();
-  if (fromIndex < 0 || fromIndex >= currentChildQueue.length) return;
-  if (currentChildQueue.length <= 1) return;
+  return withQueueMutationLock(async () => {
+    await awaitHydration();
+    if (fromIndex < 0 || fromIndex >= currentChildQueue.length) return;
+    if (currentChildQueue.length <= 1) return;
 
-  const child = currentChildQueue[fromIndex];
-  if (userQueueTrackIds.includes(child.id)) return;
+    const child = currentChildQueue[fromIndex];
+    if (userQueueTrackIds.includes(child.id)) return;
 
-  const targetPosition = getUserQueueInsertIndex();
+    const targetPosition = getUserQueueInsertIndex();
 
-  // If already at target position (e.g. first item of nextUp), simply promote to user queue
-  if (fromIndex === targetPosition) {
-    userQueueTrackIds = [...userQueueTrackIds, child.id];
-    playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
-    return;
-  }
-
-  // Optimistically reorder in-memory queue atomically once
-  const newQueue = [...currentChildQueue];
-  const [moved] = newQueue.splice(fromIndex, 1);
-  const newInsertBefore = Math.min(
-    fromIndex < targetPosition ? targetPosition - 1 : targetPosition,
-    newQueue.length,
-  );
-  newQueue.splice(newInsertBefore, 0, moved);
-  currentChildQueue = newQueue;
-  userQueueTrackIds = [...userQueueTrackIds, child.id];
-  playerStore.getState().setQueue(currentChildQueue);
-  playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
-
-  // Sync with native player in background
-  await tp.removeFromQueue([fromIndex]);
-  await waitForTrackMapsReady();
-  await ensureCoverArtAuth();
-  const { rnTracks, filteredQueue: playable } = await buildPlayableQueue([child]);
-  if (rnTracks.length > 0) {
-    await tp.addToQueue(rnTracks, newInsertBefore);
-    for (const c of playable) {
-      playerStore.getState().addQueueFormat(c.id, stampQueueFormat(c));
+    // If already at target position (e.g. first item of nextUp), simply promote to user queue
+    if (fromIndex === targetPosition) {
+      userQueueTrackIds = [...userQueueTrackIds, child.id];
+      playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
+      persistQueue(
+        currentChildQueue,
+        playerStore.getState().currentTrackIndex ?? 0,
+        userQueueTrackIds,
+      );
+      return;
     }
-  }
 
-  const finalIndex = tp.getCurrentTrackIndex();
-  persistQueue(currentChildQueue, finalIndex >= 0 ? finalIndex : 0);
+    // Optimistically reorder in-memory queue atomically once
+    const newQueue = [...currentChildQueue];
+    const [moved] = newQueue.splice(fromIndex, 1);
+    const newInsertBefore = Math.min(
+      fromIndex < targetPosition ? targetPosition - 1 : targetPosition,
+      newQueue.length,
+    );
+    newQueue.splice(newInsertBefore, 0, moved);
+    currentChildQueue = newQueue;
+    userQueueTrackIds = [...userQueueTrackIds, child.id];
+    playerStore.getState().setQueue(currentChildQueue);
+    playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
+
+    // Sync with native player in background
+    await tp.removeFromQueue([fromIndex]);
+    await waitForTrackMapsReady();
+    await ensureCoverArtAuth();
+    const { rnTracks, filteredQueue: playable } = await buildPlayableQueue([child]);
+    if (rnTracks.length > 0) {
+      await tp.addToQueue(rnTracks, newInsertBefore);
+      for (const c of playable) {
+        playerStore.getState().addQueueFormat(c.id, stampQueueFormat(c));
+      }
+    }
+
+    const finalIndex = tp.getCurrentTrackIndex();
+    persistQueue(currentChildQueue, finalIndex >= 0 ? finalIndex : 0, userQueueTrackIds);
+  });
 }
 
 /**
@@ -1174,110 +1309,142 @@ export async function reorderQueue(
   toIndex: number,
   explicitUserQueueTrackIds?: string[],
 ): Promise<void> {
-  const currentIndex = playerStore.getState().currentTrackIndex ?? 0;
-  const minValidIndex = Math.min(currentIndex + 1, currentChildQueue.length);
+  return withQueueMutationLock(async () => {
+    const currentIndex = playerStore.getState().currentTrackIndex ?? 0;
+    const minValidIndex = Math.min(currentIndex + 1, currentChildQueue.length);
 
-  if (fromIndex < minValidIndex || fromIndex >= currentChildQueue.length) {
-    return;
-  }
-
-  const clampedTo = Math.max(minValidIndex, Math.min(toIndex, currentChildQueue.length - 1));
-  const isIndexSame = fromIndex === clampedTo;
-
-  if (isIndexSame && !explicitUserQueueTrackIds) {
-    return;
-  }
-
-  const child = currentChildQueue[fromIndex];
-  const wasInUserQueue = userQueueTrackIds.includes(child.id);
-
-  // User queue tracks in the upcoming section before reordering
-  const userQueueBefore = userQueueTrackIds.filter((id) =>
-    currentChildQueue.slice(minValidIndex).some((t) => t.id === id),
-  );
-  const userQueueCount = userQueueBefore.length;
-
-  if (!isIndexSame) {
-    const newQueue = [...currentChildQueue];
-    const [removed] = newQueue.splice(fromIndex, 1);
-    newQueue.splice(clampedTo, 0, removed);
-    currentChildQueue = newQueue;
-  }
-
-  if (explicitUserQueueTrackIds != null) {
-    userQueueTrackIds = explicitUserQueueTrackIds;
-  } else if (userQueueCount > 0) {
-    const userQueueEndIndex = minValidIndex + userQueueCount - 1;
-    if (!wasInUserQueue && clampedTo <= userQueueEndIndex + 1) {
-      // Promoted to user queue
-      userQueueTrackIds = [...userQueueTrackIds, child.id];
-    } else if (wasInUserQueue && clampedTo > userQueueEndIndex) {
-      // Demoted from user queue
-      userQueueTrackIds = userQueueTrackIds.filter((id) => id !== child.id);
+    if (fromIndex < minValidIndex || fromIndex >= currentChildQueue.length) {
+      return;
     }
-  }
 
-  // Keep userQueueTrackIds strictly in the relative order of the updated upcoming queue
-  const userSet = new Set(userQueueTrackIds);
-  userQueueTrackIds = currentChildQueue
-    .slice(minValidIndex)
-    .filter((t) => userSet.has(t.id))
-    .map((t) => t.id);
+    const clampedTo = Math.max(minValidIndex, Math.min(toIndex, currentChildQueue.length - 1));
+    const isIndexSame = fromIndex === clampedTo;
 
-  // Synchronous optimistic update so UI re-renders immediately on this tick
-  playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
-  playerStore.getState().setQueue(currentChildQueue);
-
-  await awaitHydration();
-
-  if (!isIndexSame) {
-    // Sync with native player
-    await tp.removeFromQueue([fromIndex]);
-    await waitForTrackMapsReady();
-    await ensureCoverArtAuth();
-    const { rnTracks } = await buildPlayableQueue([child]);
-    if (rnTracks.length > 0) {
-      await tp.addToQueue(rnTracks, clampedTo);
+    if (isIndexSame && !explicitUserQueueTrackIds) {
+      return;
     }
-  }
 
-  const activeIndex = tp.getCurrentTrackIndex();
-  playerStore.getState().setCurrentTrack(
-    playerStore.getState().currentTrack,
-    activeIndex >= 0 ? activeIndex : null,
-  );
-  persistQueue(currentChildQueue, activeIndex >= 0 ? activeIndex : 0);
+    const child = currentChildQueue[fromIndex];
+    const wasInUserQueue = userQueueTrackIds.includes(child.id);
+
+    // User queue tracks in the upcoming section before reordering
+    const userQueueBefore = userQueueTrackIds.filter((id) =>
+      currentChildQueue.slice(minValidIndex).some((t) => t.id === id),
+    );
+    const userQueueCount = userQueueBefore.length;
+
+    if (!isIndexSame) {
+      const newQueue = [...currentChildQueue];
+      const [removed] = newQueue.splice(fromIndex, 1);
+      newQueue.splice(clampedTo, 0, removed);
+      currentChildQueue = newQueue;
+    }
+
+    if (explicitUserQueueTrackIds != null) {
+      userQueueTrackIds = explicitUserQueueTrackIds;
+    } else if (userQueueCount > 0) {
+      const userQueueEndIndex = minValidIndex + userQueueCount - 1;
+      if (!wasInUserQueue && clampedTo <= userQueueEndIndex + 1) {
+        // Promoted to user queue
+        userQueueTrackIds = [...userQueueTrackIds, child.id];
+      } else if (wasInUserQueue && clampedTo > userQueueEndIndex) {
+        // Demoted from user queue
+        userQueueTrackIds = userQueueTrackIds.filter((id) => id !== child.id);
+      }
+    }
+
+    // Keep userQueueTrackIds strictly in the relative order of the updated upcoming queue
+    const userSet = new Set(userQueueTrackIds);
+    userQueueTrackIds = currentChildQueue
+      .slice(minValidIndex)
+      .filter((t) => userSet.has(t.id))
+      .map((t) => t.id);
+
+    // Synchronous optimistic update so UI re-renders immediately on this tick
+    playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
+    playerStore.getState().setQueue(currentChildQueue);
+
+    await awaitHydration();
+
+    if (!isIndexSame) {
+      // Sync with native player
+      await tp.removeFromQueue([fromIndex]);
+      await waitForTrackMapsReady();
+      await ensureCoverArtAuth();
+      const { rnTracks } = await buildPlayableQueue([child]);
+      if (rnTracks.length > 0) {
+        await tp.addToQueue(rnTracks, clampedTo);
+      }
+    }
+
+    const activeIndex = tp.getCurrentTrackIndex();
+    playerStore.getState().setCurrentTrack(
+      playerStore.getState().currentTrack,
+      activeIndex >= 0 ? activeIndex : null,
+    );
+    persistQueue(currentChildQueue, activeIndex >= 0 ? activeIndex : 0, userQueueTrackIds);
+  });
 }
 
 /**
  * Remove all non-downloaded tracks from the queue (called when entering
- * offline mode). Iterates in reverse to avoid index shifting; clears the
+ * offline mode). Uses a single batch native removal; clears the
  * queue if nothing remains.
  */
 export async function removeNonDownloadedTracks(): Promise<void> {
-  await awaitHydration();
+  return withQueueMutationLock(async () => {
+    await awaitHydration();
 
-  if (currentChildQueue.length === 0) return;
+    if (currentChildQueue.length === 0) return;
 
-  const indicesToRemove: number[] = [];
-  for (let i = currentChildQueue.length - 1; i >= 0; i--) {
-    if (!getLocalTrackUri(currentChildQueue[i].id)) {
-      indicesToRemove.push(i);
+    const indicesToRemove: number[] = [];
+    for (let i = currentChildQueue.length - 1; i >= 0; i--) {
+      if (!getLocalTrackUri(currentChildQueue[i].id)) {
+        indicesToRemove.push(i);
+      }
     }
-  }
 
-  if (indicesToRemove.length === 0) return;
-  if (indicesToRemove.length === currentChildQueue.length) {
-    await clearQueue();
-    return;
-  }
+    if (indicesToRemove.length === 0) return;
+    if (indicesToRemove.length === currentChildQueue.length) {
+      await clearPlayerStateInternal();
+      return;
+    }
 
-  // The playing track stays: native won't remove it, and the JS queue must match native.
-  const playingIndex = tp.getCurrentTrackIndex();
-  for (const index of indicesToRemove) {
-    if (index === playingIndex) continue;
-    await removeFromQueue(index);
-  }
+    // The playing track stays: native won't remove it, and the JS queue must match native.
+    const playingIndex = tp.getCurrentTrackIndex();
+    const batchIndices = indicesToRemove.filter((i) => i !== playingIndex);
+    if (batchIndices.length === 0) return;
+
+    await tp.removeFromQueue(batchIndices);
+
+    const removedSet = new Set(batchIndices);
+    const removedIds = new Set<string>();
+    currentChildQueue = currentChildQueue.filter((child, i) => {
+      if (removedSet.has(i)) {
+        removedIds.add(child.id);
+        trackPlaylistMap.delete(child.id);
+        return false;
+      }
+      return true;
+    });
+
+    if (removedIds.size > 0 && userQueueTrackIds.length > 0) {
+      userQueueTrackIds = userQueueTrackIds.filter((id) => !removedIds.has(id));
+      playerStore.getState().removeUserQueueTrackIds?.([...removedIds]);
+    }
+
+    playerStore.getState().setQueue(currentChildQueue);
+    const nativeIndex = tp.getCurrentTrackIndex();
+    playerStore.getState().setCurrentTrack(
+      playerStore.getState().currentTrack,
+      nativeIndex >= 0 ? nativeIndex : null,
+    );
+    persistQueue(
+      currentChildQueue,
+      playerStore.getState().currentTrackIndex ?? 0,
+      userQueueTrackIds,
+    );
+  });
 }
 
 /** Cycle the repeat mode: off → all → one → off (persisted + native). */
@@ -1353,25 +1520,27 @@ registerPlayerPlayStatListener(applyLocalPlayToPlayer);
  * load it atomically. `trackPlaylistMap` is left intact — IDs are unchanged.
  */
 export async function shuffleQueue(): Promise<void> {
-  await awaitHydration();
-  if (currentChildQueue.length < 2) return;
+  return withQueueMutationLock(async () => {
+    await awaitHydration();
+    if (currentChildQueue.length < 2) return;
 
-  try {
-    const shuffled = shuffleArray(currentChildQueue);
-    const { rnTracks, filteredQueue } = await buildPlayableQueue(shuffled);
-    if (rnTracks.length === 0) {
+    try {
+      const shuffled = shuffleArray(currentChildQueue);
+      const { rnTracks, filteredQueue } = await buildPlayableQueue(shuffled);
+      if (rnTracks.length === 0) {
+        playbackToastStore.getState().fail();
+        await clearPlayerStateInternal();
+        return;
+      }
+
+      currentChildQueue = filteredQueue;
+      playerStore.getState().setQueue(filteredQueue);
+
+      await tp.setQueue(rnTracks, 0);
+      await tp.play();
+      persistQueue(filteredQueue, 0, userQueueTrackIds);
+    } catch {
       playbackToastStore.getState().fail();
-      await clearPlayerStateInternal();
-      return;
     }
-
-    currentChildQueue = filteredQueue;
-    playerStore.getState().setQueue(filteredQueue);
-
-    await tp.setQueue(rnTracks, 0);
-    await tp.play();
-    persistQueue(filteredQueue, 0);
-  } catch {
-    playbackToastStore.getState().fail();
-  }
+  });
 }

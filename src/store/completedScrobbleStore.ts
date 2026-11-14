@@ -25,6 +25,7 @@ export interface ListeningStats {
   totalPlays: number;
   totalListeningSeconds: number;
   uniqueArtists: Record<string, true>;
+  uniqueArtistCount: number;
 }
 
 export interface AnalyticsAggregates {
@@ -46,6 +47,7 @@ const EMPTY_STATS: ListeningStats = {
   totalPlays: 0,
   totalListeningSeconds: 0,
   uniqueArtists: {},
+  uniqueArtistCount: 0,
 };
 
 const EMPTY_AGGREGATES: AnalyticsAggregates = {

@@ -19,15 +19,6 @@ const mockAddQueueFormat = jest.fn();
 const mockClearQueueFormats = jest.fn();
 const mockSetTrackSource = jest.fn();
 const mockPlayerStoreSetState = jest.fn();
-const mockConsumeQueueTracks = jest.fn(
-  (_history: unknown, newQueue: unknown, currentTrack: unknown, currentTrackIndex: unknown) => {
-    mockSetCurrentTrack(currentTrack, currentTrackIndex);
-    mockSetQueue(newQueue);
-  },
-);
-const mockAddToHistory = jest.fn();
-const mockPopFromHistory = jest.fn();
-const mockClearHistory = jest.fn();
 const mockSetUserQueueTrackIds = jest.fn();
 const mockAddUserQueueTrackIds = jest.fn();
 const mockRemoveUserQueueTrackIds = jest.fn();
@@ -57,10 +48,6 @@ jest.mock('../../store/playerStore', () => ({
       addQueueFormat: mockAddQueueFormat,
       clearQueueFormats: mockClearQueueFormats,
       setTrackSource: mockSetTrackSource,
-      addToHistory: mockAddToHistory,
-      popFromHistory: mockPopFromHistory,
-      clearHistory: mockClearHistory,
-      consumeQueueTracks: mockConsumeQueueTracks,
       setUserQueueTrackIds: mockSetUserQueueTrackIds,
       addUserQueueTrackIds: mockAddUserQueueTrackIds,
       removeUserQueueTrackIds: mockRemoveUserQueueTrackIds,
@@ -209,10 +196,6 @@ const defaultPlayerState = () => ({
   addQueueFormat: mockAddQueueFormat,
   clearQueueFormats: mockClearQueueFormats,
   setTrackSource: mockSetTrackSource,
-  addToHistory: mockAddToHistory,
-  popFromHistory: mockPopFromHistory,
-  clearHistory: mockClearHistory,
-  consumeQueueTracks: mockConsumeQueueTracks,
   setUserQueueTrackIds: mockSetUserQueueTrackIds,
   addUserQueueTrackIds: mockAddUserQueueTrackIds,
   removeUserQueueTrackIds: mockRemoveUserQueueTrackIds,

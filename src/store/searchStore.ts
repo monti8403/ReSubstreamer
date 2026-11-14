@@ -18,8 +18,6 @@ export interface SearchState {
   loading: boolean;
   /** Last error message, if any */
   error: string | null;
-  /** Whether the overlay dropdown is visible */
-  isOverlayVisible: boolean;
   /** Height of the header (set by SearchableHeader via onLayout) */
   headerHeight: number;
 
@@ -27,13 +25,9 @@ export interface SearchState {
   setQuery: (query: string) => void;
   /** Execute a search using the current query */
   performSearch: () => Promise<void>;
-  /** Show the results overlay */
-  showOverlay: () => void;
-  /** Hide the results overlay */
-  hideOverlay: () => void;
   /** Set measured header height */
   setHeaderHeight: (height: number) => void;
-  /** Clear query, results, and hide overlay */
+  /** Clear query and results */
   clear: () => void;
 }
 
@@ -42,16 +36,12 @@ export const searchStore = create<SearchState>()((set, get) => ({
   results: EMPTY_RESULTS,
   loading: false,
   error: null,
-  isOverlayVisible: false,
   headerHeight: 0,
 
   setQuery: (query) => {
-    // Flip `loading` on as soon as the text changes so the overlay can
+    // Flip `loading` on as soon as the text changes so the search screen can
     // show a "searching" indicator during the debounce + network window,
-    // not just after performSearch fires ~300ms later. For empty input
-    // we explicitly set false — the overlay early-returns on empty
-    // query anyway, but this keeps the flag honest if the overlay is
-    // reopened later.
+    // not just after performSearch fires. For empty input we explicitly set false.
     set({ query, loading: query.trim() !== '', error: null });
   },
 
@@ -93,8 +83,6 @@ export const searchStore = create<SearchState>()((set, get) => ({
     }
   },
 
-  showOverlay: () => set({ isOverlayVisible: true }),
-  hideOverlay: () => set({ isOverlayVisible: false }),
   setHeaderHeight: (headerHeight) => set({ headerHeight }),
 
   clear: () =>
@@ -103,6 +91,5 @@ export const searchStore = create<SearchState>()((set, get) => ({
       results: EMPTY_RESULTS,
       loading: false,
       error: null,
-      isOverlayVisible: false,
     }),
 }));

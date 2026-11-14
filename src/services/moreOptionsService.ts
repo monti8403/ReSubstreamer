@@ -17,6 +17,7 @@ import { getAlbumDetail, getArtistBase, getArtistTopSongsRow, getPlaylistDetail 
 import { processingOverlayStore } from '../store/processingOverlayStore';
 import { playerStore } from '../store/playerStore';
 import { shuffleArray } from '../utils/arrayHelpers';
+import { runPool } from '../utils/promisePool';
 import {
   deleteCachedItem as deleteCachedItemService,
   enqueueSongDownload as enqueueSongDownloadService,
@@ -507,15 +508,23 @@ async function fetchAllArtistSongs(
     return null;
   }
 
-  // Fetch songs from each album (normalized detail where available, else server).
-  const albumSongs = await Promise.all(
-    albums.map(async (album) => {
+  // Fetch songs from each album (normalized detail where available, else server),
+  // bounded to concurrency 4 to avoid HTTP connection spikes on large discographies.
+  const byAlbumId = new Map<string, Child[]>();
+  const { fulfilled } = await runPool(
+    albums,
+    async (album) => {
       const cached = db ? await getAlbumDetail(db, album.id) : null;
       if (cached) return cached.songs;
       const fetched = await getAlbum(album.id);
       return fetched?.song ?? [];
-    }),
+    },
+    { concurrency: 4 },
   );
+  for (const { item, value } of fulfilled) {
+    byAlbumId.set(item.id, value);
+  }
+  const albumSongs = albums.map((album) => byAlbumId.get(album.id) ?? []);
 
   // Flatten and filter to only this artist's songs (handles compilations)
   const songs = albumSongs.flat().filter(

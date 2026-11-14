@@ -1,10 +1,5 @@
 jest.mock('../../store/persistence/kvStorage', () => require('../../store/persistence/__mocks__/kvStorage'));
 
-const mockGetTrackQueueStatus = jest.fn();
-jest.mock('../../services/musicCacheService', () => ({
-  getTrackQueueStatus: (...a: unknown[]) => (mockGetTrackQueueStatus as any)(...a),
-}));
-
 import { renderHook } from '@testing-library/react-native';
 
 import { useDownloadStatus } from '../useDownloadStatus';
@@ -25,8 +20,12 @@ function makeItem(overrides: Partial<CachedItemMeta> = {}): CachedItemMeta {
 }
 
 beforeEach(() => {
-  mockGetTrackQueueStatus.mockReset();
-  musicCacheStore.setState({ cachedItems: {}, cachedSongs: {}, downloadQueue: [] } as any);
+  musicCacheStore.setState({
+    cachedItems: {},
+    cachedSongs: {},
+    downloadQueue: [],
+    queuedSongStatuses: {},
+  } as any);
 });
 
 describe('useDownloadStatus', () => {
@@ -42,14 +41,29 @@ describe('useDownloadStatus', () => {
       expect(result.current).toBe('complete');
     });
 
-    it('returns queue status when not cached', () => {
-      mockGetTrackQueueStatus.mockReturnValue('downloading');
+    it('returns queue status from RAM when not cached', () => {
+      musicCacheStore.setState({
+        downloadQueue: [{ queueId: 'q1', itemId: 'a1', type: 'album', status: 'downloading' }],
+        queuedSongStatuses: { s1: 'downloading' },
+      } as any);
       const { result } = renderHook(() => useDownloadStatus('song', 's1'));
       expect(result.current).toBe('downloading');
     });
 
+    it('short-circuits to "none" when downloadQueue is empty even if queuedSongStatuses is stale', () => {
+      musicCacheStore.setState({
+        downloadQueue: [],
+        queuedSongStatuses: { s1: 'queued' },
+      } as any);
+      const { result } = renderHook(() => useDownloadStatus('song', 's1'));
+      expect(result.current).toBe('none');
+    });
+
     it('returns "none" for a song not cached or queued', () => {
-      mockGetTrackQueueStatus.mockReturnValue(null);
+      musicCacheStore.setState({
+        downloadQueue: [{ queueId: 'q1', itemId: 'a1', type: 'album', status: 'queued' }],
+        queuedSongStatuses: { 'other-song': 'queued' },
+      } as any);
       const { result } = renderHook(() => useDownloadStatus('song', 's1'));
       expect(result.current).toBe('none');
     });

@@ -1,7 +1,7 @@
 import Ionicons from "@react-native-vector-icons/ionicons/static";
 import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
-import { useCallback, useMemo } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 
@@ -12,8 +12,9 @@ import { bookmarksStore, type PlayQueueBookmark } from '../store/bookmarksStore'
 const CARD_WIDTH = 240;
 const CARD_GAP = 12;
 const HORIZONTAL_DRAW_DISTANCE = 300;
+const BookmarkSeparator = () => <View style={{ width: CARD_GAP }} />;
 
-export function ResumeBookmarksSection() {
+export const ResumeBookmarksSection = memo(function ResumeBookmarksSection() {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const router = useRouter();
@@ -83,12 +84,12 @@ export function ResumeBookmarksSection() {
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.horizontalList}
-        ItemSeparatorComponent={() => <View style={{ width: CARD_GAP }} />}
+        ItemSeparatorComponent={BookmarkSeparator}
         drawDistance={HORIZONTAL_DRAW_DISTANCE}
       />
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   section: {

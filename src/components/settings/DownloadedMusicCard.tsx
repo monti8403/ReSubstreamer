@@ -45,8 +45,14 @@ export function DownloadedMusicCard() {
   const musicQueueCount = musicCacheStore((s) => s.downloadQueue.length);
   const maxConcurrentDownloads = musicCacheStore((s) => s.maxConcurrentDownloads);
 
-  // Full-library download progress / availability.
-  const fullLib = fullLibraryDownloadStore();
+  // Full-library download progress / availability (atomic selectors).
+  const fullLibActive = fullLibraryDownloadStore((s) => s.active);
+  const fullLibPhase = fullLibraryDownloadStore((s) => s.phase);
+  const fullLibAlbumsQueued = fullLibraryDownloadStore((s) => s.albumsQueued);
+  const fullLibAlbumsTotal = fullLibraryDownloadStore((s) => s.albumsTotal);
+  const fullLibPlaylistsQueued = fullLibraryDownloadStore((s) => s.playlistsQueued);
+  const fullLibPlaylistsTotal = fullLibraryDownloadStore((s) => s.playlistsTotal);
+  const fullLibError = fullLibraryDownloadStore((s) => s.error);
   const offlineMode = offlineModeStore((s) => s.offlineMode);
   const online = !offlineMode && connectivityStore((s) => s.isServerReachable);
 
@@ -110,17 +116,17 @@ export function DownloadedMusicCard() {
 
   // Surface preparing/queueing failures to the user, then clear the flag.
   useEffect(() => {
-    if (fullLib.error) {
-      alert(t('downloadFullLibrary'), fullLib.error);
+    if (fullLibError) {
+      alert(t('downloadFullLibrary'), fullLibError);
       fullLibraryDownloadStore.getState().clearError();
     }
-  }, [fullLib.error, alert, t]);
+  }, [fullLibError, alert, t]);
 
-  const fullLibProgressLabel = fullLib.phase === 'preparing'
+  const fullLibProgressLabel = fullLibPhase === 'preparing'
     ? t('preparingFullLibrary')
-    : fullLib.albumsQueued < fullLib.albumsTotal
-      ? t('addingAlbumsToQueue', { queued: fullLib.albumsQueued, total: fullLib.albumsTotal })
-      : t('addingPlaylistsToQueue', { queued: fullLib.playlistsQueued, total: fullLib.playlistsTotal });
+    : fullLibAlbumsQueued < fullLibAlbumsTotal
+      ? t('addingAlbumsToQueue', { queued: fullLibAlbumsQueued, total: fullLibAlbumsTotal })
+      : t('addingPlaylistsToQueue', { queued: fullLibPlaylistsQueued, total: fullLibPlaylistsTotal });
 
   return (
     <>
@@ -216,7 +222,7 @@ export function DownloadedMusicCard() {
           </Pressable>
 
           {/* Download Full Library — one-shot that queues every album + playlist */}
-          {fullLib.active ? (
+          {fullLibActive ? (
             <>
               <View style={settingsStyles.offlineNotice}>
                 <ActivityIndicator size="small" color={colors.primary} />

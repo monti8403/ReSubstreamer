@@ -221,5 +221,30 @@ describe('usePartitionedQueue / partitionQueue', () => {
       expect(plan?.toAbsoluteIndex).toBe(1);
       expect(plan?.newUserQueueTrackIds).toEqual(['n1']);
     });
+
+    it('keeps stable item IDs across activeIndex shifts and tags isUserQueue accurately', () => {
+      const tracks = [t0, u1, u2, n1, n2];
+      const before = partitionQueue(tracks, 0, ['u1', 'u2']);
+      const u2IdBefore = before.reorderableListItems.find(
+        (i) => i.type === 'track' && i.track === u2,
+      )?.id;
+      const n1ItemBefore = before.reorderableListItems.find(
+        (i) => i.type === 'track' && i.track === n1,
+      );
+      expect(u2IdBefore).toBeTruthy();
+      expect(n1ItemBefore?.type === 'track' && n1ItemBefore.isUserQueue).toBe(false);
+
+      // Advance activeIndex so t0 & u1 leave the upcoming list, shifting relIdx for u2, n1, n2
+      const after = partitionQueue(tracks, 1, ['u1', 'u2']);
+      const u2ItemAfter = after.reorderableListItems.find(
+        (i) => i.type === 'track' && i.track === u2,
+      );
+      const n1ItemAfter = after.reorderableListItems.find(
+        (i) => i.type === 'track' && i.track === n1,
+      );
+      expect(u2ItemAfter?.id).toBe(u2IdBefore);
+      expect(u2ItemAfter?.type === 'track' && u2ItemAfter.isUserQueue).toBe(true);
+      expect(n1ItemAfter?.id).toBe(n1ItemBefore?.id);
+    });
   });
 });

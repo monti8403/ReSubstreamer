@@ -45,8 +45,6 @@ export interface PlayerState {
   queueFormats: Record<string, EffectiveFormat>;
   /** Where the active track is playing from: local file, lookahead cache, or live stream. */
   trackSource: TrackSource | null;
-  /** History of recently played tracks that were removed from the active queue. */
-  playbackHistory: Child[];
   /** Track IDs explicitly added to the queue by the user. */
   userQueueTrackIds: string[];
 
@@ -66,25 +64,61 @@ export interface PlayerState {
   addQueueFormat: (songId: string, fmt: EffectiveFormat) => void;
   clearQueueFormats: () => void;
   setTrackSource: (source: TrackSource | null) => void;
-  addToHistory: (track: Child) => void;
-  popFromHistory: () => Child | null;
-  clearHistory: () => void;
-  consumeQueueTracks: (
-    tracksToHistory: Child[],
-    newQueue: Child[],
-    currentTrack: Child | null,
-    currentTrackIndex?: number | null,
-  ) => void;
 }
 
 let _queueKeySeq = 0;
+const _fallbackQueueKeys = new WeakMap<object, string>();
 
 export function ensureQueueKey(item: any): string {
   if (!item) return '';
-  if (!item._queueKey) {
-    item._queueKey = `${item.id ?? 'track'}_${++_queueKeySeq}`;
+  if (typeof item === 'object') {
+    if (typeof item._queueKey === 'string' && item._queueKey.length > 0) {
+      return item._queueKey;
+    }
+    const existing = _fallbackQueueKeys.get(item);
+    if (existing) return existing;
+    const key = `${item.id ?? 'track'}_${++_queueKeySeq}`;
+    _fallbackQueueKeys.set(item, key);
+    return key;
   }
-  return item._queueKey;
+  return '';
+}
+
+function withUniqueQueueKeys(queue: Child[]): Child[] {
+  if (queue.length === 0) return queue;
+  const seenKeys = new Set<string>();
+  const seenRefs = new WeakSet<object>();
+  let cloned: Child[] | null = null;
+
+  for (let i = 0; i < queue.length; i++) {
+    const item = queue[i] as (Child & { _queueKey?: string }) | null | undefined;
+    if (!item || typeof item !== 'object') continue;
+
+    const ownKey =
+      typeof item._queueKey === 'string' && item._queueKey.length > 0
+        ? item._queueKey
+        : undefined;
+    const candidateKey = ownKey ?? _fallbackQueueKeys.get(item);
+    const isDuplicateRef = seenRefs.has(item);
+    const isDuplicateKey = candidateKey !== undefined && seenKeys.has(candidateKey);
+
+    if (!isDuplicateRef && !isDuplicateKey) {
+      seenRefs.add(item);
+      if (candidateKey) {
+        seenKeys.add(candidateKey);
+      }
+      continue;
+    }
+
+    if (!cloned) {
+      cloned = queue.slice();
+    }
+    const newKey = `${item.id ?? 'track'}_${++_queueKeySeq}`;
+    seenKeys.add(newKey);
+    cloned[i] = { ...item, _queueKey: newKey } as Child;
+  }
+
+  return cloned ?? queue;
 }
 
 export const playerStore = create<PlayerState>()((set) => ({
@@ -110,10 +144,7 @@ export const playerStore = create<PlayerState>()((set) => ({
     }),
   setPlaybackState: (playbackState) => set({ playbackState }),
   setQueue: (queue) => {
-    for (let i = 0; i < queue.length; i++) {
-      ensureQueueKey(queue[i]);
-    }
-    set({ queue });
+    set({ queue: withUniqueQueueKeys(queue) });
   },
   setUserQueueTrackIds: (userQueueTrackIds) => set({ userQueueTrackIds }),
   addUserQueueTrackIds: (ids) =>
@@ -140,35 +171,4 @@ export const playerStore = create<PlayerState>()((set) => ({
     set((state) => ({ queueFormats: { ...state.queueFormats, [songId]: fmt } })),
   clearQueueFormats: () => set({ queueFormats: {} }),
   setTrackSource: (trackSource) => set({ trackSource }),
-  playbackHistory: [],
-  addToHistory: (track) =>
-    set((state) => {
-      if (!track) return state;
-      const next = [track, ...state.playbackHistory.filter((t) => t.id !== track.id)].slice(0, 30);
-      return { playbackHistory: next };
-    }),
-  popFromHistory: () => {
-    let popped: Child | null = null;
-    set((state) => {
-      if (state.playbackHistory.length === 0) return state;
-      popped = state.playbackHistory[0] ?? null;
-      return { playbackHistory: state.playbackHistory.slice(1) };
-    });
-    return popped;
-  },
-  clearHistory: () => set({ playbackHistory: [] }),
-  consumeQueueTracks: (tracksToHistory, newQueue, currentTrack, currentTrackIndex = 0) =>
-    set((state) => {
-      let nextHistory = state.playbackHistory;
-      for (const track of tracksToHistory) {
-        if (!track) continue;
-        nextHistory = [track, ...nextHistory.filter((t) => t.id !== track.id)].slice(0, 30);
-      }
-      return {
-        playbackHistory: nextHistory,
-        queue: newQueue,
-        currentTrack,
-        currentTrackIndex,
-      };
-    }),
 }));

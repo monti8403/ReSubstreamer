@@ -13,11 +13,16 @@ import { listDownloadedSongs, downloadedSongRowToChild } from '../db/repository/
 import { fetchAlbumDetail, fetchPlaylistDetail } from './detailFetchService';
 import { getPlaylistDetail } from '../db/repository/details';
 import { SONG_LIST_COLS, type SongListRow, hydrateSongRows, songListRowToChild } from '../db/repository/songs';
+import { getLocalTrackUri } from './musicCacheService';
 import { musicCacheStore, getSongEnvelope } from '../store/musicCacheStore';
 import { playArtistSongs, toggleStar } from './moreOptionsService';
 import { resolveDisplayImage } from './imageCacheService';
-import { getRandomSongs, type Child } from './subsonicService';
+import { resolveSongCoverArt } from '../hooks/useSongCoverArt';
+import { awaitKvHydration, rehydrateAllStores } from '../store/persistence/rehydrate';
+import { ensureCoverArtAuth, getRandomSongs, type Child } from './subsonicService';
 import {
+  awaitHydration,
+  initPlayer,
   playTrack,
   shuffleQueue,
   skipToNext,
@@ -30,6 +35,30 @@ import { shuffleArray } from '../utils/arrayHelpers';
 const { MusicWidgetModule } = NativeModules;
 
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
+let headlessStoresReadyPromise: Promise<void> | null = null;
+let cachedRecentSignature = '';
+let cachedResolvedRecents: RecentWidgetItem[] = [];
+let cachedRecentAt = 0;
+const RECENT_CACHE_TTL_MS = 10_000;
+
+/**
+ * Ensure persisted SQLite + KV stores are hydrated when a widget action arrives
+ * on a cold headless launch (no-op if already initialized by the foreground app).
+ */
+async function ensureHeadlessStoresReady(): Promise<void> {
+  if (!headlessStoresReadyPromise) {
+    headlessStoresReadyPromise = Promise.all([
+      rehydrateAllStores(),
+      awaitKvHydration(),
+    ])
+      .then(() => undefined)
+      .catch((e) => {
+        headlessStoresReadyPromise = null;
+        throw e;
+      });
+  }
+  await headlessStoresReadyPromise;
+}
 
 /**
  * Synchronize the React Native state to the native Android SharedPreferences and AppWidget,
@@ -65,9 +94,13 @@ export async function syncWidgetState(): Promise<void> {
         : songIds.has(currentTrack.id)
       : false;
 
+    const { offlineMode } = offlineModeStore.getState();
+
     let coverUri = '';
-    if (currentTrack?.coverArt) {
-      const resolved = await resolveDisplayImage(currentTrack.coverArt, 300, { offline: false });
+    const coverArtId = currentTrack ? resolveSongCoverArt(currentTrack) : undefined;
+    if (coverArtId) {
+      await ensureCoverArtAuth();
+      const resolved = await resolveDisplayImage(coverArtId, 600, { offline: offlineMode });
       if (resolved?.uri) {
         coverUri = resolved.uri;
       }
@@ -100,27 +133,45 @@ export async function syncWidgetState(): Promise<void> {
       }
     }
 
-    // Resolve cover URIs for recent/suggested items if needed
-    const resolvedRecents = await Promise.all(
-      effectiveRecents.slice(0, 4).map(async (item) => {
-        // If already a resolved local file or web URL, keep it
-        if (
-          item.coverUri &&
-          (item.coverUri.startsWith('file://') ||
-            item.coverUri.startsWith('http://') ||
-            item.coverUri.startsWith('https://'))
-        ) {
-          return item;
-        }
-        // Otherwise resolve coverArt ID (or item ID) to a real authenticated URL or local cache file URI
-        const artId = item.coverUri || item.id;
-        const res = await resolveDisplayImage(artId, 200, { offline: false });
-        return {
-          ...item,
-          coverUri: res?.uri ?? '',
-        };
-      })
-    );
+    // Resolve cover URIs for recent/suggested items if needed, memoized across rapid play/pause/star ticks
+    const topRecents = effectiveRecents.slice(0, 4);
+    const recentSignature = `${offlineMode ? '1' : '0'}|${topRecents
+      .map((item) => `${item.type}:${item.id}:${item.coverUri ?? ''}`)
+      .join('|')}`;
+    const now = Date.now();
+    const canReuseRecents =
+      recentSignature === cachedRecentSignature &&
+      now - cachedRecentAt < RECENT_CACHE_TTL_MS &&
+      cachedResolvedRecents.every((r) => Boolean(r.coverUri));
+
+    const resolvedRecents = canReuseRecents
+      ? cachedResolvedRecents
+      : await Promise.all(
+          topRecents.map(async (item) => {
+            // If already a resolved local file or web URL, keep it
+            if (
+              item.coverUri &&
+              (item.coverUri.startsWith('file://') ||
+                item.coverUri.startsWith('http://') ||
+                item.coverUri.startsWith('https://'))
+            ) {
+              return item;
+            }
+            // Otherwise resolve coverArt ID (or item ID) to a real authenticated URL or local cache file URI
+            const artId = item.coverUri || item.id;
+            const res = await resolveDisplayImage(artId, 200, { offline: offlineMode });
+            return {
+              ...item,
+              coverUri: res?.uri ?? '',
+            };
+          })
+        );
+
+    if (!canReuseRecents) {
+      cachedRecentSignature = recentSignature;
+      cachedResolvedRecents = resolvedRecents;
+      cachedRecentAt = now;
+    }
 
     MusicWidgetModule.updateWidgetState({
       trackId: currentTrack?.id ?? '',
@@ -230,7 +281,7 @@ async function playRecentItem(
         .map((sId) => getSongEnvelope(sId))
         .filter((s): s is Child => s !== null);
       if (songs.length > 0) {
-        await playTrack(songs[0], songs, id);
+        await playTrack(songs[0], songs, type === 'playlist' ? id : undefined);
         return;
       }
     }
@@ -246,23 +297,30 @@ async function playRecentItem(
     if (type === 'album') {
       const album = await fetchAlbumDetail(id);
       if (album?.song && album.song.length > 0) {
-        await playTrack(album.song[0], album.song, id);
+        await playTrack(album.song[0], album.song);
         return;
       }
 
-      // Local DB fallback: query songs with album_id or matching album title
+      // Local DB fallback: first hit the indexed `album_id` lookup; only fall back
+      // to an unindexed `album` title scan if `album_id` returns zero rows.
       const db = getDb();
       if (db) {
         try {
-          const rows = await db.getAllAsync<SongListRow>(
-            `SELECT ${SONG_LIST_COLS} FROM songs WHERE album_id = ? OR (album = ? AND album != '') ORDER BY disc_number, track, sort_title`,
-            [id, title ?? ''],
+          let rows = await db.getAllAsync<SongListRow>(
+            `SELECT ${SONG_LIST_COLS} FROM songs WHERE album_id = ? ORDER BY disc_number, track, sort_title`,
+            [id],
           );
+          if (rows.length === 0 && title) {
+            rows = await db.getAllAsync<SongListRow>(
+              `SELECT ${SONG_LIST_COLS} FROM songs WHERE album = ? ORDER BY disc_number, track, sort_title`,
+              [title],
+            );
+          }
           if (rows && rows.length > 0) {
             await hydrateSongRows(db, rows);
             const songs = rows.map(songListRowToChild);
             if (songs.length > 0) {
-              await playTrack(songs[0], songs, id);
+              await playTrack(songs[0], songs);
               return;
             }
           }
@@ -349,15 +407,22 @@ async function playRecentItem(
  * Handle direct actions dispatched from Android widget PendingIntents.
  */
 export async function handleWidgetAction(action: string, extras?: Record<string, any>): Promise<void> {
+  if (!isInitialized) {
+    await ensureHeadlessStoresReady();
+  }
+  await initPlayer();
+
   switch (action) {
     case 'com.resubstreamer.widget.ACTION_PLAY_PAUSE': {
       const { currentTrack, playbackState, queue } = playerStore.getState();
       if (playbackState === 'playing' || playbackState === 'buffering') {
         await getTrackPlayer().pause();
       } else if (currentTrack && queue.length > 0) {
+        await awaitHydration();
         await getTrackPlayer().play();
       } else {
         restorePersistedQueueAfterBoot();
+        await awaitHydration();
         const stateAfter = playerStore.getState();
         if (stateAfter.currentTrack && stateAfter.queue.length > 0) {
           await getTrackPlayer().play();

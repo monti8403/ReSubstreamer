@@ -167,13 +167,19 @@ jest.mock('../../store/persistence/kvStorage', () => {
   return { kvStorage: adapter, kvStorageSync: adapter };
 });
 
-// Snapshot helpers in musicCacheTables. Two-source dedup is exercised
+// Store snapshots in musicCacheStore. Two-source dedup is exercised
 // via these returning predictable sets.
-const mockHydrateCachedItems = jest.fn(() => ({}));
-const mockHydrateCachedSongs = jest.fn(() => ({}));
-jest.mock('../../store/persistence/musicCacheTables', () => ({
-  hydrateCachedItems: () => mockHydrateCachedItems(),
-  hydrateCachedSongs: () => mockHydrateCachedSongs(),
+const mockMusicCacheState: {
+  cachedItems: Record<string, any>;
+  cachedSongs: Record<string, any>;
+} = {
+  cachedItems: {},
+  cachedSongs: {},
+};
+jest.mock('../../store/musicCacheStore', () => ({
+  musicCacheStore: {
+    getState: () => mockMusicCacheState,
+  },
 }));
 
 const mockGetAllCachedCoverArtIds = jest.fn(() => [] as string[]);
@@ -234,8 +240,8 @@ beforeEach(() => {
   mockOfflineMode.offlineMode = false;
   mockConnectivity.hasConnection = true;
   mockConnectivity.isServerReachable = true;
-  mockHydrateCachedItems.mockReturnValue({});
-  mockHydrateCachedSongs.mockReturnValue({});
+  mockMusicCacheState.cachedItems = {};
+  mockMusicCacheState.cachedSongs = {};
   mockGetAllCachedCoverArtIds.mockReturnValue([]);
   mockDownloaderShouldFail = false;
   // Re-install the downloader stub — it may have been reset by
@@ -262,14 +268,14 @@ describe('enqueueImageRefreshCycle', () => {
     // Snapshot keys off the stored coverArt VALUE: the cached_item's
     // coverArtId for album/playlist, and the mode-aware resolved cover for
     // songs (album mode, empty library → falls back to the song's own coverArt).
-    mockHydrateCachedItems.mockReturnValue({
+    mockMusicCacheState.cachedItems = {
       'a-1': { itemId: 'a-1', type: 'album', coverArtId: 'cov-a1' },
       'pl-1': { itemId: 'pl-1', type: 'playlist', coverArtId: 'cov-pl1' },
-    });
-    mockHydrateCachedSongs.mockReturnValue({
+    };
+    mockMusicCacheState.cachedSongs = {
       's-1': { id: 's-1', albumId: 'a-2', coverArt: 'cov-a2' },
       's-2': { id: 's-2', albumId: 'a-1', coverArt: 'cov-a1' }, // dedups with item a-1's cover
-    });
+    };
 
     const cycleId = await enqueueImageRefreshCycle('refresh-downloads');
 
@@ -308,7 +314,7 @@ describe('enqueueImageRefreshCycle', () => {
     mockQueueState.rows[0].status = 'queued'; // ensure cycle isn't complete
 
     // Second call returns the existing cycle id (no-op)
-    mockHydrateCachedItems.mockReturnValue({ 'a-1': { type: 'album', coverArtId: 'cov-b' } });
+    mockMusicCacheState.cachedItems = { 'a-1': { type: 'album', coverArtId: 'cov-b' } };
     const second = await enqueueImageRefreshCycle('refresh-downloads');
     expect(second).toBe(first);
     expect(mockEnqueueBulk).toHaveBeenCalledTimes(1);

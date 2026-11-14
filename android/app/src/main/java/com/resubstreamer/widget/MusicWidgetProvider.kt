@@ -23,15 +23,22 @@ import android.view.View
 import android.widget.RemoteViews
 import androidx.core.graphics.ColorUtils
 import androidx.palette.graphics.Palette
+import com.facebook.react.modules.network.OkHttpClientProvider
 import com.resubstreamer.R
+import expo.modules.ssltrust.CustomOkHttpClientFactory
+import expo.modules.ssltrust.SslTrustStore
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONArray
 import java.io.File
-import java.net.URL
+import java.util.concurrent.TimeUnit
 
 class MusicWidgetProvider : AppWidgetProvider() {
 
@@ -54,6 +61,12 @@ class MusicWidgetProvider : AppWidgetProvider() {
 
     companion object {
         private const val TAG = "MusicWidgetProvider"
+        private const val MAX_COVER_DECODE_PX = 256
+        private const val FAILED_URI_TTL_MS = 60_000L
+        private const val ROLE_MAIN = 1
+        private const val ROLE_RECENT_ROUNDED = 2
+        private const val ROLE_CIRCULAR = 4
+
         private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
         data class CoverColorData(
@@ -62,10 +75,71 @@ class MusicWidgetProvider : AppWidgetProvider() {
             val circularBitmap: Bitmap?,
             val dominantColor: Int,
             val vibrantColor: Int
+        ) {
+            fun hasAllRoles(rolesMask: Int): Boolean {
+                if ((rolesMask and ROLE_MAIN) != 0 && mainRoundedBitmap == null) return false
+                if ((rolesMask and ROLE_RECENT_ROUNDED) != 0 && recentRoundedBitmap == null) return false
+                if ((rolesMask and ROLE_CIRCULAR) != 0 && circularBitmap == null) return false
+                return true
+            }
+        }
+
+        private data class InFlightCoverLoad(
+            val rolesMask: Int,
+            val deferred: Deferred<CoverColorData?>
         )
 
         // Memory cache for decoded bitmaps and extracted palette colors (keyed by URI)
         private val coverCache = object : LruCache<String, CoverColorData>(20) {}
+
+        // Negative-cache TTL to prevent infinite retry/updateWidget loops on unreadable URIs
+        private val failedUris = LruCache<String, Long>(64)
+
+        // Deduplicates concurrent cover loads per URI across multiple widget instances/updates
+        private val inFlightLock = Any()
+        private val inFlightLoads = HashMap<String, InFlightCoverLoad>()
+
+        @Volatile
+        private var widgetHttpClient: OkHttpClient? = null
+
+        private fun getWidgetHttpClient(context: Context): OkHttpClient {
+            widgetHttpClient?.let { return it }
+            return synchronized(this) {
+                widgetHttpClient?.let { return it }
+                val appContext = context.applicationContext
+                if (SslTrustStore.getCustomSslSocketFactory() == null) {
+                    SslTrustStore.init(appContext)
+                }
+                val builder = try {
+                    OkHttpClientProvider.getOkHttpClient().newBuilder()
+                } catch (_: Exception) {
+                    OkHttpClient.Builder()
+                }
+                builder
+                    .connectTimeout(5, TimeUnit.SECONDS)
+                    .readTimeout(5, TimeUnit.SECONDS)
+                    .followRedirects(true)
+                    .followSslRedirects(true)
+
+                val sslFactory = SslTrustStore.getCustomSslSocketFactory()
+                val trustManager = SslTrustStore.getCustomTrustManager()
+                if (sslFactory != null && trustManager != null) {
+                    builder
+                        .sslSocketFactory(sslFactory, trustManager)
+                        .hostnameVerifier(CustomOkHttpClientFactory.CustomHostnameVerifier())
+                }
+                builder.build().also { widgetHttpClient = it }
+            }
+        }
+
+        private fun isNegativelyCached(uri: String): Boolean {
+            val failedAt = failedUris.get(uri) ?: return false
+            if (System.currentTimeMillis() - failedAt < FAILED_URI_TTL_MS) {
+                return true
+            }
+            failedUris.remove(uri)
+            return false
+        }
 
         fun updateAllWidgets(context: Context) {
             try {
@@ -200,35 +274,51 @@ class MusicWidgetProvider : AppWidgetProvider() {
                 // Render views immediately
                 appWidgetManager.updateAppWidget(appWidgetId, views)
 
-                // Collect missing covers (main cover and recent items)
-                val missingUris = mutableListOf<String>()
-                if (!coverUri.isNullOrEmpty() && coverCache.get(coverUri) == null) {
-                    missingUris.add(coverUri)
+                // Collect missing covers and required bitmap roles (main cover + recent cards)
+                val missingRoles = LinkedHashMap<String, Int>()
+                if (!coverUri.isNullOrEmpty() && !isNegativelyCached(coverUri)) {
+                    val existing = coverCache.get(coverUri)
+                    if (existing == null || !existing.hasAllRoles(ROLE_MAIN)) {
+                        missingRoles[coverUri] = ROLE_MAIN
+                    }
                 }
                 if (isExpanded) {
                     try {
                         val array = JSONArray(recentItemsJson)
                         for (i in 0 until minOf(4, array.length())) {
-                            val uri = array.getJSONObject(i).optString("coverUri", "")
-                            if (uri.isNotEmpty() && coverCache.get(uri) == null && !missingUris.contains(uri)) {
-                                missingUris.add(uri)
+                            val obj = array.getJSONObject(i)
+                            val uri = obj.optString("coverUri", "")
+                            if (uri.isEmpty() || isNegativelyCached(uri)) continue
+                            val type = obj.optString("type", "album")
+                            val role = if (type == "artist") ROLE_CIRCULAR else ROLE_RECENT_ROUNDED
+                            val existing = coverCache.get(uri)
+                            if (existing == null || !existing.hasAllRoles(role)) {
+                                missingRoles[uri] = (missingRoles[uri] ?: 0) or role
                             }
                         }
                     } catch (_: Exception) {}
                 }
 
-                if (missingUris.isNotEmpty()) {
+                if (missingRoles.isNotEmpty()) {
                     coroutineScope.launch {
-                        withContext(Dispatchers.IO) {
-                            for (uri in missingUris) {
-                                val loaded = loadCoverAndExtractColors(context, uri)
+                        val anyLoaded = withContext(Dispatchers.IO) {
+                            var loadedAny = false
+                            for ((uri, rolesMask) in missingRoles) {
+                                if (isNegativelyCached(uri)) continue
+                                val alreadyCached = coverCache.get(uri)
+                                if (alreadyCached != null && alreadyCached.hasAllRoles(rolesMask)) continue
+
+                                val loaded = getOrLoadCover(context, uri, rolesMask)
                                 if (loaded != null) {
-                                    coverCache.put(uri, loaded)
+                                    loadedAny = true
                                 }
                             }
+                            loadedAny
                         }
-                        withContext(Dispatchers.Main) {
-                            updateWidget(context, appWidgetManager, appWidgetId)
+                        if (anyLoaded) {
+                            withContext(Dispatchers.Main) {
+                                updateWidget(context, appWidgetManager, appWidgetId)
+                            }
                         }
                     }
                 }
@@ -341,15 +431,130 @@ class MusicWidgetProvider : AppWidgetProvider() {
             }
         }
 
-        private suspend fun loadCoverAndExtractColors(context: Context, coverUri: String): CoverColorData? {
+        private suspend fun getOrLoadCover(
+            context: Context,
+            coverUri: String,
+            rolesMask: Int
+        ): CoverColorData? {
+            var prevEntry: InFlightCoverLoad? = null
+            var waitOnly = false
+
+            val entry: InFlightCoverLoad = synchronized(inFlightLock) {
+                val current = inFlightLoads[coverUri]
+                if (current != null && !current.deferred.isCompleted && (current.rolesMask and rolesMask) == rolesMask) {
+                    waitOnly = true
+                    current
+                } else {
+                    prevEntry = if (current != null && !current.deferred.isCompleted) current else null
+                    val mergedRoles = rolesMask or (current?.rolesMask ?: 0)
+                    lateinit var created: InFlightCoverLoad
+                    val deferred = coroutineScope.async(Dispatchers.IO) {
+                        try {
+                            prevEntry?.deferred?.await()
+                            val afterPrev = coverCache.get(coverUri)
+                            if (afterPrev != null && afterPrev.hasAllRoles(mergedRoles)) {
+                                return@async afterPrev
+                            }
+                            if (isNegativelyCached(coverUri)) {
+                                return@async null
+                            }
+                            val result = loadCoverAndExtractColors(context, coverUri, mergedRoles, afterPrev)
+                            if (result != null) {
+                                coverCache.put(coverUri, result)
+                                failedUris.remove(coverUri)
+                            } else {
+                                failedUris.put(coverUri, System.currentTimeMillis())
+                            }
+                            result
+                        } finally {
+                            synchronized(inFlightLock) {
+                                if (inFlightLoads[coverUri] === created) {
+                                    inFlightLoads.remove(coverUri)
+                                }
+                            }
+                        }
+                    }
+                    created = InFlightCoverLoad(mergedRoles, deferred)
+                    inFlightLoads[coverUri] = created
+                    created
+                }
+            }
+
+            if (waitOnly) {
+                return entry.deferred.await()
+            }
+            return entry.deferred.await()
+        }
+
+        private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
+            val height = options.outHeight
+            val width = options.outWidth
+            var inSampleSize = 1
+            if (height > reqHeight || width > reqWidth) {
+                val halfHeight = height / 2
+                val halfWidth = width / 2
+                while ((halfHeight / inSampleSize) >= reqHeight && (halfWidth / inSampleSize) >= reqWidth) {
+                    inSampleSize *= 2
+                }
+            }
+            return inSampleSize
+        }
+
+        private fun decodeSampledBitmapFromBytes(bytes: ByteArray, maxPx: Int): Bitmap? {
+            val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOpts)
+            if (boundsOpts.outWidth <= 0 || boundsOpts.outHeight <= 0) return null
+
+            val decodeOpts = BitmapFactory.Options().apply {
+                inSampleSize = calculateInSampleSize(boundsOpts, maxPx, maxPx)
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
+        }
+
+        private fun decodeSampledBitmapFromFile(path: String, maxPx: Int): Bitmap? {
+            if (!File(path).exists()) return null
+            val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, boundsOpts)
+            if (boundsOpts.outWidth <= 0 || boundsOpts.outHeight <= 0) return null
+
+            val decodeOpts = BitmapFactory.Options().apply {
+                inSampleSize = calculateInSampleSize(boundsOpts, maxPx, maxPx)
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            return BitmapFactory.decodeFile(path, decodeOpts)
+        }
+
+        private fun decodeSampledBitmapFromContentUri(context: Context, uri: Uri, maxPx: Int): Bitmap? {
+            val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, boundsOpts)
+            }
+            if (boundsOpts.outWidth <= 0 || boundsOpts.outHeight <= 0) return null
+
+            val decodeOpts = BitmapFactory.Options().apply {
+                inSampleSize = calculateInSampleSize(boundsOpts, maxPx, maxPx)
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            return context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, decodeOpts)
+            }
+        }
+
+        private suspend fun loadCoverAndExtractColors(
+            context: Context,
+            coverUri: String,
+            rolesMask: Int,
+            existing: CoverColorData?
+        ): CoverColorData? {
             return withContext(Dispatchers.IO) {
+                var decodedBitmap: Bitmap? = null
+                var workingBitmap: Bitmap? = null
                 try {
-                    val rawBitmap = when {
+                    decodedBitmap = when {
                         coverUri.startsWith("content://") -> {
                             try {
-                                context.contentResolver.openInputStream(Uri.parse(coverUri))?.use {
-                                    BitmapFactory.decodeStream(it)
-                                }
+                                decodeSampledBitmapFromContentUri(context, Uri.parse(coverUri), MAX_COVER_DECODE_PX)
                             } catch (e: Exception) {
                                 Log.w(TAG, "Failed reading content URI $coverUri: ${e.message}")
                                 null
@@ -357,18 +562,28 @@ class MusicWidgetProvider : AppWidgetProvider() {
                         }
                         coverUri.startsWith("file://") -> {
                             val path = Uri.parse(coverUri).path
-                            if (path != null && File(path).exists()) BitmapFactory.decodeFile(path) else null
+                            if (path != null) decodeSampledBitmapFromFile(path, MAX_COVER_DECODE_PX) else null
                         }
                         coverUri.startsWith("/") -> {
-                            if (File(coverUri).exists()) BitmapFactory.decodeFile(coverUri) else null
+                            decodeSampledBitmapFromFile(coverUri, MAX_COVER_DECODE_PX)
                         }
                         coverUri.startsWith("http://") || coverUri.startsWith("https://") -> {
                             try {
-                                val conn = URL(coverUri).openConnection() as java.net.HttpURLConnection
-                                conn.connectTimeout = 5000
-                                conn.readTimeout = 5000
-                                conn.instanceFollowRedirects = true
-                                conn.inputStream.use { BitmapFactory.decodeStream(it) }
+                                val client = getWidgetHttpClient(context)
+                                val request = Request.Builder().url(coverUri).build()
+                                client.newCall(request).execute().use { response ->
+                                    if (!response.isSuccessful) {
+                                        Log.w(TAG, "HTTP ${response.code} loading cover $coverUri")
+                                        null
+                                    } else {
+                                        val bytes = response.body?.bytes()
+                                        if (bytes != null && bytes.isNotEmpty()) {
+                                            decodeSampledBitmapFromBytes(bytes, MAX_COVER_DECODE_PX)
+                                        } else {
+                                            null
+                                        }
+                                    }
+                                }
                             } catch (e: Exception) {
                                 Log.w(TAG, "Failed loading cover from URL $coverUri: ${e.message}")
                                 null
@@ -377,23 +592,57 @@ class MusicWidgetProvider : AppWidgetProvider() {
                         else -> null
                     } ?: return@withContext null
 
-                    // Palette extraction from original rawBitmap
-                    val palette = Palette.from(rawBitmap).generate()
-                    val vibrant = palette.vibrantSwatch?.rgb
-                        ?: palette.dominantSwatch?.rgb
-                        ?: Color.parseColor("#1DB954")
-                    val dominant = palette.dominantSwatch?.rgb
-                        ?: palette.darkMutedSwatch?.rgb
-                        ?: Color.parseColor("#181818")
+                    val maxDim = maxOf(decodedBitmap.width, decodedBitmap.height)
+                    workingBitmap = if (maxDim > MAX_COVER_DECODE_PX) {
+                        val scale = MAX_COVER_DECODE_PX.toFloat() / maxDim.toFloat()
+                        val targetW = (decodedBitmap.width * scale).toInt().coerceAtLeast(1)
+                        val targetH = (decodedBitmap.height * scale).toInt().coerceAtLeast(1)
+                        val scaled = Bitmap.createScaledBitmap(decodedBitmap, targetW, targetH, true)
+                        if (scaled !== decodedBitmap) {
+                            decodedBitmap.recycle()
+                        }
+                        decodedBitmap = null
+                        scaled
+                    } else {
+                        decodedBitmap.also { decodedBitmap = null }
+                    }
+
+                    val needMain = (rolesMask and ROLE_MAIN) != 0 && existing?.mainRoundedBitmap == null
+                    val needRecent = (rolesMask and ROLE_RECENT_ROUNDED) != 0 && existing?.recentRoundedBitmap == null
+                    val needCircular = (rolesMask and ROLE_CIRCULAR) != 0 && existing?.circularBitmap == null
+
+                    var dominant = existing?.dominantColor ?: Color.parseColor("#181818")
+                    var vibrant = existing?.vibrantColor ?: Color.parseColor("#1DB954")
+                    if (needMain) {
+                        val palette = Palette.from(workingBitmap).generate()
+                        vibrant = palette.vibrantSwatch?.rgb
+                            ?: palette.dominantSwatch?.rgb
+                            ?: Color.parseColor("#1DB954")
+                        dominant = palette.dominantSwatch?.rgb
+                            ?: palette.darkMutedSwatch?.rgb
+                            ?: Color.parseColor("#181818")
+                    }
 
                     // Strictly downscale bitmaps to avoid TransactionTooLargeException
                     val density = context.resources.displayMetrics.density
                     val targetMainPx = (52 * density).toInt().coerceIn(104, 180)
                     val targetRecentPx = (54 * density).toInt().coerceIn(108, 180)
 
-                    val mainRounded = getRoundedCornerBitmap(rawBitmap, 10f, targetMainPx, context)
-                    val recentRounded = getRoundedCornerBitmap(rawBitmap, 8f, targetRecentPx, context)
-                    val circular = getCircularBitmap(rawBitmap, targetRecentPx)
+                    val mainRounded = if (needMain) {
+                        getRoundedCornerBitmap(workingBitmap, 10f, targetMainPx, context)
+                    } else {
+                        existing?.mainRoundedBitmap
+                    }
+                    val recentRounded = if (needRecent) {
+                        getRoundedCornerBitmap(workingBitmap, 8f, targetRecentPx, context)
+                    } else {
+                        existing?.recentRoundedBitmap
+                    }
+                    val circular = if (needCircular) {
+                        getCircularBitmap(workingBitmap, targetRecentPx)
+                    } else {
+                        existing?.circularBitmap
+                    }
 
                     CoverColorData(
                         mainRoundedBitmap = mainRounded,
@@ -405,6 +654,9 @@ class MusicWidgetProvider : AppWidgetProvider() {
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to load cover from $coverUri: ${e.message}")
                     null
+                } finally {
+                    decodedBitmap?.let { if (!it.isRecycled) it.recycle() }
+                    workingBitmap?.let { if (!it.isRecycled) it.recycle() }
                 }
             }
         }

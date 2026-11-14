@@ -5,7 +5,7 @@
  * and elapsed / remaining time labels below.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Pressable,
   StyleSheet,
@@ -65,100 +65,150 @@ export function PlayerProgressBar({
   onRetry,
 }: PlayerProgressBarProps) {
   const { t } = useTranslation();
-  const trackWidth = useRef(0);
-  const trackPageX = useRef(0);
   const trackRef = useRef<View>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragFraction, setDragFraction] = useState(0);
+  const [throttledDragFraction, setThrottledDragFraction] = useState<number | null>(
+    null,
+  );
   const [pendingSeekFraction, setPendingSeekFraction] = useState<number | null>(
     null,
   );
+
+  const initialFraction =
+    duration > 0 ? clamp(position / duration, 0, 1) : 0;
+  const initialBufferedFraction =
+    duration > 0 ? clamp(bufferedPosition / duration, 0, 1) : 0;
+
+  const trackWidthSV = useSharedValue(0);
+  const trackPageXSV = useSharedValue(0);
+  const isDraggingSV = useSharedValue(false);
+  const dragFractionSV = useSharedValue(0);
+  const playbackFractionSV = useSharedValue(initialFraction);
+  const bufferedFractionSV = useSharedValue(initialBufferedFraction);
+  const lastLabelUpdateAtSV = useSharedValue(0);
   const thumbScale = useSharedValue(1);
 
-  const thumbAnimStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: thumbScale.value }],
+  const fillAnimStyle = useAnimatedStyle(() => {
+    const f = isDraggingSV.value ? dragFractionSV.value : playbackFractionSV.value;
+    return { width: `${f * 100}%` };
+  });
+
+  const thumbAnimStyle = useAnimatedStyle(() => {
+    const f = isDraggingSV.value ? dragFractionSV.value : playbackFractionSV.value;
+    return {
+      left: `${f * 100}%`,
+      transform: [{ scale: thumbScale.value }],
+    };
+  });
+
+  const bufferedAnimStyle = useAnimatedStyle(() => ({
+    width: `${bufferedFractionSV.value * 100}%`,
   }));
 
-  const dragFractionRef = useRef(dragFraction);
-  dragFractionRef.current = dragFraction;
   const durationRef = useRef(duration);
   durationRef.current = duration;
   const onSeekRef = useRef(onSeek);
   onSeekRef.current = onSeek;
 
-  /** Convert an absolute screen pageX to a 0–1 fraction across the track. */
-  const fractionFromPageX = (pageX: number) =>
-    clamp((pageX - trackPageX.current) / (trackWidth.current || 1), 0, 1);
-
-  const handleTapSeek = useCallback((absoluteX: number) => {
-    const frac = fractionFromPageX(absoluteX);
+  const handleTapSeek = useCallback((frac: number) => {
     setPendingSeekFraction(frac);
     onSeekRef.current(frac * durationRef.current);
   }, []);
 
-  const handlePanStart = useCallback((absoluteX: number) => {
-    const frac = fractionFromPageX(absoluteX);
-    setDragFraction(frac);
-    setIsDragging(true);
-    setPendingSeekFraction(null);
+  const handleDragLabelUpdate = useCallback((frac: number) => {
+    setThrottledDragFraction(frac);
   }, []);
 
-  const handlePanUpdate = useCallback((absoluteX: number) => {
-    setDragFraction(fractionFromPageX(absoluteX));
-  }, []);
-
-  const handlePanEnd = useCallback(() => {
-    const seekPos = dragFractionRef.current * durationRef.current;
-    setPendingSeekFraction(dragFractionRef.current);
-    setIsDragging(false);
-    onSeekRef.current(seekPos);
+  const handlePanEnd = useCallback((finalFrac: number) => {
+    setThrottledDragFraction(null);
+    setPendingSeekFraction(finalFrac);
+    onSeekRef.current(finalFrac * durationRef.current);
   }, []);
 
   const handlePanCancel = useCallback(() => {
-    setIsDragging(false);
+    setThrottledDragFraction(null);
   }, []);
 
-  const tapGesture = Gesture.Tap()
-    .onEnd((e) => {
-      'worklet';
-      runOnJS(handleTapSeek)(e.absoluteX);
-    });
+  const tapGesture = useMemo(
+    () =>
+      Gesture.Tap().onEnd((e) => {
+        'worklet';
+        const w = trackWidthSV.value || 1;
+        const frac = Math.max(0, Math.min(1, (e.absoluteX - trackPageXSV.value) / w));
+        playbackFractionSV.value = frac;
+        runOnJS(handleTapSeek)(frac);
+      }),
+    [handleTapSeek, playbackFractionSV, trackPageXSV, trackWidthSV],
+  );
 
-  const panGesture = Gesture.Pan()
-    .activeOffsetX([-6, 6])
-    .failOffsetY([-10, 10])
-    .onStart((e) => {
-      'worklet';
-      thumbScale.value = withSpring(ACTIVE_THUMB_SIZE / THUMB_SIZE);
-      runOnJS(handlePanStart)(e.absoluteX);
-    })
-    .onUpdate((e) => {
-      'worklet';
-      runOnJS(handlePanUpdate)(e.absoluteX);
-    })
-    .onEnd(() => {
-      'worklet';
-      thumbScale.value = withSpring(1);
-      runOnJS(handlePanEnd)();
-    })
-    .onFinalize((_, success) => {
-      'worklet';
-      if (!success) {
-        thumbScale.value = withSpring(1);
-        runOnJS(handlePanCancel)();
-      }
-    });
+  const panGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetX([-6, 6])
+        .failOffsetY([-10, 10])
+        .onStart((e) => {
+          'worklet';
+          const w = trackWidthSV.value || 1;
+          const frac = Math.max(0, Math.min(1, (e.absoluteX - trackPageXSV.value) / w));
+          isDraggingSV.value = true;
+          dragFractionSV.value = frac;
+          lastLabelUpdateAtSV.value = Date.now();
+          thumbScale.value = withSpring(ACTIVE_THUMB_SIZE / THUMB_SIZE);
+          runOnJS(handleDragLabelUpdate)(frac);
+        })
+        .onUpdate((e) => {
+          'worklet';
+          const w = trackWidthSV.value || 1;
+          const frac = Math.max(0, Math.min(1, (e.absoluteX - trackPageXSV.value) / w));
+          dragFractionSV.value = frac;
+          const now = Date.now();
+          if (now - lastLabelUpdateAtSV.value >= 80) {
+            lastLabelUpdateAtSV.value = now;
+            runOnJS(handleDragLabelUpdate)(frac);
+          }
+        })
+        .onEnd(() => {
+          'worklet';
+          const finalFrac = dragFractionSV.value;
+          playbackFractionSV.value = finalFrac;
+          isDraggingSV.value = false;
+          thumbScale.value = withSpring(1);
+          runOnJS(handlePanEnd)(finalFrac);
+        })
+        .onFinalize((_, success) => {
+          'worklet';
+          if (!success) {
+            isDraggingSV.value = false;
+            thumbScale.value = withSpring(1);
+            runOnJS(handlePanCancel)();
+          }
+        }),
+    [
+      dragFractionSV,
+      handleDragLabelUpdate,
+      handlePanCancel,
+      handlePanEnd,
+      isDraggingSV,
+      lastLabelUpdateAtSV,
+      playbackFractionSV,
+      thumbScale,
+      trackPageXSV,
+      trackWidthSV,
+    ],
+  );
 
-  const seekGesture = Gesture.Race(panGesture, tapGesture);
+  const seekGesture = useMemo(
+    () => Gesture.Race(panGesture, tapGesture),
+    [panGesture, tapGesture],
+  );
 
   const handleLayout = useCallback(
     (e: { nativeEvent: { layout: { width: number } } }) => {
-      trackWidth.current = e.nativeEvent.layout.width;
+      trackWidthSV.value = e.nativeEvent.layout.width;
       trackRef.current?.measureInWindow((x) => {
-        if (x != null) trackPageX.current = x;
+        if (x != null) trackPageXSV.value = x;
       });
     },
-    [],
+    [trackPageXSV, trackWidthSV],
   );
 
   // Clear the pending seek fraction once the store position catches up.
@@ -183,9 +233,8 @@ export function PlayerProgressBar({
     }
   }, [pendingSeekFraction]);
 
-  const fraction = isDragging
-    ? dragFraction
-    : pendingSeekFraction != null
+  const effectivePlaybackFraction =
+    pendingSeekFraction != null
       ? pendingSeekFraction
       : duration > 0
         ? clamp(position / duration, 0, 1)
@@ -194,11 +243,22 @@ export function PlayerProgressBar({
   const bufferedFraction =
     duration > 0 ? clamp(bufferedPosition / duration, 0, 1) : 0;
 
-  const displayPosition = isDragging
-    ? dragFraction * duration
-    : pendingSeekFraction != null
-      ? pendingSeekFraction * duration
-      : position;
+  useEffect(() => {
+    playbackFractionSV.value = effectivePlaybackFraction;
+    bufferedFractionSV.value = bufferedFraction;
+  }, [
+    bufferedFraction,
+    bufferedFractionSV,
+    effectivePlaybackFraction,
+    playbackFractionSV,
+  ]);
+
+  const displayPosition =
+    throttledDragFraction != null
+      ? throttledDragFraction * duration
+      : pendingSeekFraction != null
+        ? pendingSeekFraction * duration
+        : position;
   const remaining = Math.max(0, duration - displayPosition);
 
   return (
@@ -215,20 +275,19 @@ export function PlayerProgressBar({
             pointerEvents="none"
           >
             {/* Buffered range (behind played fill) */}
-            <View
+            <Animated.View
               style={[
                 styles.bufferedFill,
-                {
-                  width: `${bufferedFraction * 100}%`,
-                  backgroundColor: colors.primary,
-                },
+                { backgroundColor: colors.primary },
+                bufferedAnimStyle,
               ]}
             />
             {/* Played range */}
-            <View
+            <Animated.View
               style={[
                 styles.fill,
-                { width: `${fraction * 100}%`, backgroundColor: colors.primary },
+                { backgroundColor: colors.primary },
+                fillAnimStyle,
               ]}
             />
           </View>
@@ -237,10 +296,7 @@ export function PlayerProgressBar({
             pointerEvents="none"
             style={[
               styles.thumb,
-              {
-                backgroundColor: colors.textPrimary,
-                left: `${fraction * 100}%`,
-              },
+              { backgroundColor: colors.textPrimary },
               thumbAnimStyle,
             ]}
           />

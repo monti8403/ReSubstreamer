@@ -14,7 +14,6 @@ import { useRating } from '../hooks/useRating';
 import { useSongCoverArt } from '../hooks/useSongCoverArt';
 import { moveQueueItemToUserQueue, removeItemFromQueue } from '../services/moreOptionsService';
 import { type Child } from '../services/subsonicService';
-import { offlineModeStore } from '../store/offlineModeStore';
 import { playerStore } from '../store/playerStore';
 import { formatTrackDuration } from '../utils/formatters';
 
@@ -35,6 +34,7 @@ export interface QueueItemRowProps {
   track: Child;
   index: number;
   isActive: boolean;
+  isInUserQueue?: boolean;
   colors: Pick<ThemeColors, 'textPrimary' | 'textSecondary' | 'primary' | 'border' | 'red' | 'green'>;
   onPress: (index: number) => void;
   onLongPress?: (track: Child) => void;
@@ -56,6 +56,7 @@ export const QueueItemRow = memo(function QueueItemRow({
   track,
   index,
   isActive,
+  isInUserQueue: isInUserQueueProp,
   colors,
   onPress,
   onLongPress,
@@ -75,8 +76,11 @@ export const QueueItemRow = memo(function QueueItemRow({
   const starred = useIsStarred('song', track.id);
   const downloadStatus = useDownloadStatus('song', track.id);
   const rating = useRating(track.id, track.userRating);
-  const offlineMode = offlineModeStore((s) => s.offlineMode);
-  const isInUserQueue = playerStore((s) => s.userQueueTrackIds.includes(track.id));
+  const isInUserQueue = playerStore((s) =>
+    isInUserQueueProp !== undefined
+      ? isInUserQueueProp
+      : s.userQueueTrackIds.includes(track.id),
+  );
 
   const handleRemove = useCallback(() => {
     removeItemFromQueue(index);
@@ -131,6 +135,7 @@ export const QueueItemRow = memo(function QueueItemRow({
       leftActions={leftActions}
       enableFullSwipeRight={!isActive && !isInUserQueue}
       enableFullSwipeLeft={!isActive}
+      actionSize="queue"
       restingBackgroundColor="transparent"
       onPress={handlePress}
       onLongPress={onLongPress ? handleLongPress : undefined}

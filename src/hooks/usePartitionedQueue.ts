@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import type { Child } from '../services/subsonicService';
+import { ensureQueueKey } from '../store/playerStore';
 
 export type HeaderSection = 'nowPlaying' | 'userQueue' | 'contextQueue';
 
@@ -16,6 +17,7 @@ export interface TrackQueueListItem {
   id: string;
   track: Child;
   isNowPlaying: boolean;
+  isUserQueue?: boolean;
   relativeTrackIndex: number;
   absoluteIndex: number;
 }
@@ -72,11 +74,23 @@ export function partitionQueue(
 
   const nowPlaying =
     activeIndex >= 0 && activeIndex < queue.length ? queue[activeIndex] : null;
-  const upcoming = queue.slice(activeIndex + 1);
 
   const userQueueSet = new Set(userQueueTrackIds);
-  const userQueue = upcoming.filter((item) => userQueueSet.has(item.id));
-  const nextUp = upcoming.filter((item) => !userQueueSet.has(item.id));
+  const userQueue: Child[] = [];
+  const nextUp: Child[] = [];
+  const userQueueAbsIndices: number[] = [];
+  const nextUpAbsIndices: number[] = [];
+
+  for (let absIdx = activeIndex + 1; absIdx < queue.length; absIdx++) {
+    const item = queue[absIdx];
+    if (userQueueSet.has(item.id)) {
+      userQueue.push(item);
+      userQueueAbsIndices.push(absIdx);
+    } else {
+      nextUp.push(item);
+      nextUpAbsIndices.push(absIdx);
+    }
+  }
 
   const visibleQueue = nowPlaying
     ? [nowPlaying, ...userQueue, ...nextUp]
@@ -87,20 +101,6 @@ export function partitionQueue(
   const nextUpStartIndex = userQueueStartIndex + userQueueCount;
   const nextUpCount = nextUp.length;
   const minDraggableIndex = userQueueStartIndex;
-
-  const findAbsoluteIndex = (track: Child): number => {
-    const queueKey = (track as any)._queueKey;
-    if (queueKey) {
-      const byKey = queue.findIndex(
-        (t, i) => i >= activeIndex && (t as any)._queueKey === queueKey,
-      );
-      if (byKey >= 0) return byKey;
-    }
-    const found = queue.findIndex(
-      (t, i) => i >= activeIndex && t.id === track.id,
-    );
-    return found >= 0 ? found : activeIndex;
-  };
 
   const queueListItems: QueueListItem[] = [];
   const reorderableListItems: QueueListItem[] = [];
@@ -114,9 +114,10 @@ export function partitionQueue(
     });
     queueListItems.push({
       type: 'track',
-      id: (nowPlaying as any)._queueKey || `track-${nowPlaying.id}-active`,
+      id: ensureQueueKey(nowPlaying) || `track-${nowPlaying.id}-active`,
       track: nowPlaying,
       isNowPlaying: true,
+      isUserQueue: false,
       relativeTrackIndex: 0,
       absoluteIndex: activeIndex,
     });
@@ -133,19 +134,21 @@ export function partitionQueue(
     queueListItems.push(userHeader);
     reorderableListItems.push(userHeader);
 
-    userQueue.forEach((track, idx) => {
+    for (let idx = 0; idx < userQueue.length; idx++) {
+      const track = userQueue[idx];
       const relIdx = userQueueStartIndex + idx;
       const trackItem: TrackQueueListItem = {
         type: 'track',
-        id: (track as any)._queueKey || `track-${track.id}-${relIdx}`,
+        id: ensureQueueKey(track) || `track-${track.id}-${relIdx}`,
         track,
         isNowPlaying: false,
+        isUserQueue: true,
         relativeTrackIndex: relIdx,
-        absoluteIndex: findAbsoluteIndex(track),
+        absoluteIndex: userQueueAbsIndices[idx],
       };
       queueListItems.push(trackItem);
       reorderableListItems.push(trackItem);
-    });
+    }
   }
 
   if (nextUpCount > 0) {
@@ -158,19 +161,21 @@ export function partitionQueue(
     queueListItems.push(nextUpHeader);
     reorderableListItems.push(nextUpHeader);
 
-    nextUp.forEach((track, idx) => {
+    for (let idx = 0; idx < nextUp.length; idx++) {
+      const track = nextUp[idx];
       const relIdx = nextUpStartIndex + idx;
       const trackItem: TrackQueueListItem = {
         type: 'track',
-        id: (track as any)._queueKey || `track-${track.id}-${relIdx}`,
+        id: ensureQueueKey(track) || `track-${track.id}-${relIdx}`,
         track,
         isNowPlaying: false,
+        isUserQueue: false,
         relativeTrackIndex: relIdx,
-        absoluteIndex: findAbsoluteIndex(track),
+        absoluteIndex: nextUpAbsIndices[idx],
       };
       queueListItems.push(trackItem);
       reorderableListItems.push(trackItem);
-    });
+    }
   }
 
   return {

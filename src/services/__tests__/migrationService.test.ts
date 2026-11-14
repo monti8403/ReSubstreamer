@@ -77,8 +77,6 @@ jest.mock('../../store/persistence/musicCacheTables', () => ({
   deleteCachedSong: jest.fn(),
   deleteCachedItem: jest.fn(),
   clearAllMusicCacheRows: jest.fn(),
-  hydrateCachedSongs: jest.fn(() => ({})),
-  hydrateCachedItems: jest.fn(() => ({})),
   // Task 14 diagnostic helpers.
   countCachedSongs: jest.fn(() => 0),
   countCachedItems: jest.fn(() => 0),

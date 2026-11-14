@@ -126,6 +126,7 @@ export function PlayerTabletSplitview() {
           track={item.track}
           index={item.absoluteIndex}
           isActive={item.isNowPlaying}
+          isInUserQueue={item.isUserQueue}
           colors={queueColors}
           onPress={handleQueueItemPress}
           onLongPress={handleQueueItemLongPress}
@@ -255,6 +256,40 @@ interface PanelHeaderProps {
   handleExpand: () => void;
 }
 
+const IsolatedProgressBar = memo(function IsolatedProgressBar({
+  colors,
+  handleSeek,
+  isBuffering,
+  error,
+  retrying,
+  onRetry,
+}: {
+  colors: ThemeColors;
+  handleSeek: (sec: number) => void;
+  isBuffering: boolean;
+  error: string | null;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  const position = playerStore((s) => s.position);
+  const duration = playerStore((s) => s.duration);
+  const bufferedPosition = playerStore((s) => s.bufferedPosition);
+
+  return (
+    <PlayerProgressBar
+      position={position}
+      duration={duration}
+      bufferedPosition={bufferedPosition}
+      colors={colors}
+      onSeek={handleSeek}
+      isBuffering={isBuffering}
+      error={error}
+      retrying={retrying}
+      onRetry={onRetry}
+    />
+  );
+});
+
 const PanelHeader = memo(function PanelHeader({
   currentTrack,
   colors,
@@ -264,9 +299,6 @@ const PanelHeader = memo(function PanelHeader({
   const { t } = useTranslation();
   const songCoverArtId = useSongCoverArt(currentTrack);
   const { isPlaying, isBuffering } = usePlaybackState();
-  const position = playerStore((s) => s.position);
-  const duration = playerStore((s) => s.duration);
-  const bufferedPosition = playerStore((s) => s.bufferedPosition);
   const error = playerStore((s) => s.error);
   const retrying = playerStore((s) => s.retrying);
 
@@ -335,12 +367,9 @@ const PanelHeader = memo(function PanelHeader({
 
           {/* Progress bar */}
           <View style={styles.progressSection}>
-            <PlayerProgressBar
-              position={position}
-              duration={duration}
-              bufferedPosition={bufferedPosition}
+            <IsolatedProgressBar
               colors={colors}
-              onSeek={handleSeek}
+              handleSeek={handleSeek}
               isBuffering={isBuffering}
               error={error}
               retrying={retrying}

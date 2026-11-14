@@ -1,5 +1,5 @@
-import FontAwesome5 from "@react-native-vector-icons/fontawesome5/static";
 import Ionicons from "@react-native-vector-icons/ionicons/static";
+import MaterialDesignIcons from "@react-native-vector-icons/material-design-icons/static";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Linking,
@@ -336,7 +336,7 @@ export const AlbumInfoContent = memo(function AlbumInfoContent({
               accessibilityLabel={t('viewOnLastFm')}
               style={({ pressed }) => [styles.infoLinkChip, { borderColor: hexWithAlpha(colors.border, 0.5) }, pressed && styles.pressed]}
             >
-              <FontAwesome5 name="lastfm" iconStyle="brand" size={14} color={colors.textPrimary} />
+              <MaterialDesignIcons name="radio" size={14} color={colors.textPrimary} />
               <Text style={[styles.infoLinkText, { color: colors.textPrimary }]}>Last.fm</Text>
               <Ionicons name="open-outline" size={12} color={colors.textPrimary} style={styles.infoLinkArrow} />
             </Pressable>
@@ -360,7 +360,7 @@ export const AlbumInfoContent = memo(function AlbumInfoContent({
               accessibilityLabel={t('viewOnWikipedia')}
               style={({ pressed }) => [styles.infoLinkChip, { borderColor: hexWithAlpha(colors.border, 0.5) }, pressed && styles.pressed]}
             >
-              <FontAwesome5 name="wikipedia-w" iconStyle="brand" size={14} color={colors.textPrimary} />
+              <MaterialDesignIcons name="wikipedia" size={14} color={colors.textPrimary} />
               <Text style={[styles.infoLinkText, { color: colors.textPrimary }]}>Wikipedia</Text>
               <Ionicons name="open-outline" size={12} color={colors.textPrimary} style={styles.infoLinkArrow} />
             </Pressable>

@@ -23,6 +23,8 @@ export interface LyricsContentProps {
   onRetry?: () => void;
   /** Track duration in seconds — when provided, enables fake-timing for unsynced lyrics. */
   durationSec?: number | null;
+  /** Whether the enclosing Lyrics tab/panel is currently visible to the user. */
+  isActiveTab?: boolean;
   colors: {
     textPrimary: string;
     textSecondary: string;
@@ -74,6 +76,7 @@ export const LyricsContent = memo(function LyricsContent({
   lyricsError,
   onRetry,
   durationSec,
+  isActiveTab = true,
   colors,
 }: LyricsContentProps) {
   const { t } = useTranslation();
@@ -173,6 +176,7 @@ export const LyricsContent = memo(function LyricsContent({
           source="structured"
           textColor={colors.textPrimary}
           pillBackgroundColor={hexWithAlpha(colors.background, 0.55)}
+          isActiveTab={isActiveTab}
         />
       </View>
     );
@@ -192,6 +196,7 @@ export const LyricsContent = memo(function LyricsContent({
           source="fake"
           textColor={colors.textPrimary}
           pillBackgroundColor={hexWithAlpha(colors.background, 0.55)}
+          isActiveTab={isActiveTab}
         />
       </View>
     );

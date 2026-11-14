@@ -3,8 +3,6 @@
 // a jest.fn so we can assert wiring, and `kvStorage` is swapped for the
 // in-memory mock so the tiny settings blob round-trips.
 jest.mock('../persistence/musicCacheTables', () => ({
-  hydrateCachedSongs: jest.fn(() => ({})),
-  hydrateCachedItems: jest.fn(() => ({})),
   hydrateCachedSongsAsync: jest.fn(async () => ({})),
   hydrateCachedItemsAsync: jest.fn(async () => ({})),
   hydrateDownloadQueueAsync: jest.fn(async () => []),
@@ -38,9 +36,7 @@ import {
   clearAllMusicCacheRows,
   deleteCachedItem,
   deleteCachedSong,
-  hydrateCachedItems,
   hydrateCachedItemsAsync,
-  hydrateCachedSongs,
   hydrateCachedSongsAsync,
   hydrateDownloadQueueAsync,
   insertDownloadQueueItem,
@@ -68,8 +64,6 @@ import { kvStorage } from '../persistence';
 
 // jest.Mock typed handles -- importing named functions from the mocked module
 // gives us the jest.fn spies.
-const mockHydrateCachedSongs = hydrateCachedSongs as jest.Mock;
-const mockHydrateCachedItems = hydrateCachedItems as jest.Mock;
 const mockHydrateCachedSongsAsync = hydrateCachedSongsAsync as jest.Mock;
 const mockHydrateCachedItemsAsync = hydrateCachedItemsAsync as jest.Mock;
 const mockHydrateDownloadQueueAsync = hydrateDownloadQueueAsync as jest.Mock;
@@ -191,8 +185,6 @@ beforeEach(() => {
   resetStore();
   jest.clearAllMocks();
   // Default hydrate returns: empty.
-  mockHydrateCachedSongs.mockReturnValue({});
-  mockHydrateCachedItems.mockReturnValue({});
   mockHydrateCachedSongsAsync.mockResolvedValue({});
   mockHydrateCachedItemsAsync.mockResolvedValue({});
   mockHydrateDownloadQueueAsync.mockResolvedValue([]);

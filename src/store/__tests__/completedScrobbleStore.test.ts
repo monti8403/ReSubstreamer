@@ -56,7 +56,12 @@ function mockBuildAnalytics() {
     .slice(0, 10)
     .map(([id, v]) => ({ song: latestSong.get(id)!, count: v.count }));
   return {
-    stats: { totalPlays: mockDb.length, totalListeningSeconds, uniqueArtists },
+    stats: {
+      totalPlays: mockDb.length,
+      totalListeningSeconds,
+      uniqueArtists,
+      uniqueArtistCount: Object.keys(uniqueArtists).length,
+    },
     aggregates: {
       artistCounts,
       albumCounts,
@@ -124,7 +129,7 @@ beforeEach(() => {
   mockMerge.mockClear();
   completedScrobbleStore.setState({
     recentScrobbles: [],
-    stats: { totalPlays: 0, totalListeningSeconds: 0, uniqueArtists: {} },
+    stats: { totalPlays: 0, totalListeningSeconds: 0, uniqueArtists: {}, uniqueArtistCount: 0 },
     aggregates: {
       artistCounts: {},
       albumCounts: {},

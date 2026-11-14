@@ -7,7 +7,7 @@ import { playbackSettingsStore } from '../store/playbackSettingsStore';
  */
 export function useCanSkip(): { canSkipNext: boolean; canSkipPrevious: boolean } {
   const currentTrackIndex = playerStore((s) => s.currentTrackIndex);
-  const queueLength = playerStore((s) => s.queue).length;
+  const queueLength = playerStore((s) => s.queue.length);
   const repeatMode = playbackSettingsStore((s) => s.repeatMode);
 
   if (currentTrackIndex == null || queueLength === 0) {

@@ -31,6 +31,7 @@ import {
   hydrateDownloadQueueAsync,
   insertDownloadQueueItem,
   markDownloadComplete,
+  readActiveQueuedSongMapAsync,
   removeCachedItemSong as removeCachedItemSongRow,
   removeDownloadQueueItem,
   reorderCachedItemSongs as reorderCachedItemSongsRow,
@@ -122,6 +123,9 @@ export interface MusicCacheState {
   cachedSongs: Record<string, CachedSongMeta>;
   cachedItems: Record<string, CachedItemMeta>;
   downloadQueue: DownloadQueueItem[];
+  /** In-memory active-queue song status map (`'queued' | 'downloading'`) so
+   *  row selectors like `useDownloadStatus` read in O(1) without synchronous SQLite reads. */
+  queuedSongStatuses: Record<string, 'queued' | 'downloading'>;
 
   // Settings (persisted as a tiny JSON blob)
   maxConcurrentDownloads: MaxConcurrentDownloads;
@@ -242,6 +246,25 @@ function generateQueueId(): string {
  * issued after the write still runs first.
  */
 const queuePayloadWrites = new Map<string, Promise<void>>();
+let queueSongIdsByQueueId = new Map<string, string[]>();
+
+function rebuildQueuedSongStatuses(
+  queue: readonly DownloadQueueItem[],
+): Record<string, 'queued' | 'downloading'> {
+  if (queue.length === 0 || queueSongIdsByQueueId.size === 0) return {};
+  const map: Record<string, 'queued' | 'downloading'> = {};
+  for (const q of queue) {
+    if (q.status !== 'queued' && q.status !== 'downloading') continue;
+    const ids = queueSongIdsByQueueId.get(q.queueId);
+    if (!ids) continue;
+    for (const songId of ids) {
+      if (map[songId] === undefined) {
+        map[songId] = q.status;
+      }
+    }
+  }
+  return map;
+}
 
 /** Resolves once `queueId`'s songs are on disk; already-resolved for anything else. */
 export function whenQueuePayloadWritten(queueId: string): Promise<void> {
@@ -270,9 +293,26 @@ function appendToQueue(
   skipWhenCached: boolean,
 ): void {
   const queueId = generateQueueId();
+  const songIds = songs.map((s) => s.id).filter(Boolean);
+  let added = false;
   set((state) => {
     if (state.downloadQueue.some((q) => q.itemId === draft.itemId)) return {};
     if (skipWhenCached && draft.itemId in state.cachedItems) return {};
+    added = true;
+    queueSongIdsByQueueId.set(queueId, songIds);
+    const nextQueuedSongStatuses =
+      songIds.length === 0
+        ? state.queuedSongStatuses
+        : (() => {
+            let copy: Record<string, 'queued' | 'downloading'> | null = null;
+            for (const songId of songIds) {
+              if (state.queuedSongStatuses[songId] === undefined) {
+                copy ??= { ...state.queuedSongStatuses };
+                copy[songId] = 'queued';
+              }
+            }
+            return copy ?? state.queuedSongStatuses;
+          })();
     const maxPosition = state.downloadQueue.reduce(
       (max, q) => (q.queuePosition > max ? q.queuePosition : max),
       0,
@@ -289,8 +329,10 @@ function appendToQueue(
           queuePosition: maxPosition + 1,
         },
       ],
+      queuedSongStatuses: nextQueuedSongStatuses,
     };
   });
+  if (!added) return;
   const row = get().downloadQueue.find((q) => q.queueId === queueId);
   if (row === undefined) return; // deduped
   const written = insertDownloadQueueItem(row, songs)
@@ -414,6 +456,7 @@ export const musicCacheStore = create<MusicCacheState>()((set, get) => ({
   cachedSongs: {},
   cachedItems: {},
   downloadQueue: [],
+  queuedSongStatuses: {},
 
   maxConcurrentDownloads: DEFAULT_MAX_CONCURRENT,
 
@@ -432,7 +475,14 @@ export const musicCacheStore = create<MusicCacheState>()((set, get) => ({
 
   removeFromQueue: (queueId) => {
     removeDownloadQueueItem(queueId);
-    set((state) => ({ downloadQueue: dropFromQueueMirror(state.downloadQueue, queueId) }));
+    queueSongIdsByQueueId.delete(queueId);
+    set((state) => {
+      const nextQueue = dropFromQueueMirror(state.downloadQueue, queueId);
+      return {
+        downloadQueue: nextQueue,
+        queuedSongStatuses: rebuildQueuedSongStatuses(nextQueue),
+      };
+    });
   },
 
   reorderQueue: (fromIndex, toIndex) => {
@@ -455,16 +505,27 @@ export const musicCacheStore = create<MusicCacheState>()((set, get) => ({
     const fromPosition = queue[fromIndex].queuePosition;
     const toPosition = queue[toIndex].queuePosition;
     reorderDownloadQueue(fromPosition, toPosition);
-    set({ downloadQueue: repackQueueMirror(queue, fromPosition, toPosition) });
+    const nextQueue = repackQueueMirror(queue, fromPosition, toPosition);
+    set({
+      downloadQueue: nextQueue,
+      queuedSongStatuses: rebuildQueuedSongStatuses(nextQueue),
+    });
   },
 
   updateQueueItem: (queueId, update) => {
     updateDownloadQueueItem(queueId, update);
-    set((state) => ({
-      downloadQueue: state.downloadQueue.map((q) =>
+    set((state) => {
+      const nextQueue = state.downloadQueue.map((q) =>
         q.queueId === queueId ? { ...q, ...update } : q,
-      ),
-    }));
+      );
+      if (update.status === undefined) {
+        return { downloadQueue: nextQueue };
+      }
+      return {
+        downloadQueue: nextQueue,
+        queuedSongStatuses: rebuildQueuedSongStatuses(nextQueue),
+      };
+    });
   },
 
   markItemComplete: (queueId, item, songs, edges, childBySongId) => {
@@ -500,13 +561,16 @@ export const musicCacheStore = create<MusicCacheState>()((set, get) => ({
       songIds = newSongIdsInOrder;
     }
 
+    queueSongIdsByQueueId.delete(queueId);
     set((state) => {
       const nextSongs = { ...state.cachedSongs };
       for (const s of songs) {
         nextSongs[s.id] = mergeCachedSong(state.cachedSongs[s.id], s, childBySongId?.get(s.id));
       }
+      const nextQueue = dropFromQueueMirror(state.downloadQueue, queueId);
       return bumped(state, {
-        downloadQueue: dropFromQueueMirror(state.downloadQueue, queueId),
+        downloadQueue: nextQueue,
+        queuedSongStatuses: rebuildQueuedSongStatuses(nextQueue),
         cachedItems: {
           ...state.cachedItems,
           [item.itemId]: { ...itemToPersist, songIds },
@@ -710,6 +774,7 @@ export const musicCacheStore = create<MusicCacheState>()((set, get) => ({
 
   reset: () => {
     void clearAllMusicCacheRows();
+    queueSongIdsByQueueId.clear();
     try {
       kvStorage.removeItem(SETTINGS_KEY);
     } catch {
@@ -720,6 +785,7 @@ export const musicCacheStore = create<MusicCacheState>()((set, get) => ({
         cachedSongs: {},
         cachedItems: {},
         downloadQueue: [],
+        queuedSongStatuses: {},
         totalBytes: 0,
         totalFiles: 0,
         maxConcurrentDownloads: DEFAULT_MAX_CONCURRENT,
@@ -740,9 +806,15 @@ export const musicCacheStore = create<MusicCacheState>()((set, get) => ({
       // Idempotent re-read; the per-row tables are the source of truth. SQLite
       // reads run on a background thread; `readSettingsBlob` stays sync (small
       // kvStorage blob).
-      const cachedSongs = await hydrateCachedSongsAsync();
-      const cachedItems = await hydrateCachedItemsAsync();
-      const downloadQueue = await hydrateDownloadQueueAsync();
+      const [cachedSongs, cachedItems, downloadQueue, activeMap] = await Promise.all([
+        hydrateCachedSongsAsync(),
+        hydrateCachedItemsAsync(),
+        hydrateDownloadQueueAsync(),
+        typeof readActiveQueuedSongMapAsync === 'function'
+          ? readActiveQueuedSongMapAsync()
+          : Promise.resolve({ statuses: {}, byQueueId: new Map<string, string[]>() }),
+      ]);
+      queueSongIdsByQueueId = activeMap.byQueueId;
       const settings = readSettingsBlob();
 
       let totalBytes = 0;
@@ -759,6 +831,7 @@ export const musicCacheStore = create<MusicCacheState>()((set, get) => ({
           cachedSongs,
           cachedItems,
           downloadQueue,
+          queuedSongStatuses: activeMap.statuses,
           maxConcurrentDownloads: settings.maxConcurrentDownloads,
           totalBytes,
           totalFiles,

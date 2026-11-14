@@ -37,7 +37,7 @@ export interface ScrobbleAnalytics {
 const TOP_SONG_COUNT = 10;
 
 const emptyResult = (): ScrobbleAnalytics => ({
-  stats: { totalPlays: 0, totalListeningSeconds: 0, uniqueArtists: {} },
+  stats: { totalPlays: 0, totalListeningSeconds: 0, uniqueArtists: {}, uniqueArtistCount: 0 },
   aggregates: {
     artistCounts: {},
     albumCounts: {},
@@ -200,6 +200,7 @@ export async function computeScrobbleAnalytics(sinceMs = 0): Promise<ScrobbleAna
         totalPlays: statRow?.plays ?? 0,
         totalListeningSeconds: statRow?.secs ?? 0,
         uniqueArtists,
+        uniqueArtistCount: artistRows.length,
       },
       aggregates: {
         artistCounts,

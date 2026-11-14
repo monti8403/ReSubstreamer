@@ -29,6 +29,8 @@ interface SyncedLyricsViewProps {
   /** Background for the floating "Re-sync" pill that appears when the user
    *  has scrolled away from the active line. */
   pillBackgroundColor: string;
+  /** Whether the enclosing Lyrics tab/panel is currently visible to the user. */
+  isActiveTab?: boolean;
 }
 
 const USER_SCROLL_LOCKOUT_MS = 3000;
@@ -68,10 +70,13 @@ export const SyncedLyricsView = memo(function SyncedLyricsView({
   source,
   textColor,
   pillBackgroundColor,
+  isActiveTab = true,
 }: SyncedLyricsViewProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<ScrollView>(null);
   const lineRefs = useRef<(View | null)[]>([]);
+  const isActiveTabRef = useRef(isActiveTab);
+  isActiveTabRef.current = isActiveTab;
 
   // Foreground/background gate. This is a background-audio app, so the JS
   // thread keeps running while backgrounded and the native player keeps
@@ -93,10 +98,9 @@ export const SyncedLyricsView = memo(function SyncedLyricsView({
     [lines, offsetMs],
   );
 
-  // Derive activeIndex from playerStore. The store ticks at ~250 ms via
-  // `PlaybackProgressUpdated`, which is ample precision for a line-level
-  // scroll — sub-line timing is carried by the per-line worklet animation.
+  // Derive activeIndex from playerStore only while the Lyrics tab is visible.
   useEffect(() => {
+    if (!isActiveTab) return;
     const compute = () => {
       const ms = playerStore.getState().position * 1000;
       let idx = -1;
@@ -114,7 +118,7 @@ export const SyncedLyricsView = memo(function SyncedLyricsView({
     };
     compute();
     return playerStore.subscribe(compute);
-  }, [lineStarts]);
+  }, [lineStarts, isActiveTab]);
 
   // Mirror activeIndex into the shared value for the per-line worklets.
   useEffect(() => {
@@ -132,7 +136,7 @@ export const SyncedLyricsView = memo(function SyncedLyricsView({
   // asks native for the line's y + height relative to the ScrollView's
   // content — no spacer math required on our side.
   const scrollToActiveLine = useCallback(() => {
-    if (!appActiveRef.current) return;
+    if (!appActiveRef.current || !isActiveTabRef.current) return;
     if (activeIndex < 0) return;
     const lineRef = lineRefs.current[activeIndex];
     const scroll = scrollRef.current;
@@ -264,6 +268,7 @@ export const SyncedLyricsView = memo(function SyncedLyricsView({
   // backgrounded with lyrics open.
   const extrapolatedMs = useSharedValue(0);
   useEffect(() => {
+    if (!isActiveTab) return;
     let rafId: number | null = null;
     let sampledSec = playerStore.getState().position;
     let sampledAt = Date.now();
@@ -273,6 +278,10 @@ export const SyncedLyricsView = memo(function SyncedLyricsView({
       sampledAt = Date.now();
     };
     const tick = () => {
+      if (!isActiveTabRef.current || !appActiveRef.current) {
+        rafId = null;
+        return;
+      }
       const s = playerStore.getState();
       const elapsedSec =
         s.playbackState === 'playing' ? (Date.now() - sampledAt) / 1000 : 0;
@@ -294,7 +303,7 @@ export const SyncedLyricsView = memo(function SyncedLyricsView({
     const appSub = AppState.addEventListener('change', (next) => {
       const active = next === 'active';
       appActiveRef.current = active;
-      if (active) {
+      if (active && isActiveTabRef.current) {
         start();
         // While backgrounded the active index kept advancing but auto-scroll
         // was suppressed, so the view is parked on a stale line. Re-centre,
@@ -305,13 +314,16 @@ export const SyncedLyricsView = memo(function SyncedLyricsView({
         stop();
       }
     });
-    if (appActiveRef.current) start();
+    if (appActiveRef.current) {
+      start();
+      maybeAutoScrollRef.current();
+    }
     return () => {
       unsub();
       appSub.remove();
       stop();
     };
-  }, [extrapolatedMs]);
+  }, [extrapolatedMs, isActiveTab]);
 
   return (
     <View style={styles.container} onLayout={handleContainerLayout}>

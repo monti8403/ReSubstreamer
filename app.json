@@ -103,7 +103,6 @@
         }
       ],
       "expo-screen-orientation",
-      "expo-font",
       [
         "expo-location",
         {
@@ -121,8 +120,7 @@
       "expo-localization",
       "expo-status-bar",
       "@react-native-vector-icons/ionicons",
-      "@react-native-vector-icons/material-design-icons",
-      "@react-native-vector-icons/fontawesome5"
+      "@react-native-vector-icons/material-design-icons"
     ],
     "extra": {
       "router": {},

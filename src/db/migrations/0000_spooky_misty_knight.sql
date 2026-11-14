@@ -221,6 +221,7 @@ CREATE TABLE `cached_albums` (
 	FOREIGN KEY (`item_id`) REFERENCES `cached_items`(`item_id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
+CREATE INDEX `idx_cached_albums_sort_title` ON `cached_albums` (`sort_title`,`item_id`);--> statement-breakpoint
 CREATE TABLE `cached_images` (
 	`cover_art_id` text NOT NULL,
 	`size` integer NOT NULL,
@@ -258,6 +259,7 @@ CREATE TABLE `cached_items` (
 	`derived` integer DEFAULT 0
 );
 --> statement-breakpoint
+CREATE INDEX `idx_cached_items_type` ON `cached_items` (`type`,`item_id`);--> statement-breakpoint
 CREATE TABLE `cached_playlists` (
 	`item_id` text PRIMARY KEY NOT NULL,
 	`name` text,
@@ -383,6 +385,8 @@ CREATE TABLE `cached_songs` (
 );
 --> statement-breakpoint
 CREATE INDEX `idx_cached_songs_album_id` ON `cached_songs` (`album_id`);--> statement-breakpoint
+CREATE INDEX `idx_cached_songs_sort_title` ON `cached_songs` (`sort_title`,`song_id`);--> statement-breakpoint
+CREATE INDEX `idx_cached_songs_sort_artist` ON `cached_songs` (`sort_artist`,`sort_title`,`song_id`);--> statement-breakpoint
 CREATE TABLE `download_queue` (
 	`queue_id` text PRIMARY KEY NOT NULL,
 	`item_id` text NOT NULL,
@@ -933,6 +937,7 @@ CREATE TABLE `queue_snapshot_song_moods` (
 CREATE TABLE `queue_snapshot_songs` (
 	`snapshot_id` text NOT NULL,
 	`pos` integer NOT NULL,
+	`is_user_queue` integer DEFAULT 0 NOT NULL,
 	`song_id` text NOT NULL,
 	`title` text,
 	`artist` text,
@@ -1066,6 +1071,7 @@ CREATE TABLE `scrobble_events` (
 --> statement-breakpoint
 CREATE INDEX `idx_scrobble_events_time` ON `scrobble_events` (`time`);--> statement-breakpoint
 CREATE INDEX `idx_scrobble_events_hour` ON `scrobble_events` (`hour`);--> statement-breakpoint
+CREATE INDEX `idx_scrobble_events_song_time` ON `scrobble_events` (`song_id`,"time" desc);--> statement-breakpoint
 CREATE TABLE `scrobble_exclusions` (
 	`type` text NOT NULL,
 	`entity_id` text NOT NULL,

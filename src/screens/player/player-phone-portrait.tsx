@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   BackHandler,
   FlatList,
+  InteractionManager,
   Platform,
   Pressable,
   StyleSheet,
@@ -19,6 +20,7 @@ import {
 } from 'react-native';
 import Animated, {
   Easing,
+  LinearTransition,
   interpolate,
   runOnJS,
   useAnimatedScrollHandler,
@@ -104,6 +106,7 @@ const TAB_FADE_EASING = Easing.out(Easing.cubic);
 const TAB_SLIDE_DISTANCE = 12;
 
 const QUEUE_CONTENT_CONTAINER_STYLE = { paddingBottom: 12 } as const;
+const QUEUE_ITEM_LAYOUT_ANIMATION = LinearTransition.duration(180);
 
 export function PlayerPhonePortrait() {
   const { colors } = useTheme();
@@ -464,20 +467,22 @@ export function PlayerPhonePortrait() {
   const pendingScrollToTopOnSelectRef = useRef(false);
 
   useEffect(() => {
-    if (pendingScrollToTopOnSelectRef.current) {
-      pendingScrollToTopOnSelectRef.current = false;
+    if (!pendingScrollToTopOnSelectRef.current) return;
+    pendingScrollToTopOnSelectRef.current = false;
+    const task = InteractionManager.runAfterInteractions(() => {
       listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
-    }
+    });
+    return () => task.cancel();
   }, [currentTrack?.id, currentTrackIndex]);
 
   const onQueueItemPressWithScroll = useCallback(
     (targetAbsoluteIndex: number) => {
-      if (targetAbsoluteIndex !== currentTrackIndex) {
+      if (targetAbsoluteIndex !== playerStore.getState().currentTrackIndex) {
         pendingScrollToTopOnSelectRef.current = true;
       }
       handleQueueItemPress(targetAbsoluteIndex);
     },
-    [currentTrackIndex, handleQueueItemPress],
+    [handleQueueItemPress],
   );
 
   const renderQueueItem = useCallback(
@@ -505,6 +510,7 @@ export function PlayerPhonePortrait() {
           track={item.track}
           index={item.absoluteIndex}
           isActive={item.isNowPlaying}
+          isInUserQueue={item.isUserQueue}
           colors={queueColors}
           onPress={onQueueItemPressWithScroll}
           onLongPress={handleQueueItemLongPress}
@@ -526,17 +532,27 @@ export function PlayerPhonePortrait() {
     [],
   );
 
+  const queueItemOffsets = useMemo(() => {
+    const offsets = new Float64Array(reorderableListItems.length);
+    let acc = 0;
+    for (let i = 0; i < reorderableListItems.length; i++) {
+      offsets[i] = acc;
+      acc += reorderableListItems[i]?.type === 'header' ? 42 : 64;
+    }
+    return offsets;
+  }, [reorderableListItems]);
+
+  const queueLayoutRef = useRef({ items: reorderableListItems, offsets: queueItemOffsets });
+  queueLayoutRef.current = { items: reorderableListItems, offsets: queueItemOffsets };
+
   const getItemLayout = useCallback(
-    (data: ArrayLike<QueueListItem> | null | undefined, index: number) => {
-      if (!data || index < 0 || index >= data.length) {
+    (_data: ArrayLike<QueueListItem> | null | undefined, index: number) => {
+      const { items, offsets } = queueLayoutRef.current;
+      if (index < 0 || index >= items.length) {
         return { length: 64, offset: 64 * index, index };
       }
-      let offset = 0;
-      for (let i = 0; i < index; i++) {
-        offset += data[i]?.type === 'header' ? 42 : 64;
-      }
-      const length = data[index]?.type === 'header' ? 42 : 64;
-      return { length, offset, index };
+      const length = items[index]?.type === 'header' ? 42 : 64;
+      return { length, offset: offsets[index], index };
     },
     [],
   );
@@ -574,6 +590,7 @@ export function PlayerPhonePortrait() {
             track={nowPlaying}
             index={currentTrackIndex ?? 0}
             isActive={true}
+            isInUserQueue={false}
             colors={queueColors}
             onPress={onQueueItemPressWithScroll}
             onLongPress={handleQueueItemLongPress}
@@ -702,16 +719,17 @@ export function PlayerPhonePortrait() {
                   onDragStart={handleDragStart}
                   onDragEnd={handleDragEnd}
                   animationDuration={150}
+                  itemLayoutAnimation={QUEUE_ITEM_LAYOUT_ANIMATION}
                   autoscrollThreshold={0.08}
                   autoscrollDelay={Platform.OS === 'android' ? 50 : 100}
                   ListHeaderComponent={nowPlayingHeader}
                   onScrollBeginDrag={closeOpenRow}
                   showsVerticalScrollIndicator={false}
                   contentContainerStyle={QUEUE_CONTENT_CONTAINER_STYLE}
-                  windowSize={15}
-                  maxToRenderPerBatch={15}
-                  initialNumToRender={16}
-                  updateCellsBatchingPeriod={40}
+                  windowSize={5}
+                  maxToRenderPerBatch={8}
+                  initialNumToRender={10}
+                  updateCellsBatchingPeriod={50}
                   bounces={false}
                   overScrollMode="never"
                 />
@@ -748,6 +766,7 @@ export function PlayerPhonePortrait() {
               <LyricsTab
                 currentTrack={currentTrack}
                 colors={colors}
+                isActiveTab={activeTab === 'lyrics'}
                 entry={lyricsEntry}
                 loading={lyricsLoading}
                 error={lyricsError}
@@ -869,6 +888,40 @@ const CarouselCoverItem = memo(
   },
 );
 
+const IsolatedProgressBar = memo(function IsolatedProgressBar({
+  colors,
+  handleSeek,
+  isBuffering,
+  error,
+  retrying,
+  onRetry,
+}: {
+  colors: ThemeColors;
+  handleSeek: (sec: number) => void;
+  isBuffering: boolean;
+  error: string | null;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  const position = playerStore((s) => s.position);
+  const duration = playerStore((s) => s.duration);
+  const bufferedPosition = playerStore((s) => s.bufferedPosition);
+
+  return (
+    <PlayerProgressBar
+      position={position}
+      duration={duration}
+      bufferedPosition={bufferedPosition}
+      colors={colors}
+      onSeek={handleSeek}
+      isBuffering={isBuffering}
+      error={error}
+      retrying={retrying}
+      onRetry={onRetry}
+    />
+  );
+});
+
 const PlayerContent = memo(function PlayerContent({
   currentTrack,
   colors,
@@ -885,9 +938,6 @@ const PlayerContent = memo(function PlayerContent({
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const { isPlaying, isBuffering } = usePlaybackState();
-  const position = playerStore((s) => s.position);
-  const duration = playerStore((s) => s.duration);
-  const bufferedPosition = playerStore((s) => s.bufferedPosition);
   const queue = playerStore((s) => s.queue);
   const currentTrackIndex = playerStore((s) => s.currentTrackIndex);
   const { canSkipNext, canSkipPrevious } = useCanSkip();
@@ -1251,12 +1301,9 @@ const PlayerContent = memo(function PlayerContent({
       <Animated.View style={[{ flex: 1 }, bottomControlsSynergyStyle]}>
         {/* Progress bar */}
         <View style={[styles.progressSection, { marginBottom: m.progressMarginBottom }]}>
-          <PlayerProgressBar
-            position={position}
-            duration={duration}
-            bufferedPosition={bufferedPosition}
+          <IsolatedProgressBar
             colors={colors}
-            onSeek={handleSeek}
+            handleSeek={handleSeek}
             isBuffering={isBuffering}
             error={error}
             retrying={retrying}
@@ -1523,6 +1570,7 @@ const AlbumInfoTab = memo(function AlbumInfoTab({
 const LyricsTab = memo(function LyricsTab({
   currentTrack,
   colors,
+  isActiveTab,
   entry,
   loading,
   error,
@@ -1530,6 +1578,7 @@ const LyricsTab = memo(function LyricsTab({
 }: PlayerLyricsResult & {
   currentTrack: Child;
   colors: ThemeColors;
+  isActiveTab: boolean;
 }) {
   return (
     <View style={styles.lyricsContainer}>
@@ -1541,6 +1590,7 @@ const LyricsTab = memo(function LyricsTab({
         lyricsError={error}
         onRetry={handleRetry}
         durationSec={currentTrack.duration ?? null}
+        isActiveTab={isActiveTab}
         colors={colors}
       />
     </View>

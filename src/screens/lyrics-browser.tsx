@@ -230,8 +230,6 @@ export function LyricsBrowserScreen() {
           return data;
         },
         {
-          loading: t('refreshingEllipsis'),
-          success: t('refreshedSuccessfully'),
           error: t('refreshFailed'),
         },
       );

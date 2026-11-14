@@ -42,9 +42,8 @@ export function SearchableHeader({ route }: BottomTabHeaderProps) {
   const query = searchStore((s) => s.query);
   const setQuery = searchStore((s) => s.setQuery);
   const performSearch = searchStore((s) => s.performSearch);
-  const showOverlay = searchStore((s) => s.showOverlay);
   const clear = searchStore((s) => s.clear);
-  // On the search tab, results are shown inline -- no overlay needed
+  // Search input is only mounted on the search tab
   const isSearchTab = route.name === 'search';
 
   const handleChangeText = useCallback(
@@ -54,7 +53,6 @@ export function SearchableHeader({ route }: BottomTabHeaderProps) {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
 
       if (text.trim()) {
-        if (!isSearchTab) showOverlay();
         debounceTimer.current = setTimeout(() => {
           performSearch();
         }, DEBOUNCE_MS);
@@ -64,14 +62,8 @@ export function SearchableHeader({ route }: BottomTabHeaderProps) {
         clear();
       }
     },
-    [setQuery, performSearch, showOverlay, clear, isSearchTab]
+    [setQuery, performSearch, clear]
   );
-
-  const handleFocus = useCallback(() => {
-    if (query.trim() && !isSearchTab) {
-      showOverlay();
-    }
-  }, [query, showOverlay, isSearchTab]);
 
   const handleSubmitEditing = useCallback(() => {
     // Pressing the search/return key is an explicit "run this search now" — cancel
@@ -123,7 +115,6 @@ export function SearchableHeader({ route }: BottomTabHeaderProps) {
               placeholderTextColor={colors.textSecondary}
               value={query}
               onChangeText={handleChangeText}
-              onFocus={handleFocus}
               onSubmitEditing={handleSubmitEditing}
               returnKeyType="search"
               autoCapitalize="none"

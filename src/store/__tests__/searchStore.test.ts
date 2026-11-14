@@ -134,18 +134,7 @@ describe('searchStore', () => {
     });
   });
 
-  describe('overlay and header', () => {
-    it('showOverlay sets isOverlayVisible', () => {
-      searchStore.getState().showOverlay();
-      expect(searchStore.getState().isOverlayVisible).toBe(true);
-    });
-
-    it('hideOverlay clears isOverlayVisible', () => {
-      searchStore.setState({ isOverlayVisible: true });
-      searchStore.getState().hideOverlay();
-      expect(searchStore.getState().isOverlayVisible).toBe(false);
-    });
-
+  describe('header', () => {
     it('setHeaderHeight updates height', () => {
       searchStore.getState().setHeaderHeight(64);
       expect(searchStore.getState().headerHeight).toBe(64);
@@ -159,7 +148,6 @@ describe('searchStore', () => {
         results: { albums: [{ id: 'a1' }] as any, artists: [], songs: [] },
         loading: true,
         error: 'err',
-        isOverlayVisible: true,
       });
       searchStore.getState().clear();
       const state = searchStore.getState();
@@ -167,7 +155,6 @@ describe('searchStore', () => {
       expect(state.results).toEqual({ albums: [], artists: [], songs: [] });
       expect(state.loading).toBe(false);
       expect(state.error).toBeNull();
-      expect(state.isOverlayVisible).toBe(false);
     });
   });
 });

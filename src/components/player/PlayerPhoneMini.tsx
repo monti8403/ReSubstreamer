@@ -1,7 +1,7 @@
 import Ionicons from "@react-native-vector-icons/ionicons/static";
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { useCallback, useMemo } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
@@ -26,6 +26,7 @@ import Animated, {
 import { CachedImage } from '@/components/CachedImage';
 import { MarqueeText } from '@/components/MarqueeText';
 import WaveformLogo from '@/components/WaveformLogo';
+import { useCanSkip } from '@/hooks/useCanSkip';
 import { useImagePalette } from '@/hooks/useImagePalette';
 import { useSongCoverArt } from '@/hooks/useSongCoverArt';
 import { useTheme } from '@/hooks/useTheme';
@@ -44,43 +45,84 @@ const SNAP_DURATION = 190;
 const SNAP_BACK_DURATION = 160;
 const EXIT_DURATION = 130;
 
+/**
+ * Isolated thin top progress strip so 2Hz `position` / `duration` updates only
+ * re-render this 5px bar rather than the entire `PlayerPhoneMini` tree.
+ */
+const MiniProgressStrip = memo(function MiniProgressStrip({
+  primaryColor,
+}: {
+  primaryColor: string;
+}) {
+  const position = playerStore((s) => s.position);
+  const duration = playerStore((s) => s.duration);
+  const progress = duration > 0 ? Math.max(0, Math.min(position / duration, 1)) : 0;
+
+  return (
+    <View style={styles.progressTrack}>
+      <View
+        style={[
+          styles.progressFill,
+          {
+            backgroundColor: primaryColor,
+            opacity: 0.65,
+            width: `${progress * 100}%`,
+          },
+        ]}
+      />
+    </View>
+  );
+});
+
+/**
+ * Isolated skip-previous control subscribing only to the boolean `position > 3`
+ * threshold so crossings happen once per track instead of on every tick.
+ */
+const MiniPrevButton = memo(function MiniPrevButton({
+  canSkipPrevious,
+  iconColor,
+}: {
+  canSkipPrevious: boolean;
+  iconColor: string;
+}) {
+  const handlePress = useCallback(() => {
+    if (canSkipPrevious) skipToPrevious();
+  }, [canSkipPrevious]);
+
+  return (
+    <Pressable
+      testID="mini-prev"
+      onPress={handlePress}
+      hitSlop={8}
+      disabled={!canSkipPrevious}
+      style={({ pressed }) => [styles.skipButton, pressed && canSkipPrevious && styles.pressed]}
+    >
+      <Ionicons
+        name="play-back"
+        size={22}
+        color={iconColor}
+        style={!canSkipPrevious ? { opacity: 0.35 } : undefined}
+      />
+    </Pressable>
+  );
+});
+
 export function PlayerPhoneMini() {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const currentTrack = playerStore((s) => s.currentTrack);
   const songCoverArtId = useSongCoverArt(currentTrack);
   const playbackState = playerStore((s) => s.playbackState);
-  const position = playerStore((s) => s.position);
-  const duration = playerStore((s) => s.duration);
   const queueLoading = playerStore((s) => s.queueLoading);
-  const currentTrackIndex = playerStore((s) => s.currentTrackIndex);
-  const queue = playerStore((s) => s.queue);
-  const playbackHistory = playerStore((s) => s.playbackHistory);
-  const repeatMode = playbackSettingsStore((s) => s.repeatMode);
-
-  // Rendered synchronously from the store each re-render — same contract as
-  // PlayerProgressBar so the two surfaces can never visually diverge.
-  const progress = duration > 0 ? Math.max(0, Math.min(position / duration, 1)) : 0;
+  const { canSkipNext, canSkipPrevious } = useCanSkip();
 
   const error = playerStore((s) => s.error);
   const isPlaying = playbackState === 'playing' || playbackState === 'buffering';
   const isBuffering = playbackState === 'buffering' || playbackState === 'loading';
-  const canSkipNext =
-    currentTrackIndex != null &&
-    (currentTrackIndex < queue.length - 1 || repeatMode !== 'off');
-  const canSkipPrevious =
-    (currentTrackIndex != null && currentTrackIndex > 0) ||
-    playbackHistory.length > 0 ||
-    repeatMode !== 'off' ||
-    position > 3;
 
   const handleSkipNext = useCallback(() => {
     if (canSkipNext) skipToNext();
   }, [canSkipNext]);
-
-  const handleSkipPrevious = useCallback(() => {
-    if (canSkipPrevious) skipToPrevious();
-  }, [canSkipPrevious]);
 
   const marqueeStyle = useMemo(
     () => [styles.title, { color: queueLoading ? colors.textSecondary : colors.textPrimary }],
@@ -122,6 +164,58 @@ export function PlayerPhoneMini() {
       opacity: trackOpacity.value,
     };
   });
+
+  const handleSwipeRightEnd = useCallback(
+    (exitDistance: number) => {
+      const s = playerStore.getState();
+      const canPrev =
+        (s.currentTrackIndex != null && s.currentTrackIndex > 0) ||
+        playbackSettingsStore.getState().repeatMode !== 'off' ||
+        s.position > 3;
+
+      if (!canPrev) {
+        trackTranslateX.value = withTiming(0, {
+          duration: SNAP_BACK_DURATION,
+          easing: SNAP_EASING,
+        });
+        trackOpacity.value = withTiming(1, {
+          duration: SNAP_BACK_DURATION,
+          easing: SNAP_EASING,
+        });
+        return;
+      }
+
+      isAnimatingChange.value = true;
+      trackOpacity.value = withTiming(0, { duration: EXIT_DURATION });
+      trackTranslateX.value = withTiming(
+        exitDistance,
+        { duration: EXIT_DURATION, easing: Easing.out(Easing.quad) },
+        (finished) => {
+          if (finished) {
+            trackTranslateX.value = -exitDistance;
+            trackOpacity.value = 0.4;
+            runOnJS(skipToPrevious)();
+            trackTranslateX.value = withTiming(
+              0,
+              { duration: SNAP_DURATION, easing: SNAP_EASING },
+              (snapDone) => {
+                if (snapDone) {
+                  isAnimatingChange.value = false;
+                }
+              },
+            );
+            trackOpacity.value = withTiming(1, {
+              duration: SNAP_DURATION,
+              easing: SNAP_EASING,
+            });
+          } else {
+            isAnimatingChange.value = false;
+          }
+        },
+      );
+    },
+    [isAnimatingChange, trackTranslateX, trackOpacity],
+  );
 
   // Gestures for mini player:
   // - Swipe up -> open full player
@@ -229,36 +323,9 @@ export function PlayerPhoneMini() {
             return;
           }
 
-          // Swipe right (previous track)
-          if (isSwipeRight && canSkipPrevious) {
-            isAnimatingChange.value = true;
-            trackOpacity.value = withTiming(0, { duration: EXIT_DURATION });
-            trackTranslateX.value = withTiming(
-              exitDistance,
-              { duration: EXIT_DURATION, easing: Easing.out(Easing.quad) },
-              (finished) => {
-                if (finished) {
-                  trackTranslateX.value = -exitDistance;
-                  trackOpacity.value = 0.4;
-                  runOnJS(skipToPrevious)();
-                  trackTranslateX.value = withTiming(
-                    0,
-                    { duration: SNAP_DURATION, easing: SNAP_EASING },
-                    (snapDone) => {
-                      if (snapDone) {
-                        isAnimatingChange.value = false;
-                      }
-                    },
-                  );
-                  trackOpacity.value = withTiming(1, {
-                    duration: SNAP_DURATION,
-                    easing: SNAP_EASING,
-                  });
-                } else {
-                  isAnimatingChange.value = false;
-                }
-              },
-            );
+          // Swipe right (previous track): check position > 3 via JS store read so gesture stays stable
+          if (isSwipeRight) {
+            runOnJS(handleSwipeRightEnd)(exitDistance);
             gestureDirection.value = 0;
             return;
           }
@@ -308,7 +375,7 @@ export function PlayerPhoneMini() {
     trackAreaWidth,
     openPlayer,
     canSkipNext,
-    canSkipPrevious,
+    handleSwipeRightEnd,
   ]);
 
   const miniTapGesture = useMemo(() => {
@@ -343,19 +410,8 @@ export function PlayerPhoneMini() {
 
   return (
     <View style={[styles.container, { backgroundColor: withAlpha(colors.card, 0.65) }]}>
-      {/* Progress bar */}
-      <View style={styles.progressTrack}>
-        <View
-          style={[
-            styles.progressFill,
-            {
-              backgroundColor: colors.primary,
-              opacity: 0.65,
-              width: `${progress * 100}%`,
-            },
-          ]}
-        />
-      </View>
+      {/* Isolated progress strip */}
+      <MiniProgressStrip primaryColor={colors.primary} />
 
       {/* Gradient overlay */}
       <Animated.View style={[absoluteFill, gradientAnimatedStyle]} pointerEvents="none">
@@ -404,20 +460,10 @@ export function PlayerPhoneMini() {
       {/* Zona Destra (Fissa): Contiene i pulsanti ⏪ ▶ ⏩ */}
       <View style={styles.controls}>
         {/* Skip to previous */}
-        <Pressable
-          testID="mini-prev"
-          onPress={handleSkipPrevious}
-          hitSlop={8}
-          disabled={!canSkipPrevious}
-          style={({ pressed }) => [styles.skipButton, pressed && canSkipPrevious && styles.pressed]}
-        >
-          <Ionicons
-            name="play-back"
-            size={22}
-            color={colors.textPrimary}
-            style={!canSkipPrevious ? { opacity: 0.35 } : undefined}
-          />
-        </Pressable>
+        <MiniPrevButton
+          canSkipPrevious={canSkipPrevious}
+          iconColor={colors.textPrimary}
+        />
 
         {/* Play / Pause / Buffering */}
         <Pressable

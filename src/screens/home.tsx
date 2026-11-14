@@ -2,7 +2,7 @@ import Ionicons from "@react-native-vector-icons/ionicons/static";
 import { useIsFocused } from "expo-router/react-navigation";
 import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -97,7 +97,7 @@ const SECTION_CONFIG: Record<
   },
 };
 
-function SectionPlaceholder({
+const SectionPlaceholder = memo(function SectionPlaceholder({
   message,
   colors,
 }: {
@@ -125,9 +125,9 @@ function SectionPlaceholder({
       </View>
     </View>
   );
-}
+});
 
-function AlbumSection({
+const AlbumSection = memo(function AlbumSection({
   listType,
   albums,
   colors,
@@ -239,9 +239,9 @@ function AlbumSection({
       )}
     </View>
   );
-}
+});
 
-function DownloadedAlbumSection({
+const DownloadedAlbumSection = memo(function DownloadedAlbumSection({
   albums,
   colors,
   loading,
@@ -286,9 +286,9 @@ function DownloadedAlbumSection({
       )}
     </View>
   );
-}
+});
 
-function PlaylistSection({
+const PlaylistSection = memo(function PlaylistSection({
   playlists,
   colors,
   loading,
@@ -332,9 +332,9 @@ function PlaylistSection({
       )}
     </View>
   );
-}
+});
 
-function AnimatedStatIcon({
+const AnimatedStatIcon = memo(function AnimatedStatIcon({
   value,
   iconBgColor,
   children,
@@ -366,7 +366,7 @@ function AnimatedStatIcon({
       {children}
     </Animated.View>
   );
-}
+});
 
 
 export function HomeScreen() {
@@ -384,9 +384,7 @@ export function HomeScreen() {
   const genreCounts = completedScrobbleStore((s) => s.aggregates.genreCounts);
   const totalPlays = completedScrobbleStore((s) => s.stats.totalPlays);
   const totalSeconds = completedScrobbleStore((s) => s.stats.totalListeningSeconds);
-  const uniqueArtistCount = completedScrobbleStore(
-    (s) => Object.keys(s.stats.uniqueArtists).length
-  );
+  const uniqueArtistCount = completedScrobbleStore((s) => s.stats.uniqueArtistCount);
   const dayCounts = completedScrobbleStore((s) => s.aggregates.dayCounts);
   const pendingScrobbles = pendingScrobbleStore((s) => s.pendingScrobbles);
   const listeningStats = useMemo(() => {

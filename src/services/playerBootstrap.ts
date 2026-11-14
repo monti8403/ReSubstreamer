@@ -18,15 +18,43 @@ import { getTrackPlayer } from 'react-native-queue-player';
 import { errMessage } from '../utils/errorMessage';
 import { installHeadlessMediaService } from './headlessMediaService';
 import { initWidgetSyncService } from './widgetSyncService';
-import { LOOKAHEAD_MAX_CACHE_MB, playbackSettingsStore } from '../store/playbackSettingsStore';
+import { LOOKAHEAD_MAX_CACHE_MB, playbackSettingsStore, type SkipPreviousBehavior } from '../store/playbackSettingsStore';
+import { kvStorageSync } from '../store/persistence/kvStorage';
 import { ensureNowPlayingPlaceholderUri } from './nowPlayingPlaceholder';
 import { setNativeSkipPreviousBehavior } from 'expo-move-to-back';
 
 import { markPlayerReady, whenPlayerReady } from './playerReadyState';
 export { whenPlayerReady };
 
-const initialSkipPrevious = playbackSettingsStore.getState().skipPreviousBehavior;
-setNativeSkipPreviousBehavior(initialSkipPrevious);
+function readInitialSkipPreviousBehavior(): { value: SkipPreviousBehavior; hydrated: boolean } {
+  if (playbackSettingsStore.persist?.hasHydrated?.()) {
+    return {
+      value: playbackSettingsStore.getState().skipPreviousBehavior,
+      hydrated: true,
+    };
+  }
+  try {
+    const raw = kvStorageSync.getItem('substreamer-playback-settings');
+    if (typeof raw === 'string' && raw.length > 0) {
+      const parsed = JSON.parse(raw) as { state?: { skipPreviousBehavior?: SkipPreviousBehavior } };
+      const persisted = parsed?.state?.skipPreviousBehavior;
+      if (persisted === 'always-previous' || persisted === 'restart-or-previous') {
+        return { value: persisted, hydrated: true };
+      }
+    }
+  } catch {
+    // Fall back to unhydrated default; initPlayer/onRehydrateStorage will re-apply.
+  }
+  return {
+    value: playbackSettingsStore.getState().skipPreviousBehavior,
+    hydrated: false,
+  };
+}
+
+const initialSkip = readInitialSkipPreviousBehavior();
+if (initialSkip.hydrated) {
+  setNativeSkipPreviousBehavior(initialSkip.value);
+}
 
 // The lookahead-cache disk budget AND eviction policy are fixed here at
 // configure() — Android's Media3 SimpleCache is built at the right size (it
@@ -38,7 +66,7 @@ void getTrackPlayer()
     audioContentType: 'music',
     userAgent: 'substreamer8',
     // Skip-back behavior respects user setting: 'restart-or-previous' or 'previous'.
-    skipToPreviousBehavior: initialSkipPrevious === 'restart-or-previous' ? 'restart-or-previous' : 'previous',
+    skipToPreviousBehavior: initialSkip.value === 'restart-or-previous' ? 'restart-or-previous' : 'previous',
     // Our mild gray-waveform placeholder (matches the in-app cover-art
     // placeholder) in place of RNQP's built-in. Needs a local file:// URI.
     placeholderArtworkUri: ensureNowPlayingPlaceholderUri(),

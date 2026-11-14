@@ -51,6 +51,8 @@ export interface QueueSnapshotMeta {
 /** A snapshot with its songs rebuilt into real `Child` objects. */
 export interface QueueSnapshot extends QueueSnapshotMeta {
   tracks: Child[];
+  /** Track IDs belonging to the manual User Queue partition (when present). */
+  userQueueTrackIds?: string[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -106,8 +108,13 @@ export async function upsertSnapshot(meta: Omit<QueueSnapshotMeta, 'trackCount'>
  * Entries with no id are dropped: `childToTrack` cannot play them, and `song_id` is
  * NOT NULL so one would abort the whole batch.
  */
-function snapshotTrackCommands(snapshotId: string, tracks: readonly Child[]): BatchCommand[] {
+function snapshotTrackCommands(
+  snapshotId: string,
+  tracks: readonly Child[],
+  userQueueTrackIds: readonly string[] = [],
+): BatchCommand[] {
   const usable = tracks.filter((c) => !!c?.id);
+  const userSet = userQueueTrackIds.length > 0 ? new Set(userQueueTrackIds) : null;
   const commands: BatchCommand[] = [
     ['DELETE FROM queue_snapshot_songs WHERE snapshot_id = ?;', [snapshotId]],
   ];
@@ -115,7 +122,11 @@ function snapshotTrackCommands(snapshotId: string, tracks: readonly Child[]): Ba
     commands.push(
       childSnapshotInsertCommand({
         table: 'queue_snapshot_songs',
-        key: { snapshot_id: snapshotId, pos },
+        key: {
+          snapshot_id: snapshotId,
+          pos,
+          is_user_queue: userSet?.has(child.id) ? 1 : 0,
+        },
         child,
       }),
       ...childSnapshotArrayCommands({
@@ -141,11 +152,12 @@ function snapshotTrackCommands(snapshotId: string, tracks: readonly Child[]): Ba
 export async function replaceSnapshotTracks(
   snapshotId: string,
   tracks: readonly Child[],
+  userQueueTrackIds: readonly string[] = [],
 ): Promise<void> {
   const db = getDb();
   if (db === null) return;
   try {
-    await db.runAtomicBatchAsync(snapshotTrackCommands(snapshotId, tracks));
+    await db.runAtomicBatchAsync(snapshotTrackCommands(snapshotId, tracks, userQueueTrackIds));
   } catch {
     /* dropped */
   }
@@ -268,10 +280,34 @@ const arrayScope = (
 
 const NO_ARRAYS: ChildSnapshotArrays = {};
 
+function buildSnapshot(
+  snapshotId: string,
+  meta: SnapshotRow,
+  rows: readonly Record<string, unknown>[],
+  arrays: Map<string, ChildSnapshotArrays>,
+): QueueSnapshot {
+  const userQueueSet = new Set<string>();
+  const tracks = rows.map((raw) => {
+    const child = childFromSnapshotRow(
+      childSnapshotRowFromRaw(raw),
+      arrays.get(childSnapshotArrayKey([snapshotId, raw.pos as number])) ?? NO_ARRAYS,
+    );
+    if (Number(raw.is_user_queue) === 1 && child.id) {
+      userQueueSet.add(child.id);
+    }
+    return child;
+  });
+  const userQueueTrackIds = Array.from(userQueueSet);
+  return {
+    ...metaFromRow(meta),
+    tracks,
+    ...(userQueueTrackIds.length > 0 ? { userQueueTrackIds } : {}),
+  };
+}
+
 /**
- * Read one snapshot with its full `Child[]`, SYNCHRONOUSLY — `restorePersistedQueue`
- * seeds the store on the JS thread so the mini player paints immediately, and must
- * stay synchronous. Returns null when the snapshot does not exist.
+ * Read one snapshot with its full `Child[]`, SYNCHRONOUSLY. Prefer
+ * {@link readSnapshotAsync} on UI/boot paths so large queues never block the JS thread.
  */
 export function readSnapshotSync(snapshotId: string): QueueSnapshot | null {
   const db = getDb();
@@ -280,18 +316,36 @@ export function readSnapshotSync(snapshotId: string): QueueSnapshot | null {
     const meta = db.getFirstSync<SnapshotRow>(`SELECT ${META_SELECT} WHERE id = ?;`, [snapshotId]);
     if (meta === undefined || meta === null) return null;
     const rows = db.getAllSync<Record<string, unknown>>(
-      `SELECT pos, ${CHILD_SNAPSHOT_SELECT} FROM queue_snapshot_songs ` +
+      `SELECT pos, is_user_queue, ${CHILD_SNAPSHOT_SELECT} FROM queue_snapshot_songs ` +
         'WHERE snapshot_id = ? ORDER BY pos;',
       [snapshotId],
     );
     const arrays = readChildSnapshotArraysSync(db, arrayScope('snapshot_id = ?', [snapshotId]));
-    const tracks = rows.map((raw) =>
-      childFromSnapshotRow(
-        childSnapshotRowFromRaw(raw),
-        arrays.get(childSnapshotArrayKey([snapshotId, raw.pos as number])) ?? NO_ARRAYS,
+    return buildSnapshot(snapshotId, meta, rows, arrays);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read one snapshot with its full `Child[]`, ASYNCHRONOUSLY on the op-SQLite worker thread.
+ * Returns null when the snapshot does not exist.
+ */
+export async function readSnapshotAsync(snapshotId: string): Promise<QueueSnapshot | null> {
+  const db = getDb();
+  if (db === null) return null;
+  try {
+    const [meta, rows, arrays] = await Promise.all([
+      db.getFirstAsync<SnapshotRow>(`SELECT ${META_SELECT} WHERE id = ?;`, [snapshotId]),
+      db.getAllAsync<Record<string, unknown>>(
+        `SELECT pos, is_user_queue, ${CHILD_SNAPSHOT_SELECT} FROM queue_snapshot_songs ` +
+          'WHERE snapshot_id = ? ORDER BY pos;',
+        [snapshotId],
       ),
-    );
-    return { ...metaFromRow(meta), tracks };
+      readChildSnapshotArraysAsync(db, arrayScope('snapshot_id = ?', [snapshotId])),
+    ]);
+    if (meta === undefined || meta === null) return null;
+    return buildSnapshot(snapshotId, meta, rows, arrays);
   } catch {
     return null;
   }

@@ -20,10 +20,11 @@ require('expo-router/entry');
 const { AppRegistry } = require('react-native');
 AppRegistry.registerHeadlessTask('MusicWidgetTask', () => async (taskData) => {
   try {
-    const { handleWidgetAction } = require('./src/services/widgetSyncService');
+    const { handleWidgetAction, initWidgetSyncService } = require('./src/services/widgetSyncService');
     if (taskData?.action) {
       await handleWidgetAction(taskData.action, taskData);
     }
+    initWidgetSyncService();
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error('[MusicWidgetTask] failed:', e);

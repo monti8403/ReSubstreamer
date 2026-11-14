@@ -1,7 +1,7 @@
 import Ionicons from "@react-native-vector-icons/ionicons/static";
 import { useRouter } from 'expo-router';
 import { useIsFocused } from "expo-router/react-navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -69,7 +69,7 @@ interface TopHitCardProps {
   t: (key: string, defaultValue?: any) => string;
 }
 
-function TopHitCard({ topHit, onPress, colors, t }: TopHitCardProps) {
+const TopHitCard = memo(function TopHitCard({ topHit, onPress, colors, t }: TopHitCardProps) {
   const isArtist = topHit.type === 'artist';
   const isSong = topHit.type === 'song';
   const isAlbum = topHit.type === 'album';
@@ -152,7 +152,40 @@ function TopHitCard({ topHit, onPress, colors, t }: TopHitCardProps) {
       )}
     </Pressable>
   );
-}
+});
+
+const SearchSongRow = memo(function SearchSongRow({
+  song,
+  onSelect,
+}: {
+  song: Child;
+  onSelect: (song: Child) => void;
+}) {
+  const handlePress = useCallback(() => onSelect(song), [onSelect, song]);
+  return <SongRow song={song} variant="compact" onPress={handlePress} />;
+});
+
+const SearchArtistItem = memo(function SearchArtistItem({
+  artist,
+  onSelect,
+}: {
+  artist: ArtistID3;
+  onSelect: (artist: ArtistID3) => void;
+}) {
+  const handlePress = useCallback(() => onSelect(artist), [onSelect, artist]);
+  return <ArtistRow artist={artist} variant="carousel" onPress={handlePress} />;
+});
+
+const SearchAlbumItem = memo(function SearchAlbumItem({
+  album,
+  onSelect,
+}: {
+  album: AlbumID3;
+  onSelect: (album: AlbumID3) => void;
+}) {
+  const handlePress = useCallback(() => onSelect(album), [onSelect, album]);
+  return <AlbumRow album={album} variant="carousel" onPress={handlePress} />;
+});
 
 /* ------------------------------------------------------------------ */
 /*  SearchScreen                                                      */
@@ -319,6 +352,50 @@ export function SearchScreen() {
     }
   }, [topHit, recordCurrent, router, downloadedOnly]);
 
+  const handlePlaySong = useCallback(
+    (song: Child) => {
+      recordCurrent();
+      void playMoreLikeThis(song, { downloadedOnly });
+    },
+    [recordCurrent, downloadedOnly],
+  );
+
+  const handlePressArtist = useCallback(
+    (artist: ArtistID3) => {
+      recordCurrent();
+      router.push(`/artist/${artist.id}`);
+    },
+    [recordCurrent, router],
+  );
+
+  const handlePressAlbum = useCallback(
+    (album: AlbumID3) => {
+      recordCurrent();
+      router.push(`/album/${album.id}`);
+    },
+    [recordCurrent, router],
+  );
+
+  const toggleShowAllSongs = useCallback(() => {
+    setShowAllSongs((prev) => !prev);
+  }, []);
+
+  const artistKeyExtractor = useCallback((item: ArtistID3) => `artist-${item.id}`, []);
+  const renderArtistItem = useCallback(
+    ({ item }: { item: ArtistID3 }) => (
+      <SearchArtistItem artist={item} onSelect={handlePressArtist} />
+    ),
+    [handlePressArtist],
+  );
+
+  const albumKeyExtractor = useCallback((item: AlbumID3) => `album-${item.id}`, []);
+  const renderAlbumItem = useCallback(
+    ({ item }: { item: AlbumID3 }) => (
+      <SearchAlbumItem album={item} onSelect={handlePressAlbum} />
+    ),
+    [handlePressAlbum],
+  );
+
   // Empty box: show recent-searches history when present, otherwise the
   // original placeholder (offline-aware).
   if (!query.trim()) {
@@ -417,20 +494,12 @@ export function SearchScreen() {
               </Text>
               <View style={styles.songsList}>
                 {displayedSongs.map((song) => (
-                  <SongRow
-                    key={song.id}
-                    song={song}
-                    variant="compact"
-                    onPress={() => {
-                      recordCurrent();
-                      void playMoreLikeThis(song, { downloadedOnly });
-                    }}
-                  />
+                  <SearchSongRow key={song.id} song={song} onSelect={handlePlaySong} />
                 ))}
               </View>
               {filtered.songs.length > 5 && (
                 <Pressable
-                  onPress={() => setShowAllSongs((prev) => !prev)}
+                  onPress={toggleShowAllSongs}
                   style={styles.expandButton}
                 >
                   <Text style={[styles.expandButtonText, { color: colors.primary }]}>
@@ -454,19 +523,10 @@ export function SearchScreen() {
               <FlatList
                 horizontal
                 data={filtered.artists}
-                keyExtractor={(item) => `artist-${item.id}`}
+                keyExtractor={artistKeyExtractor}
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.carouselContainer}
-                renderItem={({ item }) => (
-                  <ArtistRow
-                    artist={item}
-                    variant="carousel"
-                    onPress={() => {
-                      recordCurrent();
-                      router.push(`/artist/${item.id}`);
-                    }}
-                  />
-                )}
+                renderItem={renderArtistItem}
               />
             </View>
           )}
@@ -480,19 +540,10 @@ export function SearchScreen() {
               <FlatList
                 horizontal
                 data={filtered.albums}
-                keyExtractor={(item) => `album-${item.id}`}
+                keyExtractor={albumKeyExtractor}
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.carouselContainer}
-                renderItem={({ item }) => (
-                  <AlbumRow
-                    album={item}
-                    variant="carousel"
-                    onPress={() => {
-                      recordCurrent();
-                      router.push(`/album/${item.id}`);
-                    }}
-                  />
-                )}
+                renderItem={renderAlbumItem}
               />
             </View>
           )}

@@ -15,7 +15,7 @@
  *    (double-metaphone) columns — not FTS5.
  *  - Child tables cascade-delete with their parent entity.
  */
-import { sql } from 'drizzle-orm';
+import { desc, sql } from 'drizzle-orm';
 import {
   foreignKey,
   index,
@@ -953,6 +953,8 @@ export const queueSnapshotSongs = sqliteTable(
       .notNull()
       .references(() => queueSnapshots.id, { onDelete: 'cascade' }),
     pos: integer('pos').notNull(),
+    /** Whether this track belongs to the manual User Queue ("In Coda") partition. */
+    isUserQueue: integer('is_user_queue').notNull().default(0),
     songId: text('song_id').notNull(),
     title: text('title'),
     artist: text('artist'),
@@ -1293,6 +1295,7 @@ export const scrobbleEvents = sqliteTable(
   (t) => ({
     timeIdx: index('idx_scrobble_events_time').on(t.time),
     hourIdx: index('idx_scrobble_events_hour').on(t.hour),
+    songTimeIdx: index('idx_scrobble_events_song_time').on(t.songId, desc(t.time)),
   }),
 );
 
@@ -1570,7 +1573,15 @@ export const cachedSongs = sqliteTable(
     rawJson: text('raw_json'),
     metaV: integer('meta_v'),
   },
-  (t) => ({ albumIdx: index('idx_cached_songs_album_id').on(t.albumId) }),
+  (t) => ({
+    albumIdx: index('idx_cached_songs_album_id').on(t.albumId),
+    sortTitleIdx: index('idx_cached_songs_sort_title').on(t.sortTitle, t.songId),
+    sortArtistIdx: index('idx_cached_songs_sort_artist').on(
+      t.sortArtist,
+      t.sortTitle,
+      t.songId,
+    ),
+  }),
 );
 
 // Child's multi-valued fields, mirroring the library's song child tables. Written
@@ -1644,24 +1655,28 @@ export const cachedSongMoods = sqliteTable(
 
 /** A downloaded album / playlist / favorites set / single song. `derived` marks a row
  *  created to hold an edge rather than an explicit user download. */
-export const cachedItems = sqliteTable('cached_items', {
-  itemId: text('item_id').primaryKey(),
-  type: text('type').notNull(),
-  name: text('name').notNull(),
-  artist: text('artist'),
-  // Captured at download time per the user's then-current per-track-vs-album cover-art
-  // setting, so it matches the file actually in the image cache. NOT reconstructible
-  // from `albums.cover_art` — the image-cache purge protection depends on it.
-  coverArtId: text('cover_art_id'),
-  expectedSongCount: integer('expected_song_count').notNull(),
-  parentAlbumId: text('parent_album_id'),
-  lastSyncAt: integer('last_sync_at').notNull(),
-  downloadedAt: integer('downloaded_at').notNull(),
-  rawJson: text('raw_json'),
-  /** Promotion marker — NULL means the component row isn't populated yet, read `raw_json`. */
-  metaV: integer('meta_v'),
-  derived: integer('derived').default(0),
-});
+export const cachedItems = sqliteTable(
+  'cached_items',
+  {
+    itemId: text('item_id').primaryKey(),
+    type: text('type').notNull(),
+    name: text('name').notNull(),
+    artist: text('artist'),
+    // Captured at download time per the user's then-current per-track-vs-album cover-art
+    // setting, so it matches the file actually in the image cache. NOT reconstructible
+    // from `albums.cover_art` — the image-cache purge protection depends on it.
+    coverArtId: text('cover_art_id'),
+    expectedSongCount: integer('expected_song_count').notNull(),
+    parentAlbumId: text('parent_album_id'),
+    lastSyncAt: integer('last_sync_at').notNull(),
+    downloadedAt: integer('downloaded_at').notNull(),
+    rawJson: text('raw_json'),
+    /** Promotion marker — NULL means the component row isn't populated yet, read `raw_json`. */
+    metaV: integer('meta_v'),
+    derived: integer('derived').default(0),
+  },
+  (t) => ({ typeIdx: index('idx_cached_items_type').on(t.type, t.itemId) }),
+);
 
 /**
  * Per-type metadata for a downloaded item, 1:1 with `cached_items`. Component tables
@@ -1669,40 +1684,46 @@ export const cachedItems = sqliteTable('cached_items', {
  * union would leave 40-odd permanently-NULL columns and force everything nullable.
  * Mirrors the `artists` + `artist_info` pattern.
  */
-export const cachedAlbums = sqliteTable('cached_albums', {
-  itemId: text('item_id')
-    .primaryKey()
-    .references(() => cachedItems.itemId, { onDelete: 'cascade' }),
-  artistId: text('artist_id'),
-  name: text('name'),
-  artist: text('artist'),
-  displayArtist: text('display_artist'),
-  coverArt: text('cover_art'),
-  songCount: integer('song_count'),
-  duration: integer('duration'),
-  playCount: integer('play_count'),
-  created: integer('created'),
-  starred: integer('starred'),
-  year: integer('year'),
-  genre: text('genre'),
-  played: text('played'),
-  userRating: integer('user_rating'),
-  version: text('version'),
-  musicBrainzId: text('music_brainz_id'),
-  sortName: text('sort_name'),
-  // Mirror the `albums` columns of the same name, written from the same metadata
-  // through `db/sortKeys`, so the Downloaded filter orders in SQL exactly as browse does.
-  sortTitle: text('sort_title'),
-  sortArtist: text('sort_artist'),
-  isCompilation: integer('is_compilation', { mode: 'boolean' }),
-  explicitStatus: text('explicit_status'),
-  originalReleaseYear: integer('original_release_year'),
-  originalReleaseMonth: integer('original_release_month'),
-  originalReleaseDay: integer('original_release_day'),
-  releaseYear: integer('release_year'),
-  releaseMonth: integer('release_month'),
-  releaseDay: integer('release_day'),
-});
+export const cachedAlbums = sqliteTable(
+  'cached_albums',
+  {
+    itemId: text('item_id')
+      .primaryKey()
+      .references(() => cachedItems.itemId, { onDelete: 'cascade' }),
+    artistId: text('artist_id'),
+    name: text('name'),
+    artist: text('artist'),
+    displayArtist: text('display_artist'),
+    coverArt: text('cover_art'),
+    songCount: integer('song_count'),
+    duration: integer('duration'),
+    playCount: integer('play_count'),
+    created: integer('created'),
+    starred: integer('starred'),
+    year: integer('year'),
+    genre: text('genre'),
+    played: text('played'),
+    userRating: integer('user_rating'),
+    version: text('version'),
+    musicBrainzId: text('music_brainz_id'),
+    sortName: text('sort_name'),
+    // Mirror the `albums` columns of the same name, written from the same metadata
+    // through `db/sortKeys`, so the Downloaded filter orders in SQL exactly as browse does.
+    sortTitle: text('sort_title'),
+    sortArtist: text('sort_artist'),
+    isCompilation: integer('is_compilation', { mode: 'boolean' }),
+    explicitStatus: text('explicit_status'),
+    originalReleaseYear: integer('original_release_year'),
+    originalReleaseMonth: integer('original_release_month'),
+    originalReleaseDay: integer('original_release_day'),
+    releaseYear: integer('release_year'),
+    releaseMonth: integer('release_month'),
+    releaseDay: integer('release_day'),
+  },
+  (t) => ({
+    sortTitleIdx: index('idx_cached_albums_sort_title').on(t.sortTitle, t.itemId),
+  }),
+);
 
 export const cachedPlaylists = sqliteTable('cached_playlists', {
   itemId: text('item_id')

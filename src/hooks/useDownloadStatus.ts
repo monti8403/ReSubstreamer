@@ -9,7 +9,6 @@
 
 import { useCallback } from 'react';
 
-import { getTrackQueueStatus } from '../services/musicCacheService';
 import { musicCacheStore, type MusicCacheState } from '../store/musicCacheStore';
 import { isPartialAlbum } from '../store/persistence/cachedItemHelpers';
 
@@ -48,9 +47,8 @@ export function useDownloadStatus(
           // path) and wouldn't re-trigger subscribers — which left a stale
           // "downloaded" icon until the next unrelated cache change.
           if (s.cachedSongs[id]) return 'complete';
-          const queueStatus = getTrackQueueStatus(id);
-          if (queueStatus) return queueStatus;
-          return 'none';
+          if (s.downloadQueue.length === 0) return 'none';
+          return s.queuedSongStatuses?.[id] ?? 'none';
         }
 
         // Album or playlist

@@ -46,8 +46,6 @@ jest.mock('../persistence/pendingScrobbleTable', () => ({
 }));
 jest.mock('../persistence/musicCacheTables', () => ({
   clearAllMusicCacheRows: jest.fn(),
-  hydrateCachedSongs: jest.fn(() => ({})),
-  hydrateCachedItems: jest.fn(() => ({})),
   deleteCachedItem: jest.fn(),
   deleteCachedSong: jest.fn(),
   insertDownloadQueueItem: jest.fn(),

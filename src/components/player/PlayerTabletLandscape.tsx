@@ -2,7 +2,7 @@ import Ionicons from "@react-native-vector-icons/ionicons/static";
 import MaterialCommunityIcons from "@react-native-vector-icons/material-design-icons/static";
 import { FlashList } from '@shopify/flash-list';
 
-import { useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ActivityIndicator,
@@ -15,6 +15,8 @@ import {
 import Animated, {
   Extrapolation,
   interpolate,
+  runOnJS,
+  useAnimatedReaction,
   useAnimatedStyle,
   type SharedValue,
 } from 'react-native-reanimated';
@@ -72,9 +74,46 @@ const HERO_COVER_SIZE = 600;
 const CONTENT_PADDING = 40;
 const COLUMN_GAP = 32;
 
+const useExpandAnimatedReaction: typeof useAnimatedReaction =
+  typeof useAnimatedReaction === 'function' ? useAnimatedReaction : () => { };
+
 interface PlayerTabletLandscapeProps {
   expandProgress: SharedValue<number>;
 }
+
+const IsolatedProgressBar = memo(function IsolatedProgressBar({
+  colors,
+  handleSeek,
+  isBuffering,
+  error,
+  retrying,
+  onRetry,
+}: {
+  colors: ReturnType<typeof useTheme>['colors'];
+  handleSeek: (sec: number) => void;
+  isBuffering: boolean;
+  error: string | null;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  const position = playerStore((s) => s.position);
+  const duration = playerStore((s) => s.duration);
+  const bufferedPosition = playerStore((s) => s.bufferedPosition);
+
+  return (
+    <PlayerProgressBar
+      position={position}
+      duration={duration}
+      bufferedPosition={bufferedPosition}
+      colors={colors}
+      onSeek={handleSeek}
+      isBuffering={isBuffering}
+      error={error}
+      retrying={retrying}
+      onRetry={onRetry}
+    />
+  );
+});
 
 export function PlayerTabletLandscape({
   expandProgress,
@@ -87,9 +126,6 @@ export function PlayerTabletLandscape({
   const currentTrackIndex = playerStore((s) => s.currentTrackIndex);
   const queue = playerStore((s) => s.queue);
   const { isPlaying, isBuffering } = usePlaybackState();
-  const position = playerStore((s) => s.position);
-  const duration = playerStore((s) => s.duration);
-  const bufferedPosition = playerStore((s) => s.bufferedPosition);
   const error = playerStore((s) => s.error);
   const retrying = playerStore((s) => s.retrying);
 
@@ -99,6 +135,26 @@ export function PlayerTabletLandscape({
   // This overlay is root-mounted and stays mounted (transparent, non-interactive)
   // while collapsed, so "the player is open" is the expanded flag, not the mount.
   const playerExpanded = tabletLayoutStore((s) => s.playerExpanded);
+  const [isExpandVisible, setIsExpandVisible] = useState(
+    () => playerExpanded || expandProgress.value > 0,
+  );
+  useEffect(() => {
+    if (playerExpanded) {
+      setIsExpandVisible(true);
+    } else if (typeof useAnimatedReaction !== 'function' && expandProgress.value === 0) {
+      setIsExpandVisible(false);
+    }
+  }, [playerExpanded, expandProgress]);
+  useExpandAnimatedReaction(
+    () => expandProgress.value > 0,
+    (visible, prev) => {
+      if (visible !== prev) {
+        runOnJS(setIsExpandVisible)(visible);
+      }
+    },
+    [],
+  );
+  const shouldRenderRightColumn = playerExpanded || isExpandVisible;
   const { canSkipNext, canSkipPrevious } = useCanSkip();
 
   // Own palette extraction for gradient background. Primary is already
@@ -259,6 +315,7 @@ export function PlayerTabletLandscape({
           track={item.track}
           index={item.absoluteIndex}
           isActive={item.isNowPlaying}
+          isInUserQueue={item.isUserQueue}
           colors={queueColors}
           onPress={handleQueueItemPress}
           onLongPress={handleQueueItemLongPress}
@@ -391,12 +448,9 @@ export function PlayerTabletLandscape({
 
               {/* Progress bar */}
               <View style={styles.progressSection}>
-                <PlayerProgressBar
-                  position={position}
-                  duration={duration}
-                  bufferedPosition={bufferedPosition}
+                <IsolatedProgressBar
                   colors={colors}
-                  onSeek={handleSeek}
+                  handleSeek={handleSeek}
                   isBuffering={isBuffering}
                   error={error}
                   retrying={retrying}
@@ -489,142 +543,147 @@ export function PlayerTabletLandscape({
               )}
             </Animated.View>
 
-            {/* Right column — queue or lyrics */}
+            {/* Right column — suspended when panel is collapsed to avoid background FlashList/Lyrics/Info work */}
             <Animated.View style={[styles.rightColumn, rightColumnStyle]}>
-              {rightPanelMode === 'queue' ? (
+              {shouldRenderRightColumn && (
                 <>
-                  {/* Queue header */}
-                  <View style={styles.queueHeaderRow}>
-                    <Text style={[styles.queueHeaderText, { color: colors.textPrimary }]}>
-                      {t('queue')}
-                    </Text>
-                    <View style={styles.queueActions}>
-                      <ShuffleButton
-                        onPress={handleShuffle}
-                        disabled={shuffling || queue.length < 2}
-                      />
-                      <Pressable
-                        onPress={handleShareQueue}
-                        hitSlop={8}
-                        accessibilityRole="button"
-                        accessibilityLabel={t('shareQueue')}
-                        style={({ pressed }) => [
-                          styles.queueActionButton,
-                          pressed && styles.pressed,
-                        ]}
-                      >
-                        <Ionicons name="share-outline" size={18} color={colors.textPrimary} />
-                      </Pressable>
-                      <Pressable
-                        onPress={handleClearQueue}
-                        hitSlop={8}
-                        accessibilityRole="button"
-                        accessibilityLabel={t('clearQueue')}
-                        style={({ pressed }) => [
-                          styles.queueActionButton,
-                          pressed && styles.pressed,
-                        ]}
-                      >
-                        <Text style={[styles.clearButtonText, { color: colors.textPrimary }]}>
-                          {t('clear')}
+                  {rightPanelMode === 'queue' ? (
+                    <>
+                      {/* Queue header */}
+                      <View style={styles.queueHeaderRow}>
+                        <Text style={[styles.queueHeaderText, { color: colors.textPrimary }]}>
+                          {t('queue')}
                         </Text>
+                        <View style={styles.queueActions}>
+                          <ShuffleButton
+                            onPress={handleShuffle}
+                            disabled={shuffling || queue.length < 2}
+                          />
+                          <Pressable
+                            onPress={handleShareQueue}
+                            hitSlop={8}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('shareQueue')}
+                            style={({ pressed }) => [
+                              styles.queueActionButton,
+                              pressed && styles.pressed,
+                            ]}
+                          >
+                            <Ionicons name="share-outline" size={18} color={colors.textPrimary} />
+                          </Pressable>
+                          <Pressable
+                            onPress={handleClearQueue}
+                            hitSlop={8}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('clearQueue')}
+                            style={({ pressed }) => [
+                              styles.queueActionButton,
+                              pressed && styles.pressed,
+                            ]}
+                          >
+                            <Text style={[styles.clearButtonText, { color: colors.textPrimary }]}>
+                              {t('clear')}
+                            </Text>
+                          </Pressable>
+                        </View>
+                      </View>
+
+                      {/* Queue list */}
+                      <View style={styles.queueList}>
+                        <FlashList
+                          data={queueListItems}
+                          renderItem={renderQueueItem}
+                          keyExtractor={keyExtractor}
+                          getItemType={(item) => item.type}
+                          onScrollBeginDrag={closeOpenRow}
+                          drawDistance={200}
+                          showsVerticalScrollIndicator={false}
+                        />
+                      </View>
+                    </>
+                  ) : rightPanelMode === 'info' ? (
+                    /* Album info panel — always shows track metadata; enriched with API data when available */
+                    (<AlbumInfoContent
+                      track={currentTrack}
+                      albumInfo={albumInfoEntry?.albumInfo ?? null}
+                      overrideMbid={albumInfoEntry?.overrideMbid ?? null}
+                      sanitizedNotes={sanitizedNotes}
+                      notesAttributionUrl={notesAttributionUrl}
+                      albumInfoLoading={albumInfoLoading}
+                      albumInfoError={albumInfoError}
+                      onRetry={handleRetryAlbumInfo}
+                      refreshing={albumInfoRefreshing}
+                      onRefresh={handleRefreshAlbumInfo}
+                      colors={colors}
+                    />)
+                  ) : (
+                    /* Lyrics panel */
+                    (<View style={styles.lyricsContainer}>
+                      <LyricsContent
+                        key={trackId ?? 'no-track'}
+                        trackId={trackId ?? undefined}
+                        lyricsData={lyricsEntry}
+                        lyricsLoading={lyricsLoading}
+                        lyricsError={lyricsError}
+                        onRetry={handleRetryLyrics}
+                        durationSec={currentTrack?.duration ?? null}
+                        isActiveTab={shouldRenderRightColumn && rightPanelMode === 'lyrics'}
+                        colors={colors}
+                      />
+                    </View>)
+                  )}
+
+                  {/* Bottom toggle: queue / info / lyrics — ordering matches the
+                      portrait PlayerTabBar so muscle memory transfers. */}
+                  <View style={styles.toggleRow}>
+                    <View style={styles.toggleButtons}>
+                      <Pressable
+                        onPress={() => setRightPanelMode('queue')}
+                        hitSlop={8}
+                        accessibilityRole="button"
+                        accessibilityLabel={t('showQueue')}
+                        style={({ pressed }) => [styles.toggleButton, pressed && styles.pressed]}
+                      >
+                        <MaterialCommunityIcons
+                          name="playlist-music"
+                          size={22}
+                          color={rightPanelMode === 'queue' ? colors.primary : colors.textSecondary}
+                        />
                       </Pressable>
+                      {!offlineMode && (
+                        <Pressable
+                          onPress={() => setRightPanelMode('info')}
+                          hitSlop={8}
+                          accessibilityRole="button"
+                          accessibilityLabel={t('showAlbumInfo')}
+                          style={({ pressed }) => [styles.toggleButton, pressed && styles.pressed]}
+                        >
+                          <MaterialCommunityIcons
+                            name="information-outline"
+                            size={22}
+                            color={rightPanelMode === 'info' ? colors.primary : colors.textSecondary}
+                          />
+                        </Pressable>
+                      )}
+                      {!offlineMode && (
+                        <Pressable
+                          onPress={() => setRightPanelMode('lyrics')}
+                          hitSlop={8}
+                          accessibilityRole="button"
+                          accessibilityLabel={t('showLyrics')}
+                          style={({ pressed }) => [styles.toggleButton, pressed && styles.pressed]}
+                        >
+                          <MaterialCommunityIcons
+                            name="comment-quote-outline"
+                            size={22}
+                            color={rightPanelMode === 'lyrics' ? colors.primary : colors.textSecondary}
+                          />
+                        </Pressable>
+                      )}
                     </View>
                   </View>
-
-                  {/* Queue list */}
-                  <View style={styles.queueList}>
-                    <FlashList
-                      data={queueListItems}
-                      renderItem={renderQueueItem}
-                      keyExtractor={keyExtractor}
-                      getItemType={(item) => item.type}
-                      onScrollBeginDrag={closeOpenRow}
-                      drawDistance={200}
-                      showsVerticalScrollIndicator={false}
-                    />
-                  </View>
                 </>
-              ) : rightPanelMode === 'info' ? (
-                /* Album info panel — always shows track metadata; enriched with API data when available */
-                (<AlbumInfoContent
-                  track={currentTrack}
-                  albumInfo={albumInfoEntry?.albumInfo ?? null}
-                  overrideMbid={albumInfoEntry?.overrideMbid ?? null}
-                  sanitizedNotes={sanitizedNotes}
-                  notesAttributionUrl={notesAttributionUrl}
-                  albumInfoLoading={albumInfoLoading}
-                  albumInfoError={albumInfoError}
-                  onRetry={handleRetryAlbumInfo}
-                  refreshing={albumInfoRefreshing}
-                  onRefresh={handleRefreshAlbumInfo}
-                  colors={colors}
-                />)
-              ) : (
-                /* Lyrics panel */
-                (<View style={styles.lyricsContainer}>
-                  <LyricsContent
-                    key={trackId ?? 'no-track'}
-                    trackId={trackId ?? undefined}
-                    lyricsData={lyricsEntry}
-                    lyricsLoading={lyricsLoading}
-                    lyricsError={lyricsError}
-                    onRetry={handleRetryLyrics}
-                    durationSec={currentTrack?.duration ?? null}
-                    colors={colors}
-                  />
-                </View>)
               )}
-
-              {/* Bottom toggle: queue / info / lyrics — ordering matches the
-                  portrait PlayerTabBar so muscle memory transfers. */}
-              <View style={styles.toggleRow}>
-                <View style={styles.toggleButtons}>
-                  <Pressable
-                    onPress={() => setRightPanelMode('queue')}
-                    hitSlop={8}
-                    accessibilityRole="button"
-                    accessibilityLabel={t('showQueue')}
-                    style={({ pressed }) => [styles.toggleButton, pressed && styles.pressed]}
-                  >
-                    <MaterialCommunityIcons
-                      name="playlist-music"
-                      size={22}
-                      color={rightPanelMode === 'queue' ? colors.primary : colors.textSecondary}
-                    />
-                  </Pressable>
-                  {!offlineMode && (
-                    <Pressable
-                      onPress={() => setRightPanelMode('info')}
-                      hitSlop={8}
-                      accessibilityRole="button"
-                      accessibilityLabel={t('showAlbumInfo')}
-                      style={({ pressed }) => [styles.toggleButton, pressed && styles.pressed]}
-                    >
-                      <MaterialCommunityIcons
-                        name="information-outline"
-                        size={22}
-                        color={rightPanelMode === 'info' ? colors.primary : colors.textSecondary}
-                      />
-                    </Pressable>
-                  )}
-                  {!offlineMode && (
-                    <Pressable
-                      onPress={() => setRightPanelMode('lyrics')}
-                      hitSlop={8}
-                      accessibilityRole="button"
-                      accessibilityLabel={t('showLyrics')}
-                      style={({ pressed }) => [styles.toggleButton, pressed && styles.pressed]}
-                    >
-                      <MaterialCommunityIcons
-                        name="comment-quote-outline"
-                        size={22}
-                        color={rightPanelMode === 'lyrics' ? colors.primary : colors.textSecondary}
-                      />
-                    </Pressable>
-                  )}
-                </View>
-              </View>
             </Animated.View>
           </View>
         </View>

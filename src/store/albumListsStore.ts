@@ -110,12 +110,16 @@ export async function hydrateAlbumListsFromDb(): Promise<void> {
     'frequentlyPlayed',
     'randomSelection',
   ];
-  for (const listType of types) {
-    // eslint-disable-next-line no-await-in-loop
-    const rows = await listAlbumListRows(db, listType);
+  const results = await Promise.all(types.map((listType) => listAlbumListRows(db, listType)));
+  const patch: Partial<AlbumListsState> = {};
+  for (let i = 0; i < types.length; i++) {
+    const rows = results[i];
     if (rows.length > 0) {
-      albumListsStore.setState({ [listType]: rows.map(albumListRowToAlbumID3) } as Partial<AlbumListsState>);
+      patch[types[i]] = rows.map(albumListRowToAlbumID3);
     }
+  }
+  if (Object.keys(patch).length > 0) {
+    albumListsStore.setState(patch);
   }
 }
 
@@ -170,10 +174,12 @@ export const albumListsStore = create<AlbumListsState>()(
             // chunking dedupes the write far better than four separate passes. MERGE:
             // these are partial album views (see `persistList`).
             await upsertAlbums(db, all, undefined, getSortArticles(), { merge: true });
-            await replaceAlbumList(db, 'recentlyAdded', recentlyAdded.map((a) => a.id));
-            await replaceAlbumList(db, 'recentlyPlayed', recentlyPlayed.map((a) => a.id));
-            await replaceAlbumList(db, 'frequentlyPlayed', frequentlyPlayed.map((a) => a.id));
-            await replaceAlbumList(db, 'randomSelection', randomSelection.map((a) => a.id));
+            await Promise.all([
+              replaceAlbumList(db, 'recentlyAdded', recentlyAdded.map((a) => a.id)),
+              replaceAlbumList(db, 'recentlyPlayed', recentlyPlayed.map((a) => a.id)),
+              replaceAlbumList(db, 'frequentlyPlayed', frequentlyPlayed.map((a) => a.id)),
+              replaceAlbumList(db, 'randomSelection', randomSelection.map((a) => a.id)),
+            ]);
           }
           set({
             recentlyAdded,

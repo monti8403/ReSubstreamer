@@ -105,15 +105,11 @@ jest.mock('../../store/layoutPreferencesStore', () => ({
   },
 }));
 
-const mockOverlayShow = jest.fn();
-const mockOverlayShowSuccess = jest.fn();
 const mockOverlayShowError = jest.fn();
 
 jest.mock('../../store/processingOverlayStore', () => ({
   processingOverlayStore: {
     getState: jest.fn(() => ({
-      show: mockOverlayShow,
-      showSuccess: mockOverlayShowSuccess,
       showError: mockOverlayShowError,
     })),
   },
@@ -389,11 +385,9 @@ describe('playMoreLikeThis', () => {
     const source = { id: 's1' } as any;
     await playMoreLikeThis(source);
 
-    expect(mockOverlayShow).not.toHaveBeenCalled();
     expect(mockPlayTrack).toHaveBeenCalledWith(source, [source]);
     expect(mockGetSimilarSongs).toHaveBeenCalledWith('s1', 20);
     expect(mockAddToQueue).toHaveBeenCalledWith(tracks);
-    expect(mockOverlayShowSuccess).not.toHaveBeenCalled();
     // No fallbacks needed — first call returned the full target
     expect(mockGetSimilarSongs2).not.toHaveBeenCalled();
     expect(mockGetRandomSongsFiltered).not.toHaveBeenCalled();

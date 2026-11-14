@@ -130,6 +130,7 @@ export const PlayerModeContent = memo(function PlayerModeContent({
           track={item.track}
           index={item.absoluteIndex}
           isActive={item.isNowPlaying}
+          isInUserQueue={item.isUserQueue}
           colors={queueColors}
           onPress={onQueueItemPress}
           onLongPress={onQueueItemLongPress}

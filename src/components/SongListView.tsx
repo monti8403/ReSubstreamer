@@ -1,5 +1,5 @@
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
-import { useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react';
+import { memo, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -46,7 +46,7 @@ export const songIdentity = (song: Child): Child => song;
  * appending a page converts the appended rows only — the accumulated array is never
  * re-mapped, and the screen holds no second array of envelopes.
  */
-function SongListItem<T>({
+const SongListItem = memo(function SongListItem<T>({
   item,
   toSong,
   colors,
@@ -60,9 +60,14 @@ function SongListItem<T>({
   const song = useMemo(() => toSong(item), [item, toSong]);
   const handlePress = useCallback(() => onPress(song), [onPress, song]);
   return <TrackRow track={song} colors={colors} onPress={handlePress} showCoverArt showAlbumName />;
-}
+}) as <T>(props: {
+  item: T;
+  toSong: (item: T) => Child;
+  colors: ThemeColors;
+  onPress: (song: Child) => void;
+}) => ReactNode;
 
-function SongGridItem<T>({
+const SongGridItem = memo(function SongGridItem<T>({
   item,
   toSong,
   onPress,
@@ -83,7 +88,13 @@ function SongGridItem<T>({
       <SongCard song={song} onPress={handlePress} />
     </View>
   );
-}
+}) as <T>(props: {
+  item: T;
+  toSong: (item: T) => Child;
+  onPress: (song: Child) => void;
+  index: number;
+  columns: number;
+}) => ReactNode;
 
 /* ------------------------------------------------------------------ */
 /*  SongListView                                                      */
@@ -221,6 +232,9 @@ export function SongListView<T extends { id: string }>({
 
   const listKey = scrollToTopTrigger ? `${layout}:${scrollToTopTrigger}` : layout;
 
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+
   // The default tap plays the whole list. The queue is built HERE, at press time, rather
   // than held as a parallel envelope array: the per-row adapter is the only conversion
   // this view makes per render.
@@ -230,9 +244,9 @@ export function SongListView<T extends { id: string }>({
         onSongPress(song);
         return;
       }
-      void playTrack(song, items.map(toSong));
+      void playTrack(song, itemsRef.current.map(toSong));
     },
-    [onSongPress, items, toSong],
+    [onSongPress, toSong],
   );
 
   const renderListItem = useCallback(

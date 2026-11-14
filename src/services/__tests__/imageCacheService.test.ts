@@ -171,17 +171,17 @@ jest.mock('../connectivityService', () => ({
   awaitFirstPing: () => mockAwaitFirstPing(),
 }));
 
-// `triggerCoverArtRecache` lazy-requires `hydrateCachedItems` AND
-// `hydrateCachedSongs` to read the downloaded album/playlist set plus
-// per-song cover art (needed for songs inside downloaded playlists
-// whose source albums weren't downloaded). Mocked so the recache suite
-// can control what the worker sees without dragging in the music-cache
-// table module.
-const mockHydrateCachedItemsForRecache = jest.fn<Record<string, any>, []>(() => ({}));
-const mockHydrateCachedSongsForRecache = jest.fn<Record<string, any>, []>(() => ({}));
-jest.mock('../../store/persistence/musicCacheTables', () => ({
-  hydrateCachedItems: () => mockHydrateCachedItemsForRecache(),
-  hydrateCachedSongs: () => mockHydrateCachedSongsForRecache(),
+const mockMusicCacheState: {
+  cachedItems: Record<string, any>;
+  cachedSongs: Record<string, any>;
+} = {
+  cachedItems: {},
+  cachedSongs: {},
+};
+jest.mock('../../store/musicCacheStore', () => ({
+  musicCacheStore: {
+    getState: () => mockMusicCacheState,
+  },
 }));
 
 /**
