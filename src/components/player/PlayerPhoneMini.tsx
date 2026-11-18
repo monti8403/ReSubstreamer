@@ -1,7 +1,7 @@
 import Ionicons from "@react-native-vector-icons/ionicons/static";
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
@@ -14,6 +14,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
+  cancelAnimation,
   Easing,
   Extrapolation,
   interpolate,
@@ -25,7 +26,7 @@ import Animated, {
 
 import { CachedImage } from '@/components/CachedImage';
 import { MarqueeText } from '@/components/MarqueeText';
-import WaveformLogo from '@/components/WaveformLogo';
+import { AtrumLogo } from '@/components/AtrumLogo';
 import { useCanSkip } from '@/hooks/useCanSkip';
 import { useImagePalette } from '@/hooks/useImagePalette';
 import { useSongCoverArt } from '@/hooks/useSongCoverArt';
@@ -81,18 +82,16 @@ const MiniProgressStrip = memo(function MiniProgressStrip({
 const MiniPrevButton = memo(function MiniPrevButton({
   canSkipPrevious,
   iconColor,
+  onSkipPrevious,
 }: {
   canSkipPrevious: boolean;
   iconColor: string;
+  onSkipPrevious: () => void;
 }) {
-  const handlePress = useCallback(() => {
-    if (canSkipPrevious) skipToPrevious();
-  }, [canSkipPrevious]);
-
   return (
     <Pressable
       testID="mini-prev"
-      onPress={handlePress}
+      onPress={onSkipPrevious}
       hitSlop={8}
       disabled={!canSkipPrevious}
       style={({ pressed }) => [styles.skipButton, pressed && canSkipPrevious && styles.pressed]}
@@ -120,10 +119,6 @@ export function PlayerPhoneMini() {
   const isPlaying = playbackState === 'playing' || playbackState === 'buffering';
   const isBuffering = playbackState === 'buffering' || playbackState === 'loading';
 
-  const handleSkipNext = useCallback(() => {
-    if (canSkipNext) skipToNext();
-  }, [canSkipNext]);
-
   const marqueeStyle = useMemo(
     () => [styles.title, { color: queueLoading ? colors.textSecondary : colors.textPrimary }],
     [queueLoading, colors.textSecondary, colors.textPrimary],
@@ -141,12 +136,25 @@ export function PlayerPhoneMini() {
   const router = useRouter();
   const openPlayer = useCallback(() => router.push('/player'), [router]);
 
-  // --- Horizontal swipe animation & gesture locking shared values ---
+  // --- Horizontal swipe / skip transition shared values ---
   const trackTranslateX = useSharedValue(0);
   const trackOpacity = useSharedValue(1);
   const gestureDirection = useSharedValue(0); // 0: undetermined, 1: horizontal, 2: vertical
   const isAnimatingChange = useSharedValue(false);
+  const activeAnimId = useSharedValue(0);
   const trackAreaWidth = useSharedValue(Dimensions.get('window').width);
+
+  // Refs for rapid tap queuing, preventing double animations on internal skips,
+  // and determining slide direction on external/automatic track changes.
+  const buttonAnimTokenRef = useRef(0);
+  const pendingMidpointRef = useRef<{ token: number; action: () => void } | null>(null);
+  const internalSkipExpectedRef = useRef({ remaining: 0, expiresAt: 0 });
+  const prevTrackSnapshotRef = useRef<{
+    id: string;
+    index: number | null;
+    queueLength: number;
+    queue: unknown[];
+  } | null>(null);
 
   const handleLeftContainerLayout = useCallback(
     (event: LayoutChangeEvent) => {
@@ -165,41 +173,82 @@ export function PlayerPhoneMini() {
     };
   });
 
-  const handleSwipeRightEnd = useCallback(
-    (exitDistance: number) => {
-      const s = playerStore.getState();
-      const canPrev =
-        (s.currentTrackIndex != null && s.currentTrackIndex > 0) ||
-        playbackSettingsStore.getState().repeatMode !== 'off' ||
-        s.position > 3;
+  const markInternalSkipExpected = useCallback(() => {
+    const prev = internalSkipExpectedRef.current;
+    const activeRemaining = Date.now() <= prev.expiresAt ? prev.remaining : 0;
+    internalSkipExpectedRef.current = {
+      remaining: activeRemaining + 1,
+      expiresAt: Date.now() + 1200,
+    };
+  }, []);
 
-      if (!canPrev) {
-        trackTranslateX.value = withTiming(0, {
-          duration: SNAP_BACK_DURATION,
-          easing: SNAP_EASING,
-        });
-        trackOpacity.value = withTiming(1, {
-          duration: SNAP_BACK_DURATION,
-          easing: SNAP_EASING,
-        });
-        return;
+  const executeMidpointSkip = useCallback(
+    (token: number) => {
+      const pending = pendingMidpointRef.current;
+      if (!pending || pending.token !== token) return;
+      pendingMidpointRef.current = null;
+      markInternalSkipExpected();
+      pending.action();
+    },
+    [markInternalSkipExpected],
+  );
+
+  const snapBackToRest = useCallback(() => {
+    trackTranslateX.value = withTiming(0, {
+      duration: SNAP_BACK_DURATION,
+      easing: SNAP_EASING,
+    });
+    trackOpacity.value = withTiming(1, {
+      duration: SNAP_BACK_DURATION,
+      easing: SNAP_EASING,
+    });
+  }, [trackOpacity, trackTranslateX]);
+
+  /**
+   * Run the two-phase slide transition (130ms exit fade -> midpoint skip -> 190ms magnetic snap in).
+   * If a previous exit transition has not yet reached its midpoint (rapid multi-tap),
+   * flush that pending skip immediately so zero taps are ever dropped.
+   */
+  const runSlideTransition = useCallback(
+    (direction: 'next' | 'prev', action: () => void, customExitDistance?: number) => {
+      if (pendingMidpointRef.current) {
+        const prev = pendingMidpointRef.current;
+        pendingMidpointRef.current = null;
+        markInternalSkipExpected();
+        prev.action();
       }
 
+      cancelAnimation(trackTranslateX);
+      cancelAnimation(trackOpacity);
+
+      const token = ++buttonAnimTokenRef.current;
+      pendingMidpointRef.current = { token, action };
+
+      const width = trackAreaWidth.value > 0 ? trackAreaWidth.value : 300;
+      const exitDistance = customExitDistance ?? width + 20;
+      const exitTarget = direction === 'next' ? -exitDistance : exitDistance;
+      const enterStart = direction === 'next' ? exitDistance : -exitDistance;
+
+      const animId = activeAnimId.value + 1;
+      activeAnimId.value = animId;
       isAnimatingChange.value = true;
+
       trackOpacity.value = withTiming(0, { duration: EXIT_DURATION });
       trackTranslateX.value = withTiming(
-        exitDistance,
+        exitTarget,
         { duration: EXIT_DURATION, easing: Easing.out(Easing.quad) },
         (finished) => {
-          if (finished) {
-            trackTranslateX.value = -exitDistance;
+          'worklet';
+          if (finished && activeAnimId.value === animId) {
+            trackTranslateX.value = enterStart;
             trackOpacity.value = 0.4;
-            runOnJS(skipToPrevious)();
+            runOnJS(executeMidpointSkip)(token);
             trackTranslateX.value = withTiming(
               0,
               { duration: SNAP_DURATION, easing: SNAP_EASING },
               (snapDone) => {
-                if (snapDone) {
+                'worklet';
+                if (snapDone && activeAnimId.value === animId) {
                   isAnimatingChange.value = false;
                 }
               },
@@ -208,13 +257,168 @@ export function PlayerPhoneMini() {
               duration: SNAP_DURATION,
               easing: SNAP_EASING,
             });
-          } else {
+          } else if (activeAnimId.value === animId) {
             isAnimatingChange.value = false;
           }
         },
       );
     },
-    [isAnimatingChange, trackTranslateX, trackOpacity],
+    [
+      activeAnimId,
+      executeMidpointSkip,
+      isAnimatingChange,
+      markInternalSkipExpected,
+      trackAreaWidth,
+      trackOpacity,
+      trackTranslateX,
+    ],
+  );
+
+  // Flush any in-flight button skip on unmount so a quick tap + screen transition never drops a skip
+  useEffect(() => {
+    return () => {
+      if (pendingMidpointRef.current) {
+        const pending = pendingMidpointRef.current;
+        pendingMidpointRef.current = null;
+        buttonAnimTokenRef.current += 1;
+        pending.action();
+      }
+    };
+  }, []);
+
+  // Animate external/automatic track transitions (auto-advance, Bluetooth/notification/widget controls,
+  // queue jumps, or starting a new track/album elsewhere in the app).
+  useEffect(() => {
+    const trackId = currentTrack?.id ?? null;
+    if (!trackId) {
+      prevTrackSnapshotRef.current = null;
+      return;
+    }
+
+    const s = playerStore.getState();
+    const nextIndex = s.currentTrackIndex;
+    const nextQueue = s.queue;
+    const nextQueueLength = nextQueue.length;
+    const prev = prevTrackSnapshotRef.current;
+
+    prevTrackSnapshotRef.current = {
+      id: trackId,
+      index: nextIndex,
+      queueLength: nextQueueLength,
+      queue: nextQueue,
+    };
+
+    if (!prev || prev.id === trackId) {
+      return;
+    }
+
+    const expected = internalSkipExpectedRef.current;
+    if (expected.remaining > 0 && Date.now() <= expected.expiresAt) {
+      internalSkipExpectedRef.current = {
+        remaining: expected.remaining - 1,
+        expiresAt: expected.expiresAt,
+      };
+      return;
+    }
+    internalSkipExpectedRef.current = { remaining: 0, expiresAt: 0 };
+
+    let direction: 'next' | 'prev' = 'next';
+    if (prev.queue === nextQueue && prev.index != null && nextIndex != null) {
+      const repeatMode = playbackSettingsStore.getState().repeatMode;
+      const isWrapForward =
+        repeatMode === 'all' && prev.index === prev.queueLength - 1 && nextIndex === 0 && prev.queueLength > 1;
+      const isWrapBackward =
+        repeatMode === 'all' && prev.index === 0 && nextIndex === nextQueueLength - 1 && nextQueueLength > 1;
+      if (isWrapBackward) {
+        direction = 'prev';
+      } else if (!isWrapForward && nextIndex < prev.index) {
+        direction = 'prev';
+      }
+    }
+
+    const width = trackAreaWidth.value > 0 ? trackAreaWidth.value : 300;
+    const enterDistance = width + 20;
+    const startX = direction === 'next' ? enterDistance : -enterDistance;
+
+    cancelAnimation(trackTranslateX);
+    cancelAnimation(trackOpacity);
+    const animId = activeAnimId.value + 1;
+    activeAnimId.value = animId;
+    isAnimatingChange.value = true;
+    trackTranslateX.value = startX;
+    trackOpacity.value = 0.4;
+
+    trackTranslateX.value = withTiming(
+      0,
+      { duration: SNAP_DURATION, easing: SNAP_EASING },
+      (snapDone) => {
+        'worklet';
+        if (snapDone && activeAnimId.value === animId) {
+          isAnimatingChange.value = false;
+        }
+      },
+    );
+    trackOpacity.value = withTiming(1, {
+      duration: SNAP_DURATION,
+      easing: SNAP_EASING,
+    });
+  }, [
+    currentTrack?.id,
+    activeAnimId,
+    isAnimatingChange,
+    trackAreaWidth,
+    trackOpacity,
+    trackTranslateX,
+  ]);
+
+  const shouldPreviousRestartOnly = useCallback(() => {
+    const s = playerStore.getState();
+    const { skipPreviousBehavior, repeatMode } = playbackSettingsStore.getState();
+    const willRestartSameTrack = skipPreviousBehavior === 'restart-or-previous' && s.position > 3;
+    const canGoToPrevTrack = (s.currentTrackIndex != null && s.currentTrackIndex > 0) || repeatMode !== 'off';
+    return { willRestartSameTrack, canGoToPrevTrack };
+  }, []);
+
+  const handleSkipNext = useCallback(() => {
+    if (!canSkipNext) return;
+    runSlideTransition('next', skipToNext);
+  }, [canSkipNext, runSlideTransition]);
+
+  const handleSkipPrev = useCallback(() => {
+    if (!canSkipPrevious) return;
+    const { willRestartSameTrack, canGoToPrevTrack } = shouldPreviousRestartOnly();
+    if (willRestartSameTrack || !canGoToPrevTrack) {
+      skipToPrevious();
+      return;
+    }
+    runSlideTransition('prev', skipToPrevious);
+  }, [canSkipPrevious, runSlideTransition, shouldPreviousRestartOnly]);
+
+  const handleSwipeLeftEnd = useCallback(
+    (exitDistance: number) => {
+      runSlideTransition('next', skipToNext, exitDistance);
+    },
+    [runSlideTransition],
+  );
+
+  const handleSwipeRightEnd = useCallback(
+    (exitDistance: number) => {
+      const { willRestartSameTrack, canGoToPrevTrack } = shouldPreviousRestartOnly();
+
+      if (willRestartSameTrack) {
+        skipToPrevious();
+        snapBackToRest();
+        return;
+      }
+
+      if (!canGoToPrevTrack) {
+        snapBackToRest();
+        return;
+      }
+
+      runSlideTransition('prev', skipToPrevious, exitDistance);
+    },
+    [runSlideTransition, shouldPreviousRestartOnly, snapBackToRest],
   );
 
   // Gestures for mini player:
@@ -291,34 +495,7 @@ export function PlayerPhoneMini() {
 
           // Swipe left (next track)
           if (isSwipeLeft && canSkipNext) {
-            isAnimatingChange.value = true;
-            trackOpacity.value = withTiming(0, { duration: EXIT_DURATION });
-            trackTranslateX.value = withTiming(
-              -exitDistance,
-              { duration: EXIT_DURATION, easing: Easing.out(Easing.quad) },
-              (finished) => {
-                if (finished) {
-                  trackTranslateX.value = exitDistance;
-                  trackOpacity.value = 0.4;
-                  runOnJS(skipToNext)();
-                  trackTranslateX.value = withTiming(
-                    0,
-                    { duration: SNAP_DURATION, easing: SNAP_EASING },
-                    (snapDone) => {
-                      if (snapDone) {
-                        isAnimatingChange.value = false;
-                      }
-                    },
-                  );
-                  trackOpacity.value = withTiming(1, {
-                    duration: SNAP_DURATION,
-                    easing: SNAP_EASING,
-                  });
-                } else {
-                  isAnimatingChange.value = false;
-                }
-              },
-            );
+            runOnJS(handleSwipeLeftEnd)(exitDistance);
             gestureDirection.value = 0;
             return;
           }
@@ -375,6 +552,7 @@ export function PlayerPhoneMini() {
     trackAreaWidth,
     openPlayer,
     canSkipNext,
+    handleSwipeLeftEnd,
     handleSwipeRightEnd,
   ]);
 
@@ -431,7 +609,7 @@ export function PlayerPhoneMini() {
             {/* Cover art (or placeholder while loading) */}
             {queueLoading ? (
               <View style={[styles.cover, styles.coverPlaceholder, { backgroundColor: 'rgba(150,150,150,0.25)' }]}>
-                <WaveformLogo size={16} color="rgba(150,150,150,1)" />
+                <AtrumLogo size={16} color="rgba(150,150,150,1)" />
               </View>
             ) : (
               <CachedImage
@@ -463,6 +641,7 @@ export function PlayerPhoneMini() {
         <MiniPrevButton
           canSkipPrevious={canSkipPrevious}
           iconColor={colors.textPrimary}
+          onSkipPrevious={handleSkipPrev}
         />
 
         {/* Play / Pause / Buffering */}
