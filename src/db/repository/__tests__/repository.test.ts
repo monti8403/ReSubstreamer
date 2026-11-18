@@ -31,11 +31,14 @@ import {
 } from '../artists';
 import {
   PLAYLIST_LIST_COLS,
+  appendPlaylistSongs,
   clearPlaylistDetailMarkers,
   countPlaylists,
   getPlaylist,
+  getPlaylistsSongContainment,
   listAllPlaylists,
   listPlaylistIds,
+  listPlaylistSongIds,
   playlistIdsWithSongs,
   listPlaylistDetailState,
   stampPlaylistDetailSynced,
@@ -52,6 +55,7 @@ import {
   SONG_LIST_COLS,
   countSongs,
   deleteAlbumSongsNotIn,
+  listAlbumSongIds,
   listSongs,
   songListRowToChild,
   listSongsBefore,
@@ -673,6 +677,57 @@ describe('playlists repository', () => {
       await upsertPlaylists(db(), [playlist('p1', 'Alpha')]);
       await setPlaylistSongs(db(), 'p1', ['s1']);
       expect(await playlistIdsWithSongs(db(), [])).toEqual(new Set());
+    });
+  });
+
+  describe('getPlaylistsSongContainment', () => {
+    it('detects full and partial containment across playlists in one query', async () => {
+      await upsertPlaylists(db(), [
+        playlist('p1', 'All'),
+        playlist('p2', 'Partial'),
+        playlist('p3', 'None'),
+      ]);
+      // Include a duplicate of s1 in p2 to ensure distinct counting
+      await setPlaylistSongs(db(), 'p1', ['s1', 's2', 's3']);
+      await setPlaylistSongs(db(), 'p2', ['s1', 's1', 's9']);
+      await setPlaylistSongs(db(), 'p3', ['s8']);
+
+      const single = await getPlaylistsSongContainment(db(), ['s1']);
+      expect(single.get('p1')).toEqual({ existingCount: 1, isFullyContained: true });
+      expect(single.get('p2')).toEqual({ existingCount: 1, isFullyContained: true });
+      expect(single.get('p3')).toBeUndefined();
+
+      const multi = await getPlaylistsSongContainment(db(), ['s1', 's2', 's1']);
+      expect(multi.get('p1')).toEqual({ existingCount: 2, isFullyContained: true });
+      expect(multi.get('p2')).toEqual({ existingCount: 1, isFullyContained: false });
+      expect(multi.get('p3')).toBeUndefined();
+    });
+
+    it('returns an empty map for empty input', async () => {
+      expect(await getPlaylistsSongContainment(db(), [])).toEqual(new Map());
+    });
+  });
+
+  describe('appendPlaylistSongs and listPlaylistSongIds', () => {
+    it('appends new songs at the next position and increments song_count', async () => {
+      await upsertPlaylists(db(), [playlist('p1', 'Mix', { songCount: 2 })]);
+      await setPlaylistSongs(db(), 'p1', ['s1', 's2']);
+
+      await appendPlaylistSongs(db(), 'p1', ['s3', 's4']);
+      expect(await listPlaylistSongIds(db(), 'p1')).toEqual(['s1', 's2', 's3', 's4']);
+      expect((await getPlaylist(db(), 'p1'))?.song_count).toBe(4);
+    });
+  });
+
+  describe('listAlbumSongIds', () => {
+    it('returns ordered song IDs for an album', async () => {
+      await upsertSongs(db(), [
+        song('s2', 'Track 2', { albumId: 'a1', discNumber: 1, track: 2 }),
+        song('s1', 'Track 1', { albumId: 'a1', discNumber: 1, track: 1 }),
+        song('s3', 'Other Album', { albumId: 'a2', discNumber: 1, track: 1 }),
+      ]);
+      expect(await listAlbumSongIds(db(), 'a1')).toEqual(['s1', 's2']);
+      expect(await listAlbumSongIds(db(), 'a-missing')).toEqual([]);
     });
   });
 });

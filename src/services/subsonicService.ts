@@ -895,6 +895,7 @@ export async function addToPlaylist(
   playlistId: string,
   songIds: string[],
 ): Promise<boolean> {
+  if (songIds.length === 0) return true;
   const api = getApi();
   if (!api) return false;
   try {

@@ -24,43 +24,32 @@ import { CachedImage } from './CachedImage';
 import { resolveSongCoverArt } from '../hooks/useSongCoverArt';
 import { useTheme } from '../hooks/useTheme';
 import { coverArtForAlbum } from '../utils/coverArtId';
-import { syncCachedItemTracks } from '../services/musicCacheService';
+import { hexWithAlpha } from '../utils/colors';
 import {
-  addToPlaylist,
-  createNewPlaylist,
-  getAlbum,
-} from '../services/subsonicService';
+  addSongsToPlaylist,
+  resolveLocalTargetSongIds,
+  resolveTargetSongIds,
+} from '../services/playlistService';
+import { createNewPlaylist } from '../services/subsonicService';
 import {
   addToPlaylistStore,
   type AddToPlaylistTarget,
 } from '../store/addToPlaylistStore';
-import { musicCacheStore } from '../store/musicCacheStore';
-import { fetchPlaylistDetail } from '../services/detailFetchService';
 import { refreshPlaylistLibrary } from '../services/normalizedLibrarySync';
 import { getDb } from '../store/persistence/db';
-import { listAllPlaylists, playlistBrowseRowToPlaylist } from '../db/repository/playlists';
-import { processingOverlayStore, runWithOverlay } from '../store/processingOverlayStore';
+import {
+  getPlaylistsSongContainment,
+  listAllPlaylists,
+  playlistBrowseRowToPlaylist,
+  type PlaylistSongContainment,
+} from '../db/repository/playlists';
+import { runWithOverlay } from '../store/processingOverlayStore';
 
 import type { Playlist } from '../services/subsonicService';
 
 const CONTENT_DELAY_MS = 750;
 const CONTENT_ANIMATE_DURATION = 1000;
 const SPINNER_HEIGHT = 48;
-
-/**
- * Resolve the song IDs to add from a target.
- * For songs this is immediate; for albums we fetch the full track list.
- */
-async function resolveSongIds(target: AddToPlaylistTarget): Promise<string[] | null> {
-  if (target.type === 'song') return [target.item.id];
-  if (target.type === 'queue') {
-    if (target.songs.length === 0) return null;
-    return target.songs.map((s) => s.id);
-  }
-  const full = await getAlbum(target.item.id);
-  if (!full?.song?.length) return null;
-  return full.song.map((s) => s.id);
-}
 
 function getTargetCoverArt(target: AddToPlaylistTarget): string | undefined {
   // `coverArt`-value based cover art (see src/utils/coverArtId.ts).
@@ -94,6 +83,10 @@ export function AddToPlaylistSheet() {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [playlistsLoading, setPlaylistsLoading] = useState(false);
   const [playlistsFetchError, setPlaylistsFetchError] = useState(false);
+  const [targetSongIds, setTargetSongIds] = useState<string[] | null>(null);
+  const [containmentMap, setContainmentMap] = useState<Map<string, PlaylistSongContainment>>(
+    () => new Map(),
+  );
 
   const { colors } = useTheme();
   const { t } = useTranslation();
@@ -108,28 +101,76 @@ export function AddToPlaylistSheet() {
   const contentOpacity = useSharedValue(0);
 
   useEffect(() => {
-    if (!visible) return undefined;
+    if (!visible) {
+      setTargetSongIds(null);
+      setContainmentMap(new Map());
+      return undefined;
+    }
     setPhase('loading');
     hasMeasured.current = false;
     animatedHeight.value = SPINNER_HEIGHT;
     contentOpacity.value = 0;
+    setTargetSongIds(null);
+    setContainmentMap(new Map());
     let alive = true;
     const timer = setTimeout(async () => {
       const db = getDb();
-      // Seed with the cached playlists first so the reveal animation measures real
-      // content, THEN measure, THEN refresh from the server (dual-writes normalized).
-      if (db) {
-        const cached = (await listAllPlaylists(db)).map(playlistBrowseRowToPlaylist);
+      let resolvedIds: string[] | null = null;
+      if (target) {
+        resolvedIds = await resolveLocalTargetSongIds(target, db);
         if (!alive) return;
+        if (resolvedIds) setTargetSongIds(resolvedIds);
+      }
+      let latestResolvedIds = resolvedIds;
+
+      // Seed with the cached playlists + SQLite containment first so the reveal
+      // animation measures real content, THEN measure, THEN refresh from the server.
+      if (db) {
+        const [cachedRows, containment] = await Promise.all([
+          listAllPlaylists(db),
+          resolvedIds && resolvedIds.length > 0
+            ? getPlaylistsSongContainment(db, resolvedIds)
+            : Promise.resolve(new Map<string, PlaylistSongContainment>()),
+        ]);
+        if (!alive) return;
+        const cached = cachedRows.map(playlistBrowseRowToPlaylist);
         if (cached.length) setPlaylists(cached);
+        setContainmentMap(containment);
       }
       setPhase('measuring');
       setPlaylistsLoading(true);
       setPlaylistsFetchError(false);
+
+      // If target is an album whose tracks weren't in SQLite yet, resolve them once
+      // without blocking the initial sheet reveal.
+      if (target && !resolvedIds) {
+        resolveTargetSongIds(target)
+          .then(async (fetchedIds) => {
+            if (!alive || !fetchedIds) return;
+            latestResolvedIds = fetchedIds;
+            setTargetSongIds(fetchedIds);
+            if (db) {
+              const containment = await getPlaylistsSongContainment(db, fetchedIds);
+              if (alive) setContainmentMap(containment);
+            }
+          })
+          .catch(() => {
+            // Resolved on select if the background lookup fails.
+          });
+      }
+
       try {
         await refreshPlaylistLibrary();
         if (db && alive) {
-          setPlaylists((await listAllPlaylists(db)).map(playlistBrowseRowToPlaylist));
+          const [refreshedRows, containment] = await Promise.all([
+            listAllPlaylists(db),
+            latestResolvedIds && latestResolvedIds.length > 0
+              ? getPlaylistsSongContainment(db, latestResolvedIds)
+              : Promise.resolve(null),
+          ]);
+          if (!alive) return;
+          setPlaylists(refreshedRows.map(playlistBrowseRowToPlaylist));
+          if (containment) setContainmentMap(containment);
         }
       } catch {
         if (alive) setPlaylistsFetchError(true);
@@ -141,7 +182,7 @@ export function AddToPlaylistSheet() {
       alive = false;
       clearTimeout(timer);
     };
-  }, [visible, animatedHeight, contentOpacity]);
+  }, [visible, target, animatedHeight, contentOpacity]);
 
   const transitionToReady = useCallback(() => {
     setPhase('ready');
@@ -185,36 +226,34 @@ export function AddToPlaylistSheet() {
     setName('');
     setBusy(false);
     setError(null);
+    setTargetSongIds(null);
+    setContainmentMap(new Map());
   }, [hide]);
 
   const handleSelectPlaylist = useCallback(
     async (playlist: Playlist) => {
       if (!target || busy) return;
+      if (containmentMap.get(playlist.id)?.isFullyContained) return;
       setBusy(true);
       setError(null);
       handleClose();
       await runWithOverlay(
         async () => {
-          const songIds = await resolveSongIds(target);
+          const songIds =
+            targetSongIds && targetSongIds.length > 0
+              ? targetSongIds
+              : await resolveTargetSongIds(target);
           if (!songIds) throw new Error('Could not resolve songs');
 
-          const success = await addToPlaylist(playlist.id, songIds);
+          const { success } = await addSongsToPlaylist(playlist.id, songIds);
           if (!success) throw new Error('API returned false');
-
-          // Only downloaded playlists need a re-fetch here — to re-sync the on-disk
-          // tracks with the added songs. Non-downloaded playlists re-fetch lazily when
-          // their detail screen next opens (local-first).
-          if (playlist.id in musicCacheStore.getState().cachedItems) {
-            const updated = await fetchPlaylistDetail(playlist.id, { force: true });
-            if (updated) syncCachedItemTracks(playlist.id, updated.entry ?? []);
-          }
 
           void refreshPlaylistLibrary();
         },
         { error: t('failedToAddToPlaylist') },
       );
     },
-    [target, busy, handleClose],
+    [target, targetSongIds, containmentMap, busy, handleClose, t],
   );
 
   const handleCreatePlaylist = useCallback(async () => {
@@ -228,7 +267,10 @@ export function AddToPlaylistSheet() {
     setError(null);
 
     try {
-      const songIds = await resolveSongIds(target);
+      const songIds =
+        targetSongIds && targetSongIds.length > 0
+          ? targetSongIds
+          : await resolveTargetSongIds(target);
       if (!songIds) throw new Error('Could not resolve songs');
 
       const success = await createNewPlaylist(trimmed, songIds);
@@ -240,7 +282,7 @@ export function AddToPlaylistSheet() {
       setBusy(false);
       setError(t('failedToCreatePlaylist'));
     }
-  }, [target, busy, name, handleClose]);
+  }, [target, targetSongIds, busy, name, handleClose, t]);
 
   const handleShowCreate = useCallback(() => {
     setMode('create');
@@ -267,6 +309,9 @@ export function AddToPlaylistSheet() {
         errorText: { color: colors.red },
         playlistName: { color: colors.textPrimary },
         playlistCount: { color: colors.textSecondary },
+        partialHint: { color: colors.primary, fontWeight: '500' as const },
+        alreadyInBadge: { backgroundColor: hexWithAlpha(colors.green, 0.14) },
+        alreadyInText: { color: colors.green },
         newPlaylistLabel: { color: colors.primary },
         separator: { backgroundColor: colors.border },
       }),
@@ -385,30 +430,66 @@ export function AddToPlaylistSheet() {
 
                 <View style={[styles.separator, dynamicStyles.separator]} />
 
-                {playlists.map((playlist) => (
-                  <Pressable
-                    key={playlist.id}
-                    onPress={() => handleSelectPlaylist(playlist)}
-                    disabled={busy}
-                    style={({ pressed }) => [
-                      styles.playlistRow,
-                      pressed && styles.rowPressed,
-                    ]}
-                  >
-                    <Ionicons name="list-outline" size={22} color={colors.textSecondary} />
-                    <View style={styles.playlistInfo}>
-                      <Text
-                        style={[styles.playlistName, dynamicStyles.playlistName]}
-                        numberOfLines={1}
-                      >
-                        {playlist.name}
-                      </Text>
-                      <Text style={[styles.playlistCount, dynamicStyles.playlistCount]}>
-                        {t('trackWithCount', { count: playlist.songCount ?? 0 })}
-                      </Text>
-                    </View>
-                  </Pressable>
-                ))}
+                {playlists.map((playlist) => {
+                  const containment = containmentMap.get(playlist.id);
+                  const isFullyContained = containment?.isFullyContained ?? false;
+                  const existingCount = containment?.existingCount ?? 0;
+                  const totalTargetSongs = targetSongIds?.length ?? 0;
+                  const isPartiallyContained =
+                    totalTargetSongs > 1 && existingCount > 0 && !isFullyContained;
+                  const rowDisabled = busy || isFullyContained;
+
+                  return (
+                    <Pressable
+                      key={playlist.id}
+                      onPress={() => handleSelectPlaylist(playlist)}
+                      disabled={rowDisabled}
+                      accessibilityState={{ disabled: rowDisabled }}
+                      style={({ pressed }) => [
+                        styles.playlistRow,
+                        isFullyContained && styles.playlistRowDisabled,
+                        pressed && !rowDisabled && styles.rowPressed,
+                      ]}
+                    >
+                      <Ionicons
+                        name="list-outline"
+                        size={22}
+                        color={isFullyContained ? colors.label : colors.textSecondary}
+                      />
+                      <View style={styles.playlistInfo}>
+                        <Text
+                          style={[styles.playlistName, dynamicStyles.playlistName]}
+                          numberOfLines={1}
+                        >
+                          {playlist.name}
+                        </Text>
+                        <Text
+                          style={[styles.playlistCount, dynamicStyles.playlistCount]}
+                          numberOfLines={1}
+                        >
+                          {t('trackWithCount', { count: playlist.songCount ?? 0 })}
+                          {isPartiallyContained && (
+                            <Text style={dynamicStyles.partialHint}>
+                              {` · ${t('alreadyInPlaylistCount', { count: existingCount })}`}
+                            </Text>
+                          )}
+                        </Text>
+                      </View>
+                      {isFullyContained && (
+                        <View style={[styles.alreadyInBadge, dynamicStyles.alreadyInBadge]}>
+                          <Ionicons
+                            name="checkmark-circle"
+                            size={15}
+                            color={colors.green}
+                          />
+                          <Text style={[styles.alreadyInText, dynamicStyles.alreadyInText]}>
+                            {t('alreadyInPlaylist')}
+                          </Text>
+                        </View>
+                      )}
+                    </Pressable>
+                  );
+                })}
 
                 {playlists.length === 0 && playlistsLoading && (
                   <ActivityIndicator style={styles.loadingIndicator} color={colors.textSecondary} />
@@ -481,6 +562,9 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     gap: 12,
   },
+  playlistRowDisabled: {
+    opacity: 0.55,
+  },
   rowPressed: {
     opacity: 0.6,
   },
@@ -495,6 +579,18 @@ const styles = StyleSheet.create({
   playlistCount: {
     fontSize: 14,
     marginTop: 1,
+  },
+  alreadyInBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  alreadyInText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   newPlaylistLabel: {
     fontSize: 16,

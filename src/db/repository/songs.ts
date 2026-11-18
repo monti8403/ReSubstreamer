@@ -430,6 +430,15 @@ export const listSongAlbumIds = (db: InternalDb): Promise<string[]> =>
     )
     .then((rows) => rows.map((r) => r.album_id));
 
+/** Ordered song IDs currently cached for a single album. */
+export const listAlbumSongIds = (db: InternalDb, albumId: string): Promise<string[]> =>
+  db
+    .getAllAsync<{ id: string }>(
+      'SELECT id FROM songs WHERE album_id = ? ORDER BY disc_number, track, sort_title',
+      [albumId],
+    )
+    .then((rows) => rows.map((r) => r.id));
+
 /** Is there any album with no songs? The gate-cheap form of the walk's
  *  `listAlbumIds − listSongAlbumIds` diff: an indexed `NOT EXISTS` probe that stops at the
  *  first hit, so it stays flat on a 200k-album library instead of materialising two id lists. */

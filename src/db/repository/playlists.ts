@@ -273,3 +273,80 @@ export const playlistIdsWithSongs = (db: InternalDb, ids: string[]): Promise<Set
           [JSON.stringify(ids)],
         )
         .then((rows) => new Set(rows.map((r) => r.playlist_id)));
+
+export interface PlaylistSongContainment {
+  existingCount: number;
+  isFullyContained: boolean;
+}
+
+/**
+ * Check in a single indexed SQLite query which playlists already contain one or more of
+ * the given target song IDs. Counts distinct matching `song_id`s per playlist so
+ * pre-existing playlist duplicates cannot inflate `existingCount`.
+ */
+export async function getPlaylistsSongContainment(
+  db: InternalDb,
+  songIds: string[],
+): Promise<Map<string, PlaylistSongContainment>> {
+  const uniqueIds = Array.from(new Set(songIds));
+  const result = new Map<string, PlaylistSongContainment>();
+  if (uniqueIds.length === 0) return result;
+
+  const rows = await db.getAllAsync<{ playlist_id: string; matched_count: number }>(
+    'SELECT ps.playlist_id, COUNT(DISTINCT ps.song_id) AS matched_count ' +
+      'FROM playlist_songs ps ' +
+      'WHERE ps.song_id IN (SELECT value FROM json_each(?)) ' +
+      'GROUP BY ps.playlist_id',
+    [JSON.stringify(uniqueIds)],
+  );
+
+  const total = uniqueIds.length;
+  for (const row of rows) {
+    const existingCount = Number(row.matched_count);
+    result.set(row.playlist_id, {
+      existingCount,
+      isFullyContained: existingCount >= total,
+    });
+  }
+  return result;
+}
+
+/** Ordered song IDs currently cached in `playlist_songs` for a single playlist. */
+export const listPlaylistSongIds = (db: InternalDb, playlistId: string): Promise<string[]> =>
+  db
+    .getAllAsync<{ song_id: string }>(
+      'SELECT song_id FROM playlist_songs WHERE playlist_id = ? ORDER BY position',
+      [playlistId],
+    )
+    .then((rows) => rows.map((r) => r.song_id));
+
+/**
+ * Append newly added song IDs to `playlist_songs` and increment `playlists.song_count`
+ * atomically so reopening `AddToPlaylistSheet` or `PlaylistDetailScreen` immediately
+ * reflects the addition without waiting for a background sync.
+ */
+export async function appendPlaylistSongs(
+  db: InternalDb,
+  playlistId: string,
+  songIds: string[],
+): Promise<void> {
+  if (songIds.length === 0) return;
+  const maxPosRow = await db.getFirstAsync<{ max_pos: number | null }>(
+    'SELECT MAX(position) AS max_pos FROM playlist_songs WHERE playlist_id = ?',
+    [playlistId],
+  );
+  const startPos = (maxPosRow?.max_pos ?? -1) + 1;
+  const now = Date.now();
+  await db.runAtomicBatchAsync([
+    ...songIds.map(
+      (songId, idx): BatchCommand => [
+        'INSERT INTO playlist_songs (playlist_id, position, song_id) VALUES (?, ?, ?)',
+        [playlistId, startPos + idx, songId],
+      ],
+    ),
+    [
+      'UPDATE playlists SET song_count = COALESCE(song_count, 0) + ?, changed = ? WHERE id = ?',
+      [songIds.length, now, playlistId],
+    ],
+  ]);
+}
