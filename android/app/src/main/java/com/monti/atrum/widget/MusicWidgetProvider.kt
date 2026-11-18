@@ -1,4 +1,4 @@
-package com.resubstreamer.widget
+package com.monti.atrum.widget
 
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
@@ -24,7 +24,7 @@ import android.widget.RemoteViews
 import androidx.core.graphics.ColorUtils
 import androidx.palette.graphics.Palette
 import com.facebook.react.modules.network.OkHttpClientProvider
-import com.resubstreamer.R
+import com.monti.atrum.R
 import expo.modules.ssltrust.CustomOkHttpClientFactory
 import expo.modules.ssltrust.SslTrustStore
 import kotlinx.coroutines.CoroutineScope
@@ -219,7 +219,7 @@ class MusicWidgetProvider : AppWidgetProvider() {
                 views.setImageViewResource(R.id.btn_shuffle, R.drawable.ic_widget_shuffle)
 
                 // Tap on Track Info / Cover -> open full player in app
-                val openPlayerIntent = Intent(Intent.ACTION_VIEW, Uri.parse("resubstreamer://player")).apply {
+                val openPlayerIntent = Intent(Intent.ACTION_VIEW, Uri.parse("atrum://player")).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 }
                 val openPlayerPendingIntent = PendingIntent.getActivity(
@@ -374,7 +374,7 @@ class MusicWidgetProvider : AppWidgetProvider() {
                         // PendingIntent to play this recent item with unique Data URI
                         val playIntent = Intent(context, MusicWidgetActionReceiver::class.java).apply {
                             action = MusicWidgetActionReceiver.ACTION_PLAY_RECENT
-                            data = Uri.parse("resubstreamer://widget/recent/$i/" + Uri.encode(id))
+                            data = Uri.parse("atrum://widget/recent/$i/" + Uri.encode(id))
                             putExtra("recent_id", id)
                             putExtra("recent_type", type)
                             putExtra("recent_title", title)

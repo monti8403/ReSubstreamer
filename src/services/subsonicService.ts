@@ -52,7 +52,7 @@ export function normalizeServerUrl(url: string): string {
 }
 
 // Subsonic protocol identity sent on every request (SDK ctor + hand-built URLs).
-const SUBSONIC_CLIENT_NAME = 'substreamer8';
+const SUBSONIC_CLIENT_NAME = 'atrum';
 const SUBSONIC_API_VERSION = '1.15.0';
 
 let cachedApi: SubsonicAPI | null = null;

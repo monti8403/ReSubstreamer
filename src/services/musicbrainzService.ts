@@ -20,7 +20,7 @@ const WIKIPEDIA_API_URL = 'https://en.wikipedia.org/api/rest_v1/page/summary/';
 // asset pipeline (the `version` field of app.json mirrors package.json).
 // Repo URL is the contact point — no personal email.
 import pkg from '../../package.json';
-const USER_AGENT = `Substreamer/${pkg.version} (+https://github.com/ghenry22/substreamer)`;
+const USER_AGENT = `Atrum/${pkg.version} (+https://github.com/monti8403/ReSubstreamer)`;
 
 /**
  * Escape characters with special meaning in MusicBrainz's Lucene-based search

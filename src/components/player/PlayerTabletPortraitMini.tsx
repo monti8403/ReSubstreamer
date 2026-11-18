@@ -9,7 +9,7 @@ import Animated, { useAnimatedStyle } from 'react-native-reanimated';
 import { CachedImage } from '@/components/CachedImage';
 import { FavoriteButton } from '@/components/FavoriteButton';
 import { PlayerProgressBar } from '@/components/PlayerProgressBar';
-import WaveformLogo from '@/components/WaveformLogo';
+import { AtrumLogo } from '@/components/AtrumLogo';
 import { type ThemeColors } from '@/constants/theme';
 import { useCanSkip } from '@/hooks/useCanSkip';
 import { useImagePalette } from '@/hooks/useImagePalette';
@@ -106,7 +106,7 @@ export function PlayerTabletPortraitMini() {
           >
             {queueLoading ? (
               <View style={[styles.cover, styles.coverPlaceholder, { backgroundColor: 'rgba(150,150,150,0.25)' }]}>
-                <WaveformLogo size={24} color="rgba(150,150,150,1)" />
+                <AtrumLogo size={24} color="rgba(150,150,150,1)" />
               </View>
             ) : (
               <CachedImage

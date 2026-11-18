@@ -1,4 +1,4 @@
-package com.resubstreamer.widget
+package com.monti.atrum.widget
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -25,12 +25,12 @@ class MusicWidgetActionReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "MusicWidgetActionReceiver"
-        const val ACTION_PLAY_PAUSE = "com.resubstreamer.widget.ACTION_PLAY_PAUSE"
-        const val ACTION_NEXT = "com.resubstreamer.widget.ACTION_NEXT"
-        const val ACTION_PREV = "com.resubstreamer.widget.ACTION_PREV"
-        const val ACTION_STAR = "com.resubstreamer.widget.ACTION_STAR"
-        const val ACTION_SHUFFLE = "com.resubstreamer.widget.ACTION_SHUFFLE"
-        const val ACTION_PLAY_RECENT = "com.resubstreamer.widget.ACTION_PLAY_RECENT"
+        const val ACTION_PLAY_PAUSE = "com.monti.atrum.widget.ACTION_PLAY_PAUSE"
+        const val ACTION_NEXT = "com.monti.atrum.widget.ACTION_NEXT"
+        const val ACTION_PREV = "com.monti.atrum.widget.ACTION_PREV"
+        const val ACTION_STAR = "com.monti.atrum.widget.ACTION_STAR"
+        const val ACTION_SHUFFLE = "com.monti.atrum.widget.ACTION_SHUFFLE"
+        const val ACTION_PLAY_RECENT = "com.monti.atrum.widget.ACTION_PLAY_RECENT"
     }
 
     override fun onReceive(context: Context, intent: Intent) {

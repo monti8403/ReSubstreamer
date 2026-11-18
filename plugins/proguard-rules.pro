@@ -1,4 +1,4 @@
-# Release-build ProGuard / R8 keep rules for substreamer-rn.
+# Release-build ProGuard / R8 keep rules for Atrum.
 #
 # Loaded by app.config.js and injected via expo-build-properties as
 # `android.extraProguardRules` at prebuild time. Editing here is the

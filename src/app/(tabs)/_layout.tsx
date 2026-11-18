@@ -11,7 +11,7 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Keyboard, View } from 'react-native';
 
-import WaveformLogo from '../../components/WaveformLogo';
+import { AtrumLogo } from '../../components/AtrumLogo';
 import { BannerStack } from '../../components/BannerStack';
 import { BottomChrome } from '../../components/BottomChrome';
 import { GradientBackground } from '../../components/GradientBackground';
@@ -70,7 +70,7 @@ export default function TabLayout() {
           options={{
             title: t('home'),
             tabBarIcon: ({ color, size }) => (
-              <WaveformLogo size={size} color={color} />
+              <AtrumLogo size={size} color={color} />
             ),
           }}
         />

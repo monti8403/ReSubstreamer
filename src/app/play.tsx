@@ -5,10 +5,10 @@ import { dispatchVoiceSearchRequest } from '../services/headlessMediaService';
 import { buildMediaSearchRequest } from '../services/voiceDeepLinkMapper';
 
 /**
- * Deep-link landing route for `substreamer://play?...` URLs fired by Google
+ * Deep-link landing route for `atrum://play?...` URLs fired by Google
  * Assistant's App Actions PLAY_MUSIC handler (declared in
  * plugins/with-android-app-actions.js → shortcuts.xml). The url-template
- * `substreamer://play{?artist,album,song,playlist,genre}` routes here; we map
+ * `atrum://play{?artist,album,song,playlist,genre}` routes here; we map
  * the query params to a MediaSearchRequest, dispatch through the same
  * headlessMediaService resolver + playback path CarPlay / Android Auto uses, then
  * redirect to the tabs so the user lands on the player with playback started.

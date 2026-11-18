@@ -32,7 +32,8 @@ import { ThemedAlertHost } from '../components/ThemedAlertHost';
 import { DARK_MIX, GRADIENT_LOCATIONS, GRADIENT_MIX_CURVE, GradientBackground, LIGHT_MIX } from '../components/GradientBackground';
 import { mixHexColors } from '../utils/colors';
 import { runWhenIdle } from '../utils/runWhenIdle';
-import AnimatedSplashScreen from '../components/AnimatedSplashScreen';
+import BootSplash from 'react-native-bootsplash';
+import { AtrumAnimatedSplash } from '../components/AtrumAnimatedSplash';
 import { CertificatePromptModal } from '../components/CertificatePromptModal';
 import { CreateShareSheet } from '../components/CreateShareSheet';
 import { PlayerTabletLandscape } from '../components/player/PlayerTabletLandscape';
@@ -97,11 +98,14 @@ import { playerStore } from '../store/playerStore';
 // Synchronous adapter: the pre-render native-color-scheme read needs a
 // synchronous result before first paint (see the module-scope IIFE below).
 import { kvStorageSync as kvStorage } from '../store/persistence';
+import { migrationStore } from '../store/migrationStore';
+import { getPendingTasks, runMigrations } from '../services/migrationService';
 import { tabletLayoutStore } from '../store/tabletLayoutStore';
 import i18n from '../i18n/i18n';
 
-// react-native-bootsplash holds the native splash until BootSplash.hide(); that call
-// lives in AnimatedSplashScreen's useHideAnimation, for a seamless native → JS handoff.
+// react-native-bootsplash holds the native splash until BootSplash.hide({ fade: false });
+// that call runs inside handleSplashReady (AtrumAnimatedSplash onReady / onLayout) for
+// an instantaneous native -> JS overlay handoff.
 
 // The module-scope initialisers below run before any React error boundary mounts, and
 // their native calls (NetInfo bridge, fs mkdir, JSSE TrustManager install) can throw on
@@ -312,6 +316,7 @@ const FOREGROUND_REFRESH_THRESHOLD_MS = 10 * 60_000;
 
 export default function RootLayout() {
   const [splashVisible, setSplashVisible] = useState(true);
+  const [appReady, setAppReady] = useState(false);
   const rehydrated = authStore((s) => s.rehydrated);
   const isLoggedIn = authStore((s) => s.isLoggedIn);
   const { theme, colors, preference } = useTheme();
@@ -461,17 +466,56 @@ export default function RootLayout() {
     return () => sub.remove();
   }, [isLoggedIn]);
 
-  // --- Rehydrate auth from SQLite ---
+  // --- Cold-start migrations & SQLite/KV store rehydration (drives AtrumAnimatedSplash canExit) ---
   useEffect(() => {
-    const done = () => {
+    let cancelled = false;
+    const safetyTimer = setTimeout(() => {
+      if (!cancelled) {
+        authStore.getState().setRehydrated(true);
+        setAppReady(true);
+      }
+    }, 15_000);
+
+    (async () => {
+      try {
+        let completedVersion = 0;
+        try {
+          const raw = kvStorage.getItem('substreamer-migration') as string | null;
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            completedVersion = parsed?.state?.completedVersion ?? 0;
+          }
+        } catch { /* fall back to 0 — migrations will re-run safely */ }
+
+        const pending = getPendingTasks(completedVersion);
+        if (pending.length > 0) {
+          const finalVersion = await runMigrations(completedVersion);
+          migrationStore.getState().setCompletedVersion(finalVersion);
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[boot] runMigrations rejected unexpectedly:', errMessage(e));
+      }
+
+      try {
+        await authStore.persist.rehydrate();
+      } catch { /* non-fatal */ }
       authStore.getState().setRehydrated(true);
+
+      try {
+        await Promise.all([rehydrateAllStores(), awaitKvHydration()]);
+      } catch { /* non-fatal */ }
+
+      clearTimeout(safetyTimer);
+      if (!cancelled) {
+        setAppReady(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(safetyTimer);
     };
-    const p = authStore.persist.rehydrate();
-    if (p instanceof Promise) {
-      p.then(done);
-    } else {
-      done();
-    }
   }, []);
 
   // --- Initialise audio player & pre-fetch server data when logged in ---
@@ -614,9 +658,25 @@ export default function RootLayout() {
     }
   }, [rehydrated, isLoggedIn, splashVisible, segments, router]);
 
+  const bootSplashHiddenRef = useRef(false);
+  const handleSplashReady = useCallback(() => {
+    if (bootSplashHiddenRef.current) return;
+    bootSplashHiddenRef.current = true;
+    void BootSplash.hide({ fade: false }).catch(() => {});
+  }, []);
+
   const handleSplashFinish = useCallback(() => {
     setSplashVisible(false);
   }, []);
+
+  useEffect(() => {
+    if (!splashVisible) return;
+    const hardTimeout = setTimeout(() => {
+      handleSplashReady();
+      setSplashVisible(false);
+    }, 16_000);
+    return () => clearTimeout(hardTimeout);
+  }, [splashVisible, handleSplashReady]);
 
   // Build a navigation theme that matches the app's resolved theme. This is
   // critical: expo-router's NavigationContainer defaults to DefaultTheme (white
@@ -893,7 +953,11 @@ export default function RootLayout() {
       {/* Animated splash renders as an overlay on top of the Stack so the
           navigator is always mounted and ready for auth-based navigation. */}
       {splashVisible && (
-        <AnimatedSplashScreen onFinish={handleSplashFinish} />
+        <AtrumAnimatedSplash
+          onReady={handleSplashReady}
+          canExit={appReady}
+          onFinish={handleSplashFinish}
+        />
       )}
       </RootErrorBoundary>
       </ThemeProvider>

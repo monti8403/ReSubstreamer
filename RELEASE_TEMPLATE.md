@@ -1,6 +1,6 @@
-## ReSubstreamer v1.0.0 — Initial Official Release 🚀
+## Atrum v1.0.0 — Initial Official Release 🚀
 
-Welcome to the first official release of **ReSubstreamer**, the open-source modernization of Substreamer for Android!
+Welcome to the first official release of **Atrum**, the open-source modernization of Substreamer for Android!
 
 This release delivers the beloved, minimalist aesthetic of the original application, reinforced with a rewritten playback engine, seamless carousel gestures, and fine-grained bandwidth controls.
 
@@ -27,11 +27,11 @@ This release delivers the beloved, minimalist aesthetic of the original applicat
 ---
 
 ### 📲 Installation Instructions
-1. Download `ReSubstreamer-v1.0.0.apk` from the **Assets** section below.
+1. Download `Atrum-v1.0.0.apk` from the **Assets** section below.
 2. Allow installation from unknown sources when prompted by Android.
 3. Log in with your Subsonic server URL and credentials.
 
 ---
 
 ### 📦 Assets
-* **`ReSubstreamer-v1.0.0.apk`** — Standard Android APK (ARM64 & x86_64)
+* **`Atrum-v1.0.0.apk`** — Standard Android APK (ARM64 & x86_64)

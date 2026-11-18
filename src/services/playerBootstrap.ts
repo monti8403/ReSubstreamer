@@ -64,7 +64,7 @@ if (initialSkip.hydrated) {
 void getTrackPlayer()
   .configure({
     audioContentType: 'music',
-    userAgent: 'substreamer8',
+    userAgent: 'atrum',
     // Skip-back behavior respects user setting: 'restart-or-previous' or 'previous'.
     skipToPreviousBehavior: initialSkip.value === 'restart-or-previous' ? 'restart-or-previous' : 'previous',
     // Our mild gray-waveform placeholder (matches the in-app cover-art

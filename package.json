@@ -1,5 +1,5 @@
 {
-  "name": "substreamer",
+  "name": "atrum",
   "version": "8.0.92",
   "license": "GPL-3.0-or-later",
   "main": "./index.js",

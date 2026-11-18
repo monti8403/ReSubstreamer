@@ -3,7 +3,7 @@
  *
  *   LOCAL  → cached file URI rendered
  *   REMOTE → server URL rendered (component asked service to cache)
- *   PLACEHOLDER → no Image layer; the WaveformLogo shows through
+ *   PLACEHOLDER → no Image layer; the AtrumLogo shows through
  *
  * The placeholder is ALWAYS in the tree underneath the Image layer; the
  * Image just covers it once it paints. We never end up with a blank
@@ -106,13 +106,15 @@ jest.mock('../../store/offlineModeStore', () => ({
   ),
 }));
 
-jest.mock('../WaveformLogo', () => {
+jest.mock('../AtrumLogo', () => {
   const { View } = require('react-native');
+  const MockLogo = (props: { size: number; color: string }) => (
+    <View testID="waveform-placeholder" style={{ width: props.size, height: props.size }} />
+  );
   return {
     __esModule: true,
-    default: (props: { size: number; color: string }) => (
-      <View testID="waveform-placeholder" style={{ width: props.size, height: props.size }} />
-    ),
+    AtrumLogo: MockLogo,
+    default: MockLogo,
   };
 });
 

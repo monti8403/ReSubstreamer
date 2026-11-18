@@ -1,4 +1,4 @@
-package com.resubstreamer
+package com.monti.atrum
 
 import android.app.Application
 import android.content.res.Configuration
@@ -22,7 +22,7 @@ class MainApplication : Application(), ReactApplication {
       packageList =
         PackageList(this).packages.apply {
           // Packages that cannot be autolinked yet can be added manually here, for example:
-          add(com.resubstreamer.widget.MusicWidgetPackage())
+          add(com.monti.atrum.widget.MusicWidgetPackage())
         }
     )
   }
@@ -36,7 +36,7 @@ class MainApplication : Application(), ReactApplication {
     }
     loadReactNative(this)
     ApplicationLifecycleDispatcher.onApplicationCreate(this)
-    com.resubstreamer.widget.MusicWidgetMediaManager.initialize(this)
+    com.monti.atrum.widget.MusicWidgetMediaManager.initialize(this)
   }
 
   override fun onConfigurationChanged(newConfig: Configuration) {

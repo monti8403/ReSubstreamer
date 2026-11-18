@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Create a report to help us reproduce and fix a bug in ReSubstreamer
+about: Create a report to help us reproduce and fix a bug in Atrum
 title: "[BUG] "
 labels: ["bug", "triage"]
 assignees: ''
@@ -19,7 +19,7 @@ A clear and concise description of what the bug is.
 A clear and concise description of what you expected to happen.
 
 ### Environment & Device Information
-- **ReSubstreamer Version:** (e.g., v1.0.0 or commit hash)
+- **Atrum Version:** (e.g., v1.0.0 or commit hash)
 - **Device Model:** (e.g., Google Pixel 8, Samsung Galaxy S23)
 - **Android Version:** (e.g., Android 14 / OneUI 6.1)
 - **Subsonic Server Backend:** (e.g., Navidrome 0.52.5, Gonic 0.8.9, Airsonic-Advanced)

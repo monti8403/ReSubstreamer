@@ -15,7 +15,7 @@ import {
 
 import { CertificatePromptModal } from '../components/CertificatePromptModal';
 import { LanguageSelector } from '../components/LanguageSelector';
-import WaveformLogo from '../components/WaveformLogo';
+import { AtrumLogo } from '../components/AtrumLogo';
 import { fetchServerInfo, login as subsonicLogin } from '../services/subsonicService';
 import { trustCertificateForHost } from '../services/sslTrustService';
 import { authStore } from '../store/authStore';
@@ -29,7 +29,10 @@ import {
   type CertificateInfo,
 } from '../../modules/expo-ssl-trust/src';
 
-const PRIMARY = '#1D9BF0';
+const BG = '#000000';
+const SURFACE = '#0B0B0E';
+const ICE = '#F4F6FA';
+const BORDER = 'rgba(244,246,250,0.16)';
 
 export function LoginScreen() {
   const router = useRouter();
@@ -235,10 +238,10 @@ export function LoginScreen() {
         <View style={styles.inner}>
         {/* Logo */}
         <View style={styles.logoContainer}>
-          <WaveformLogo size={80} color="#FFFFFF" />
+          <AtrumLogo size={88} color={ICE} />
         </View>
 
-        <Text style={styles.title}>substreamer</Text>
+        <Text style={styles.title}>Atrum</Text>
         <Text style={styles.subtitle}>
           {t('loginSubtitle')}
         </Text>
@@ -248,7 +251,7 @@ export function LoginScreen() {
           <TextInput
             style={styles.input}
             placeholder={t('loginServerPlaceholder')}
-            placeholderTextColor="rgba(255,255,255,0.85)"
+            placeholderTextColor="rgba(244,246,250,0.55)"
             value={serverUrl}
             onChangeText={(t) => {
               setServerUrl(t);
@@ -264,7 +267,7 @@ export function LoginScreen() {
           <TextInput
             style={styles.input}
             placeholder={t('username')}
-            placeholderTextColor="rgba(255,255,255,0.85)"
+            placeholderTextColor="rgba(244,246,250,0.55)"
             value={username}
             onChangeText={(t) => {
               setUsername(t);
@@ -277,7 +280,7 @@ export function LoginScreen() {
           <TextInput
             style={[styles.input, styles.inputLast]}
             placeholder={t('password')}
-            placeholderTextColor="rgba(255,255,255,0.85)"
+            placeholderTextColor="rgba(244,246,250,0.55)"
             value={password}
             onChangeText={(t) => {
               setPassword(t);
@@ -310,9 +313,9 @@ export function LoginScreen() {
                 <Switch
                   value={legacyAuth}
                   onValueChange={setLegacyAuth}
-                  trackColor={{ false: 'rgba(255,255,255,0.2)', true: '#FFFFFF' }}
-                  thumbColor={legacyAuth ? PRIMARY : 'rgba(255,255,255,0.9)'}
-                  ios_backgroundColor="rgba(255,255,255,0.2)"
+                  trackColor={{ false: SURFACE, true: ICE }}
+                  thumbColor={legacyAuth ? BG : ICE}
+                  ios_backgroundColor={SURFACE}
                   disabled={loading}
                 />
               </View>
@@ -348,7 +351,7 @@ export function LoginScreen() {
             disabled={loading}
           >
             {loading ? (
-              <ActivityIndicator color={PRIMARY} />
+              <ActivityIndicator color={BG} />
             ) : (
               <Text style={styles.buttonText}>{t('logIn')}</Text>
             )}
@@ -380,11 +383,11 @@ const styles = StyleSheet.create({
   // measured height (which on Android can stop short of the nav bar → black bar).
   root: {
     flex: 1,
-    backgroundColor: PRIMARY,
+    backgroundColor: BG,
   },
   container: {
     flex: 1,
-    backgroundColor: PRIMARY,
+    backgroundColor: BG,
     justifyContent: 'center',
   },
   inner: {
@@ -400,23 +403,25 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 30,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: ICE,
     textAlign: 'center',
     marginBottom: 6,
   },
   subtitle: {
     fontSize: 15,
-    color: 'rgba(255,255,255,0.7)',
+    color: 'rgba(244,246,250,0.68)',
     textAlign: 'center',
     marginBottom: 28,
   },
   input: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    backgroundColor: SURFACE,
+    borderWidth: 1,
+    borderColor: BORDER,
     borderRadius: 10,
     paddingHorizontal: 16,
     paddingVertical: 14,
     fontSize: 16,
-    color: '#FFFFFF',
+    color: ICE,
     marginBottom: 12,
   },
   inputLast: {
@@ -424,12 +429,12 @@ const styles = StyleSheet.create({
   },
   error: {
     fontSize: 14,
-    color: '#FFEB3B',
+    color: '#FF5C5C',
     marginTop: 8,
     marginBottom: 4,
   },
   button: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ICE,
     borderRadius: 24,
     paddingVertical: 14,
     alignItems: 'center',
@@ -444,7 +449,7 @@ const styles = StyleSheet.create({
     opacity: 0.9,
   },
   buttonText: {
-    color: PRIMARY,
+    color: BG,
     fontSize: 16,
     fontWeight: '700',
   },
@@ -454,7 +459,7 @@ const styles = StyleSheet.create({
   },
   advancedToggleText: {
     fontSize: 12,
-    color: 'rgba(255,255,255,0.6)',
+    color: 'rgba(244,246,250,0.6)',
   },
   advancedSection: {
     marginTop: 4,
@@ -472,25 +477,25 @@ const styles = StyleSheet.create({
   },
   switchLabel: {
     fontSize: 15,
-    color: '#FFFFFF',
+    color: ICE,
   },
   switchHint: {
     fontSize: 12,
-    color: 'rgba(255,255,255,0.6)',
+    color: 'rgba(244,246,250,0.6)',
     marginTop: 2,
   },
   certButton: {
     paddingVertical: 10,
     marginTop: 4,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(255,255,255,0.15)',
+    borderTopWidth: 1,
+    borderTopColor: BORDER,
   },
   certButtonPressed: {
     opacity: 0.6,
   },
   certButtonText: {
     fontSize: 15,
-    color: '#FFFFFF',
+    color: ICE,
   },
   languageSelector: {
     marginTop: 16,

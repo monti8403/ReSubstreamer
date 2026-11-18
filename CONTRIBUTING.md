@@ -1,6 +1,6 @@
-# Contributing to ReSubstreamer
+# Contributing to Atrum
 
-Thank you for your interest in making **ReSubstreamer** better! We welcome bug fixes, performance improvements, documentation updates, and feature implementations from the community.
+Thank you for your interest in making **Atrum** better! We welcome bug fixes, performance improvements, documentation updates, and feature implementations from the community.
 
 ---
 

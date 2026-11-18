@@ -25,7 +25,7 @@ jest.mock('expo-router/react-navigation', () => ({ useIsFocused: () => true }));
  *
  * `emptyStateRenders` — the whole-screen "No downloaded music" state.
  * `placeholderRenders` — `SectionPlaceholder`, which is the only thing in `home.tsx`
- *   that draws a `WaveformLogo`, so mocking the logo counts placeholder frames without
+ *   that draws an `AtrumLogo`, so mocking the logo counts placeholder frames without
  *   reaching into a component the screen doesn't export.
  */
 const emptyStateRenders: unknown[] = [];
@@ -40,13 +40,17 @@ jest.mock('../../components/EmptyState', () => ({
     return React.createElement(Text, null, title);
   },
 }));
-jest.mock('../../components/WaveformLogo', () => ({
-  __esModule: true,
-  default: () => {
+jest.mock('../../components/AtrumLogo', () => {
+  const mockLogo = () => {
     placeholderRenders.push(1);
     return null;
-  },
-}));
+  };
+  return {
+    __esModule: true,
+    AtrumLogo: mockLogo,
+    default: mockLogo,
+  };
+});
 
 // Cards have their own suites; stub them down to the id that reached them.
 const stubCard =

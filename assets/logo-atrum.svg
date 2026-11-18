@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Atrum">
+  <title>Atrum</title>
+  <rect width="1024" height="1024" fill="#000000"/>
+  <!-- Diapason rovesciato a "A" + trapezio flottante (A interna in negativo) -->
+  <g transform="translate(0 12)" fill="#F4F6FA">
+    <path d="M480 200H544V360H600L752 800H672L542 424H482L352 800H272L424 360H480Z"/>
+    <path d="M498.9 595.0L525.1 595.0L554.5 680.0L469.5 680.0Z"/>
+  </g>
+</svg>

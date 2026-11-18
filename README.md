@@ -1,4 +1,4 @@
-# ReSubstreamer 🎵
+# Atrum 🎵
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![React Native](https://img.shields.io/badge/React%20Native-0.76+-blue?logo=react&logoColor=white)](https://reactnative.dev)
@@ -9,7 +9,7 @@
 
 A modern, ultra-high-performance, and bespoke **Subsonic & Navidrome** music client built with **React Native**, **Expo**, and **Native C++/Kotlin/Swift modules**. 
 
-ReSubstreamer is a ground-up modernization of [Substreamer](https://github.com/ghenry22/substreamer) by Gaven Henry (licensed under GPL-3.0), redesigned from the core to deliver a fluid, native, and **Spotify-like** mobile music experience for self-hosted audio enthusiasts.
+Atrum is a ground-up modernization of [Substreamer](https://github.com/ghenry22/substreamer) by Gaven Henry (licensed under GPL-3.0), redesigned from the core to deliver a fluid, native, and **Spotify-like** mobile music experience for self-hosted audio enthusiasts.
 
 ---
 
@@ -124,7 +124,7 @@ npx tsc --noEmit
 ### Running & Compiling for Android
 
 > [!IMPORTANT]
-> Because ReSubstreamer utilizes native C++ Nitro modules, custom Android permissions, and a native Android AppWidget, **Expo Go is not supported**. You must run a native build.
+> Because Atrum utilizes native C++ Nitro modules, custom Android permissions, and a native Android AppWidget, **Expo Go is not supported**. You must run a native build.
 
 ```bash
 # Debug Build & Run on connected device or emulator

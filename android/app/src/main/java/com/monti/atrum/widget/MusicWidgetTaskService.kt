@@ -1,4 +1,4 @@
-package com.resubstreamer.widget
+package com.monti.atrum.widget
 
 import android.content.Intent
 import android.os.Bundle

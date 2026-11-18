@@ -1,6 +1,6 @@
 ---
 name: Feature Request
-about: Suggest an idea or enhancement for ReSubstreamer
+about: Suggest an idea or enhancement for Atrum
 title: "[FEATURE] "
 labels: ["enhancement"]
 assignees: ''

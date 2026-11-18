@@ -29,9 +29,9 @@ export interface RehydrationResult {
  * store cannot block the others from loading; the caller receives a
  * structured result describing which succeeded and which failed.
  *
- * Called from exactly two sites: the `rehydrated && isLoggedIn` useEffect
- * in `src/app/_layout.tsx` and the splash post-migration callback in
- * `src/components/AnimatedSplashScreen.tsx`. Both calls are idempotent —
+ * Called from two sites in `src/app/_layout.tsx`: the cold-start boot effect
+ * (post-migration, driving `AtrumAnimatedSplash`'s `canExit`) and the
+ * `rehydrated && isLoggedIn` useEffect. Both calls are idempotent —
  * each store's `hydrateFromDbAsync()` re-reads the current SQL state and
  * replaces its in-memory mirror, safe under our write-through semantics.
  *

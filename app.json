@@ -1,18 +1,19 @@
 {
   "expo": {
-    "name": "ReSubstreamer",
-    "slug": "substreamer",
+    "name": "Atrum",
+    "slug": "atrum",
     "version": "8.0.92",
-    "scheme": "resubstreamer",
+    "scheme": "atrum",
     "platforms": [
       "android",
       "ios"
     ],
     "orientation": "default",
-    "icon": "./src/assets/icon.png",
-    "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#000000",
     "ios": {
-      "bundleIdentifier": "com.resubstreamer",
+      "bundleIdentifier": "com.monti.atrum",
       "buildNumber": "177",
       "supportsTablet": true,
       "infoPlist": {
@@ -23,7 +24,7 @@
           "NSAllowsArbitraryLoads": true
         },
         "ITSAppUsesNonExemptEncryption": false,
-        "NSLocalNetworkUsageDescription": "ReSubstreamer uses your local network to connect to your self-hosted music server.",
+        "NSLocalNetworkUsageDescription": "Atrum uses your local network to connect to your self-hosted music server.",
         "NSBonjourServices": [
           "_googlecast._tcp",
           "_CC1AD845._googlecast._tcp"
@@ -31,11 +32,8 @@
         "NSLocationWhenInUseUsageDescription": "Location access is needed to detect your WiFi network name for automatic offline mode switching.",
         "INAlternativeAppNames": [
           {
-            "INAlternativeAppName": "ReSubstreamer",
-            "INAlternativeAppNamePronunciationHint": "Re Sub Streamer"
-          },
-          {
-            "INAlternativeAppName": "ReSubstreamer"
+            "INAlternativeAppName": "Atrum",
+            "INAlternativeAppNamePronunciationHint": "Atrum"
           }
         ]
       },
@@ -46,8 +44,9 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./src/assets/adaptive-icon.png",
-        "backgroundColor": "#293037"
+        "foregroundImage": "./assets/adaptive-icon-foreground.png",
+        "monochromeImage": "./assets/adaptive-icon-monochrome.png",
+        "backgroundColor": "#000000"
       },
       "permissions": [
         "ACCESS_FINE_LOCATION",
@@ -56,7 +55,7 @@
       ],
       "predictiveBackGestureEnabled": false,
       "versionCode": 80000177,
-      "package": "com.resubstreamer"
+      "package": "com.monti.atrum"
     },
     "web": {
       "favicon": "./src/assets/favicon.png"
@@ -66,9 +65,9 @@
       [
         "react-native-bootsplash",
         {
-          "logo": "./src/assets/splash-logo.svg",
-          "logoWidth": 130,
-          "background": "#293037"
+          "logo": "./assets/splash-icon.png",
+          "logoWidth": 200,
+          "background": "#000000"
         }
       ],
       "./plugins/silence-hermes-warning",
@@ -115,7 +114,13 @@
       "./plugins/with-disable-sync-mount-props-override",
       "./plugins/with-android-app-actions",
       "./plugins/with-carplay-appearance-fix",
-      "expo-notifications",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/ic_stat_atrum.png",
+          "color": "#000000"
+        }
+      ],
       "expo-sharing",
       "expo-localization",
       "expo-status-bar",

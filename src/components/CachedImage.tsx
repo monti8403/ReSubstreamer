@@ -9,7 +9,7 @@
  *                 re-render and we switch to LOCAL.
  *   PLACEHOLDER — anything else (offline + no cache, remote-failed, no
  *                 coverArtId, both URI sources errored on this mount).
- *                 The branded WaveformLogo placeholder is ALWAYS in the
+ *                 The branded AtrumLogo placeholder is ALWAYS in the
  *                 tree underneath; the Image layer just covers it once
  *                 it paints. We never render a blank square.
  *
@@ -39,7 +39,7 @@ import {
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 
-import WaveformLogo from './WaveformLogo';
+import { AtrumLogo } from './AtrumLogo';
 import {
   ensureCached,
   isRemoteFailed,
@@ -274,7 +274,7 @@ export const CachedImage = memo(function CachedImage({
   return (
     <View style={[style as ViewStyle, styles.container]} onLayout={onLayout}>
       <View style={styles.placeholder} pointerEvents="none">
-        <WaveformLogo
+        <AtrumLogo
           size={logoSize}
           color={placeholderColor ?? PLACEHOLDER_COLOR}
         />

@@ -413,7 +413,7 @@ export async function handleWidgetAction(action: string, extras?: Record<string,
   await initPlayer();
 
   switch (action) {
-    case 'com.resubstreamer.widget.ACTION_PLAY_PAUSE': {
+    case 'com.monti.atrum.widget.ACTION_PLAY_PAUSE': {
       const { currentTrack, playbackState, queue } = playerStore.getState();
       if (playbackState === 'playing' || playbackState === 'buffering') {
         await getTrackPlayer().pause();
@@ -432,26 +432,26 @@ export async function handleWidgetAction(action: string, extras?: Record<string,
       }
       break;
     }
-    case 'com.resubstreamer.widget.ACTION_NEXT': {
+    case 'com.monti.atrum.widget.ACTION_NEXT': {
       await skipToNext();
       break;
     }
-    case 'com.resubstreamer.widget.ACTION_PREV': {
+    case 'com.monti.atrum.widget.ACTION_PREV': {
       await skipToPrevious();
       break;
     }
-    case 'com.resubstreamer.widget.ACTION_STAR': {
+    case 'com.monti.atrum.widget.ACTION_STAR': {
       const currentTrack = playerStore.getState().currentTrack;
       if (currentTrack) {
         await toggleStar('song', currentTrack.id);
       }
       break;
     }
-    case 'com.resubstreamer.widget.ACTION_SHUFFLE': {
+    case 'com.monti.atrum.widget.ACTION_SHUFFLE': {
       await executeShuffle();
       break;
     }
-    case 'com.resubstreamer.widget.ACTION_PLAY_RECENT': {
+    case 'com.monti.atrum.widget.ACTION_PLAY_RECENT': {
       const recentId = extras?.recentId;
       const recentType = extras?.recentType;
       const recentTitle = extras?.recentTitle;

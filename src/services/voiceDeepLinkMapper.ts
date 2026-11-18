@@ -3,8 +3,8 @@
  * so Google Assistant voice queries flow through the same headlessMediaService resolver
  * as `onPlayFromSearchRequest`.
  *
- * Flow: "Hey Google, play <artist> on Substreamer" → Assistant fires
- * `substreamer://play?artist=…` → Android routes it to the `play` Expo Router
+ * Flow: "Hey Google, play <artist> on Atrum" → Assistant fires
+ * `atrum://play?artist=…` → Android routes it to the `play` Expo Router
  * route → this maps the query fields into a `MediaSearchRequest`.
  *
  * `shortcuts.xml` (see plugins/with-android-app-actions.js) declares the
@@ -56,7 +56,7 @@ export function buildMediaSearchRequest(fields: VoiceFields): MediaSearchRequest
   return { query, type, artist, album, song, playlist, genre, origin: 'android-assistant' };
 }
 
-/** Parse a `substreamer://play?...` deep link into a MediaSearchRequest. */
+/** Parse an `atrum://play?...` deep link into a MediaSearchRequest. */
 export function parseVoiceDeepLink(url: string): MediaSearchRequest | null {
   let parsed: URL;
   try {
@@ -64,7 +64,7 @@ export function parseVoiceDeepLink(url: string): MediaSearchRequest | null {
   } catch {
     return null;
   }
-  if (parsed.protocol !== 'substreamer:' || parsed.host !== 'play') return null;
+  if (parsed.protocol !== 'atrum:' || parsed.host !== 'play') return null;
 
   const params = parsed.searchParams;
   return buildMediaSearchRequest({

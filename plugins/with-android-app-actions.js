@@ -1,7 +1,7 @@
 /**
  * Wire Android App Actions so Google Assistant can route
- * `"Hey Google, play [artist|album|song|playlist|genre] on Substreamer"`
- * into the app via a `substreamer://play?...` deep link.
+ * `"Hey Google, play [artist|album|song|playlist|genre] on Atrum"`
+ * into the app via an `atrum://play?...` deep link.
  *
  * Two output sites:
  *  1. `android/app/src/main/res/xml/shortcuts.xml` — declares the
@@ -12,7 +12,7 @@
  *     `<meta-data android:name="android.app.shortcuts" .../>` (NOT the
  *     legacy `com.google.android.actions` name, which no longer routes
  *     through Assistant's modern NLU) + a BROWSABLE intent-filter on
- *     MainActivity for `substreamer://play`.
+ *     MainActivity for `atrum://play`.
  *
  * The deep link lands on the Expo Router `play` route (`src/app/play.tsx`),
  * which maps the query params → a MediaSearchRequest and dispatches through
@@ -27,7 +27,7 @@ const { withAndroidManifest, withDangerousMod } = require('expo/config-plugins')
 const fs = require('fs');
 const path = require('path');
 
-const SCHEME = 'resubstreamer';
+const SCHEME = 'atrum';
 
 const SHORTCUTS_XML = `<?xml version="1.0" encoding="utf-8"?>
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
@@ -82,7 +82,7 @@ const withShortcutsMetaData = (config) =>
         },
       });
     }
-    // Add a BROWSABLE intent filter for substreamer://play so Assistant's
+    // Add a BROWSABLE intent filter for atrum://play so Assistant's
     // deep-link routing has a guaranteed target (Expo's default scheme filter
     // is DEFAULT-only; this adds BROWSABLE for the play path).
     const mainActivity = application.activity?.find(

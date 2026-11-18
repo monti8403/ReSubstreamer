@@ -26,7 +26,7 @@ import { EmptyState } from '../components/EmptyState';
 import { GenreChipSection } from '../components/GenreChipSection';
 import { PlaylistCard } from '../components/PlaylistCard';
 import { ResumeBookmarksSection } from '../components/ResumeBookmarksSection';
-import WaveformLogo from '../components/WaveformLogo';
+import { AtrumLogo } from '../components/AtrumLogo';
 import { computeStreaks, dateKey } from '../hooks/usePlaybackAnalytics';
 import { useTheme } from '../hooks/useTheme';
 import type { AlbumID3, Playlist } from '../services/subsonicService';
@@ -110,7 +110,7 @@ const SectionPlaceholder = memo(function SectionPlaceholder({
         {[0, 1, 2].map((i) => (
           <View key={i} style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={[styles.emptyCardImage, { backgroundColor: colors.inputBg }]}>
-              <WaveformLogo size={32} color={colors.primary + '40'} />
+              <AtrumLogo size={32} color={colors.primary + '40'} />
             </View>
             <View style={[styles.emptyCardLine, { backgroundColor: colors.border }]} />
             <View style={[styles.emptyCardLineShort, { backgroundColor: colors.border }]} />

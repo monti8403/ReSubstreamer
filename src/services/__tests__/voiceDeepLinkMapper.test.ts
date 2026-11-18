@@ -2,7 +2,7 @@ import { parseVoiceDeepLink, buildMediaSearchRequest } from '../voiceDeepLinkMap
 
 describe('parseVoiceDeepLink', () => {
   it('maps an artist deep link → MediaSearchRequest (android-assistant)', () => {
-    const r = parseVoiceDeepLink('substreamer://play?artist=Pearl%20Jam');
+    const r = parseVoiceDeepLink('atrum://play?artist=Pearl%20Jam');
     expect(r).toEqual({
       query: 'Pearl Jam',
       type: 'artist',
@@ -16,7 +16,7 @@ describe('parseVoiceDeepLink', () => {
   });
 
   it('query is the primary single term, NOT concatenated (structured fields kept)', () => {
-    const r = parseVoiceDeepLink('substreamer://play?artist=Nirvana&song=Come%20As%20You%20Are');
+    const r = parseVoiceDeepLink('atrum://play?artist=Nirvana&song=Come%20As%20You%20Are');
     expect(r?.type).toBe('song');
     // The song term only — the artist stays in the structured `artist` field,
     // it is NOT joined into `query` (which could never substring-match).
@@ -26,14 +26,14 @@ describe('parseVoiceDeepLink', () => {
   });
 
   it('returns null for a non-play or wrong-scheme URL', () => {
-    expect(parseVoiceDeepLink('substreamer://album/123')).toBeNull();
+    expect(parseVoiceDeepLink('atrum://album/123')).toBeNull();
     expect(parseVoiceDeepLink('spotify://play?artist=X')).toBeNull();
     expect(parseVoiceDeepLink('not a url')).toBeNull();
   });
 
   it('returns null when no fields are present', () => {
-    expect(parseVoiceDeepLink('substreamer://play')).toBeNull();
-    expect(parseVoiceDeepLink('substreamer://play?artist=%20')).toBeNull();
+    expect(parseVoiceDeepLink('atrum://play')).toBeNull();
+    expect(parseVoiceDeepLink('atrum://play?artist=%20')).toBeNull();
   });
 });
 
