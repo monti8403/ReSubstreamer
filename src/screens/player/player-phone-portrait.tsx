@@ -20,7 +20,6 @@ import {
 } from 'react-native';
 import Animated, {
   Easing,
-  LinearTransition,
   interpolate,
   runOnJS,
   useAnimatedScrollHandler,
@@ -106,7 +105,6 @@ const TAB_FADE_EASING = Easing.out(Easing.cubic);
 const TAB_SLIDE_DISTANCE = 12;
 
 const QUEUE_CONTENT_CONTAINER_STYLE = { paddingBottom: 12 } as const;
-const QUEUE_ITEM_LAYOUT_ANIMATION = LinearTransition.duration(180);
 
 export function PlayerPhonePortrait() {
   const { colors } = useTheme();
@@ -239,6 +237,10 @@ export function PlayerPhonePortrait() {
 
   const isDraggingQueueItem = useSharedValue(false);
   const isTrackingSheetDismiss = useSharedValue(false);
+  const [handleHeld, setHandleHeld] = useState(false);
+
+  const grabHandle = useCallback(() => setHandleHeld(true), []);
+  const releaseHandle = useCallback(() => setHandleHeld(false), []);
 
   const handleDragStart = useCallback(() => {
     'worklet';
@@ -248,6 +250,7 @@ export function PlayerPhonePortrait() {
   const handleDragEnd = useCallback(() => {
     'worklet';
     isDraggingQueueItem.value = false;
+    runOnJS(setHandleHeld)(false);
   }, [isDraggingQueueItem]);
 
   const handleGestureRelease = useCallback(
@@ -345,6 +348,7 @@ export function PlayerPhonePortrait() {
     infoOpacity.value = withTiming(activeTab === 'info' ? 1 : 0, config);
     lyricsOpacity.value = withTiming(activeTab === 'lyrics' ? 1 : 0, config);
 
+    isDraggingQueueItem.value = false;
     if (activeTab === 'queue') {
       isTransitioningQueue.value = false;
       isTrackingSheetDismiss.value = false;
@@ -362,7 +366,7 @@ export function PlayerPhonePortrait() {
       });
       queueOpacity.value = withTiming(0, { duration: 200 });
     }
-  }, [activeTab, windowHeight, playerOpacity, infoOpacity, lyricsOpacity, queueTranslateY, queueOpacity, isTransitioningQueue]);
+  }, [activeTab, windowHeight, playerOpacity, infoOpacity, lyricsOpacity, queueTranslateY, queueOpacity, isTransitioningQueue, isDraggingQueueItem, isTrackingSheetDismiss]);
 
   // Track which tabs should be visible in the compositor.
   const [visibleTabs, setVisibleTabs] = useState<Set<PlayerTab>>(
@@ -514,6 +518,8 @@ export function PlayerPhonePortrait() {
           colors={queueColors}
           onPress={onQueueItemPressWithScroll}
           onLongPress={handleQueueItemLongPress}
+          onGrabHandle={item.isNowPlaying ? undefined : grabHandle}
+          onReleaseHandle={item.isNowPlaying ? undefined : releaseHandle}
         />
       );
     },
@@ -523,6 +529,8 @@ export function PlayerPhonePortrait() {
       handleClearUserQueue,
       onQueueItemPressWithScroll,
       handleQueueItemLongPress,
+      grabHandle,
+      releaseHandle,
       t,
     ],
   );
@@ -532,30 +540,7 @@ export function PlayerPhonePortrait() {
     [],
   );
 
-  const queueItemOffsets = useMemo(() => {
-    const offsets = new Float64Array(reorderableListItems.length);
-    let acc = 0;
-    for (let i = 0; i < reorderableListItems.length; i++) {
-      offsets[i] = acc;
-      acc += reorderableListItems[i]?.type === 'header' ? 42 : 64;
-    }
-    return offsets;
-  }, [reorderableListItems]);
-
-  const queueLayoutRef = useRef({ items: reorderableListItems, offsets: queueItemOffsets });
-  queueLayoutRef.current = { items: reorderableListItems, offsets: queueItemOffsets };
-
-  const getItemLayout = useCallback(
-    (_data: ArrayLike<QueueListItem> | null | undefined, index: number) => {
-      const { items, offsets } = queueLayoutRef.current;
-      if (index < 0 || index >= items.length) {
-        return { length: 64, offset: 64 * index, index };
-      }
-      const length = items[index]?.type === 'header' ? 42 : 64;
-      return { length, offset: offsets[index], index };
-    },
-    [],
-  );
+  const [reorderEpoch, setReorderEpoch] = useState(0);
 
   const handleReorderQueue = useCallback(
     ({ from, to }: ReorderableListReorderEvent) => {
@@ -566,8 +551,20 @@ export function PlayerPhonePortrait() {
         currentTrackIndex ?? 0,
       );
       if (!plan) {
+        setReorderEpoch((n) => n + 1);
         return;
       }
+
+      const currentUserQueue = playerStore.getState().userQueueTrackIds;
+      const userQueueUnchanged =
+        plan.newUserQueueTrackIds.length === currentUserQueue.length &&
+        plan.newUserQueueTrackIds.every((id, idx) => id === currentUserQueue[idx]);
+
+      if (plan.fromAbsoluteIndex === plan.toAbsoluteIndex && userQueueUnchanged) {
+        setReorderEpoch((n) => n + 1);
+        return;
+      }
+
       void reorderQueue(
         plan.fromAbsoluteIndex,
         plan.toAbsoluteIndex,
@@ -693,7 +690,6 @@ export function PlayerPhonePortrait() {
                 elevation: 16,
                 overflow: 'hidden',
               },
-              !visibleTabs.has('queue') && styles.hiddenTab,
               queueAnimatedStyle,
             ]}
             pointerEvents={activeTab === 'queue' ? 'auto' : 'none'}
@@ -710,25 +706,25 @@ export function PlayerPhonePortrait() {
                   swipeDownGesture={headerPanGesture}
                 />
                 <ReorderableList
+                  key={`queue-list-${reorderEpoch}`}
                   ref={listRef}
                   data={reorderableListItems}
                   renderItem={renderQueueItem}
                   keyExtractor={keyExtractor}
-                  getItemLayout={getItemLayout}
                   onReorder={handleReorderQueue}
                   onDragStart={handleDragStart}
                   onDragEnd={handleDragEnd}
+                  scrollEnabled={!handleHeld}
                   animationDuration={150}
-                  itemLayoutAnimation={QUEUE_ITEM_LAYOUT_ANIMATION}
                   autoscrollThreshold={0.08}
                   autoscrollDelay={Platform.OS === 'android' ? 50 : 100}
                   ListHeaderComponent={nowPlayingHeader}
                   onScrollBeginDrag={closeOpenRow}
                   showsVerticalScrollIndicator={false}
                   contentContainerStyle={QUEUE_CONTENT_CONTAINER_STYLE}
-                  windowSize={5}
-                  maxToRenderPerBatch={8}
-                  initialNumToRender={10}
+                  windowSize={11}
+                  maxToRenderPerBatch={10}
+                  initialNumToRender={12}
                   updateCellsBatchingPeriod={50}
                   bounces={false}
                   overScrollMode="never"

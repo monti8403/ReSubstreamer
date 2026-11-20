@@ -7,11 +7,13 @@ import { useTranslation } from 'react-i18next';
 import { BottomChrome } from '../components/BottomChrome';
 import { GradientBackground } from '../components/GradientBackground';
 import { BackgroundPlaybackCard } from '../components/settings/BackgroundPlaybackCard';
+import { AtrumAiEngineCard } from '../components/settings/AtrumAiEngineCard';
 import { DownloadingCard } from '../components/settings/DownloadingCard';
 import { EqualizerCard } from '../components/settings/EqualizerCard';
 import { LookaheadCacheCard } from '../components/settings/LookaheadCacheCard';
 import { PlaybackModeCard } from '../components/settings/PlaybackModeCard';
 import { PlayerControlsCard } from '../components/settings/PlayerControlsCard';
+import { RadioAutoplayCard } from '../components/settings/RadioAutoplayCard';
 import { RemoteControlsCard } from '../components/settings/RemoteControlsCard';
 import { ReplayGainCard } from '../components/settings/ReplayGainCard';
 import { SkipIntervalsCard } from '../components/settings/SkipIntervalsCard';
@@ -106,6 +108,7 @@ export function SettingsPlaybackScreen() {
           style={settingsStyles.container}
           contentContainerStyle={[settingsStyles.content, { paddingTop: headerHeight + 16 }]}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
         >
           <StreamingCard />
           <DownloadingCard />
@@ -120,6 +123,8 @@ export function SettingsPlaybackScreen() {
               lives here under Sound & Playback (Android-only; renders null on iOS). */}
           <BackgroundPlaybackCard />
           <WidgetSettingsCard />
+          <RadioAutoplayCard />
+          <AtrumAiEngineCard />
 
           {!isDefault && (
             <Pressable

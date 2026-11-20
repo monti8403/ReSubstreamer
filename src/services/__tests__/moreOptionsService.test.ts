@@ -370,12 +370,20 @@ describe('removeItemFromQueue', () => {
 });
 
 describe('playMoreLikeThis', () => {
+  let randomSpy: jest.SpyInstance<number, []>;
+
   beforeEach(() => {
     mockGetSimilarSongs2.mockResolvedValue([]);
     mockGetRandomSongsFiltered.mockResolvedValue([]);
     mockGetTopSongs.mockResolvedValue([]);
     mockAddToQueue.mockClear();
     mockPlayTrack.mockClear();
+    // Neutralize jitter in deterministic waterfall tests; dedicated test below exercises real variance.
+    randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
+  });
+
+  afterEach(() => {
+    randomSpy.mockRestore();
   });
 
   it('plays similar songs on success (play-first, fetch-later)', async () => {
@@ -386,7 +394,7 @@ describe('playMoreLikeThis', () => {
     await playMoreLikeThis(source);
 
     expect(mockPlayTrack).toHaveBeenCalledWith(source, [source]);
-    expect(mockGetSimilarSongs).toHaveBeenCalledWith('s1', 20);
+    expect(mockGetSimilarSongs).toHaveBeenCalledWith('s1', 40);
     expect(mockAddToQueue).toHaveBeenCalledWith(tracks);
     // No fallbacks needed — first call returned the full target
     expect(mockGetSimilarSongs2).not.toHaveBeenCalled();
@@ -433,7 +441,7 @@ describe('playMoreLikeThis', () => {
       id: 's1', artist: 'X', artistId: 'a1', genre: 'Rock',
     } as any);
 
-    expect(mockGetSimilarSongs2).toHaveBeenCalledWith('a1', 20);
+    expect(mockGetSimilarSongs2).toHaveBeenCalledWith('a1', 40);
     const addedTracks = mockAddToQueue.mock.calls[0][0];
     expect(addedTracks).toHaveLength(20);
     expect(addedTracks[0].id).toBe('t1');

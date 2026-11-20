@@ -38,6 +38,17 @@ Atrum is a ground-up modernization of [Substreamer](https://github.com/ghenry22/
 - **Background Smart Queue Resolution**: Similar tracks and radio queues ("Riproduci simili") are fetched asynchronously in the background while the selected song is already playing.
 - **Offline & Connectivity Resilient**: Transparent automatic fallback to the local SQLite offline cache when offline or when network latency occurs. Non-intrusive bottom toast notifications communicate status without interrupting navigation.
 
+### 🧠 Smart Radio, Infinite Autoplay & BYOK AI
+- **4-Level Waterfall Recommendation Engine (`SmartRadioService`)**:
+  - **Level 1 (Server)**: Uses Subsonic `getSimilarSongs` / `getSimilarSongs2` with automatic primary-artist resolution for `feat.` and collaboration tracks.
+  - **Level 2 (Personal Co-Occurrence)**: Queries on-device SQLite `playlist_songs` and ±30-minute `scrobble_events` listening sessions.
+  - **Level 3 (Mood & Metadata Affinity)**: Matches `song_moods`, `song_genres`, year ±5, and BPM ±15 (guarding year/BPM-only matches from pulling conflicting genres).
+  - **Level 4 (Safety Net)**: Fills gaps offline or on cold-start tracks from time-of-day scrobble habits, starred songs, and local cached tracks.
+- **4 Radio Modes**: **Mood** *(default — prioritizes vibe, `song_moods`, AI, and tempo)*, **Faithful**, **Balanced**, and **Discovery**, with balanced pool randomization so repeated launches vary naturally.
+- **Seamless Infinite Autoplay (`AutoplayController`)**: Automatically queues fresh tracks in the background when ≤ 3 songs remain in any album, playlist, or radio queue (with Repeat off), dynamically updating seeds from genuinely played songs.
+- **100% Offline Local Intelligence (`LocalIntelligenceService`)**: Prepares *Jump Back In*, *Hourly Daylist*, *On Repeat (14d)*, *Forgotten Gems (60d+)*, and *Quick Mood Chips* directly from SQLite.
+- **Optional BYOK Atrum AI Engine (`ByokAiService`)**: Bring your own API key for **Gemini** (`gemini-3.8-flash`), **Groq** (`openai/gpt-oss-20b`), **OpenAI** (`gpt-6-luna`), or **Custom OpenAI-compatible** servers (e.g., Ollama `qwen3:4b`) with per-provider encrypted storage (`secureKeyVault`), inline connection testing, strict 5s timeouts, and silent local fallback.
+
 ### 📱 Android Native Home Screen Widget
 - **100% Native Media3 Connection**: Directly binds to `PlaybackService` (`MediaLibraryService`) via native AndroidX `MediaController` for zero-latency playback sync, instant track titles, and immediate response.
 - **Dual Responsive Layout**:

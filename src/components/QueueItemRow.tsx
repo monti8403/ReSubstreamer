@@ -38,6 +38,8 @@ export interface QueueItemRowProps {
   colors: Pick<ThemeColors, 'textPrimary' | 'textSecondary' | 'primary' | 'border' | 'red' | 'green'>;
   onPress: (index: number) => void;
   onLongPress?: (track: Child) => void;
+  onGrabHandle?: () => void;
+  onReleaseHandle?: () => void;
 }
 
 function useSafeReorderableDrag() {
@@ -60,6 +62,8 @@ export const QueueItemRow = memo(function QueueItemRow({
   colors,
   onPress,
   onLongPress,
+  onGrabHandle,
+  onReleaseHandle,
 }: QueueItemRowProps) {
   const drag = useSafeReorderableDrag();
 
@@ -101,14 +105,14 @@ export const QueueItemRow = memo(function QueueItemRow({
       isActive || isInUserQueue
         ? []
         : [
-            {
-              icon: 'playlist-play',
-              iconFamily: 'mdi' as const,
-              color: colors.primary,
-              label: t('queue'),
-              onPress: handleAddToUserQueue,
-            },
-          ],
+          {
+            icon: 'playlist-play',
+            iconFamily: 'mdi' as const,
+            color: colors.primary,
+            label: t('queue'),
+            onPress: handleAddToUserQueue,
+          },
+        ],
     [isActive, isInUserQueue, handleAddToUserQueue, colors.primary, t],
   );
 
@@ -118,14 +122,14 @@ export const QueueItemRow = memo(function QueueItemRow({
       isActive
         ? []
         : [
-            {
-              icon: 'trash-outline' as const,
-              color: colors.red,
-              label: t('remove'),
-              onPress: handleRemove,
-              removesRow: true,
-            },
-          ],
+          {
+            icon: 'trash-outline' as const,
+            color: colors.red,
+            label: t('remove'),
+            onPress: handleRemove,
+            removesRow: true,
+          },
+        ],
     [isActive, colors.red, handleRemove, t],
   );
 
@@ -200,8 +204,11 @@ export const QueueItemRow = memo(function QueueItemRow({
         {!isActive && (
           <Pressable
             testID="queue-item-drag-handle"
-            onLongPress={drag}
-            delayLongPress={150}
+            onPressIn={() => {
+              onGrabHandle?.();
+              drag?.();
+            }}
+            onPressOut={onReleaseHandle}
             hitSlop={8}
             style={styles.dragHandle}
           >

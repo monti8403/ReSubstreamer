@@ -34,6 +34,13 @@ import { sleepTimerStore } from '../store/sleepTimerStore';
 import { shuffleArray } from '../utils/arrayHelpers';
 import { addCompletedScrobble, sendNowPlaying } from './scrobbleService';
 import { registerPlayerPlayStatListener } from './playStatsService';
+import {
+  initAutoplayController,
+  onManualQueueStart,
+  onTrackAutoAdvanced,
+  registerAutoplayQueueAppender,
+  resetAutoplaySession,
+} from './autoplayController';
 import { syncProxyUpstreams } from './sslTrustService';
 import { getLocalTrackUri, waitForTrackMapsReady } from './musicCacheService';
 import {
@@ -163,6 +170,7 @@ export async function initPlayer(): Promise<void> {
     }
 
     isPlayerReady = true;
+    initAutoplayController();
 
     // Re-apply skip-previous behavior after KV hydration so native controls match the persisted pref.
     const settings = playbackSettingsStore.getState();
@@ -173,175 +181,176 @@ export async function initPlayer(): Promise<void> {
 
     // Apply persisted playback settings.
     await tp.setRepeatMode(mapRepeatMode(settings.repeatMode));
-  await tp.setPlaybackSpeed(settings.playbackRate);
-  // Pitch correction (only effective at rate != 1x). RNQP defaults to 'voice',
-  // so the persisted mode must be pushed explicitly (our default is 'none').
-  await tp.setPitchCorrectionMode(settings.pitchCorrection);
+    await tp.setPlaybackSpeed(settings.playbackRate);
+    // Pitch correction (only effective at rate != 1x). RNQP defaults to 'voice',
+    // so the persisted mode must be pushed explicitly (our default is 'none').
+    await tp.setPitchCorrectionMode(settings.pitchCorrection);
 
-  // Lookahead cache: enable + track count from settings (fixed max is set at
-  // configure()). Runtime-settable via applyLookaheadCacheConfig().
-  await applyLookaheadCacheConfig();
+    // Lookahead cache: enable + track count from settings (fixed max is set at
+    // configure()). Runtime-settable via applyLookaheadCacheConfig().
+    await applyLookaheadCacheConfig();
 
-  // Gapless / crossfade track transitions.
-  await applyPlaybackMode();
+    // Gapless / crossfade track transitions.
+    await applyPlaybackMode();
 
-  // Equalizer: RNQP's native EQ doesn't restore active state across restarts,
-  // so re-apply the persisted enabled flag + band gains.
-  await applyEqualizerConfig();
+    // Equalizer: RNQP's native EQ doesn't restore active state across restarts,
+    // so re-apply the persisted enabled flag + band gains.
+    await applyEqualizerConfig();
 
-  // ReplayGain loudness normalisation (off / track / album) — also not restored
-  // natively across restarts, so re-apply the persisted choice.
-  await applyReplayGain();
+    // ReplayGain loudness normalisation (off / track / album) — also not restored
+    // natively across restarts, so re-apply the persisted choice.
+    await applyReplayGain();
 
-  // --- Playback state → store ---
-  tp.onStateChange((state) => {
-    const store = playerStore.getState();
-    store.setPlaybackState(mapState(state));
-    if (state === 'playing') {
-      if (store.error) store.setError(null);
-      if (store.retrying) store.setRetrying(false);
-    }
-  });
-
-  // --- Progress → store. Foreground 500ms; near-paused (10s) while backgrounded
-  // — the background throttle is handled natively via configure(
-  // backgroundProgressUpdateIntervalMs), which re-emits immediately on
-  // foreground, so no app-side gating of the store write is needed here. ---
-  tp.onProgress(({ position, duration, buffered }) => {
-    // RNQP `buffered` is seconds buffered AHEAD of `position`; the store +
-    // progress bar want the absolute buffered edge from the start of the track.
-    playerStore.getState().setProgress(position, duration, position + buffered);
-    const currentTrack = playerStore.getState().currentTrack;
-    if (currentTrack?.id && position > 0) {
-      persistPositionIfDue(position, currentTrack.id, currentTrack.duration);
-    }
-  });
-
-  tp.onTrackChange((track, index, reason) => {
-    // Completion fallback: a natural auto-advance means the OUTGOING track
-    // finished — report it if the configured milestone was missed (e.g. a seek
-    // skipped it). User skips / queue replacement are NOT completion.
-    if (reason === 'auto-advance' && activeScrobbleIndex != null) {
-      reportPlay(activeScrobbleIndex);
-    }
-
-    if (track?.id) {
-      const child = currentChildQueue.find((c) => c.id === track.id) ?? null;
-      playerStore.getState().setCurrentTrack(child, index ?? null);
-      if (child) sendNowPlaying(child, trackPlaylistMap.get(child.id));
-      if (userQueueTrackIds.includes(track.id)) {
-        userQueueTrackIds = userQueueTrackIds.filter((id) => id !== track.id);
-        playerStore.getState().removeUserQueueTrackIds?.([track.id]);
+    // --- Playback state → store ---
+    tp.onStateChange((state) => {
+      const store = playerStore.getState();
+      store.setPlaybackState(mapState(state));
+      if (state === 'playing') {
+        if (store.error) store.setError(null);
+        if (store.retrying) store.setRetrying(false);
       }
-      // The queue is unchanged here — only the cursor moved, so this is one UPDATE.
-      if (index != null && index >= 0) persistCurrentIndex(index);
-    } else {
-      playerStore.getState().setCurrentTrack(null, null);
-    }
-    // Start a fresh playthrough for the incoming track.
-    activeScrobbleIndex = index != null && index >= 0 ? index : null;
-    activeScrobbleDone = false;
-    lastMilestoneValue = 0;
-    refreshTrackSource();
-  });
+    });
 
-  // --- Playback source (local / cached / streaming) → store. No dedicated
-  // event, so re-read on the signals that can flip it: a streaming track
-  // becomes 'cached' once the lookahead cache holds it / it fully buffers. ---
-  tp.onCacheStatusChange(() => refreshTrackSource());
-  tp.onFullyBufferedChange(() => refreshTrackSource());
-
-  // --- Playback-report scrobble at the user-configured milestone (25/50/75/90;
-  // 100 = on-completion only, which never matches a milestone so only the
-  // completion fallback fires). Exact match; the completion fallback in
-  // onTrackChange/onQueueEnd catches a milestone skipped by a seek. ---
-  tp.onPlaybackMilestone((milestone, trackIndex) => {
-    // New track, or a repeat-one loop (milestone value wraps down) → fresh play.
-    if (trackIndex !== activeScrobbleIndex || milestone < lastMilestoneValue) {
-      activeScrobbleIndex = trackIndex;
-      activeScrobbleDone = false;
-    }
-    lastMilestoneValue = milestone;
-    if (milestone === playbackSettingsStore.getState().scrobbleTrigger) {
-      reportPlay(trackIndex);
-    }
-  });
-
-  // --- Errors. Transient errors are auto-retried natively; surface the error
-  // so the UI can offer a manual "Retry" (→ tp.retry()). ---
-  tp.onError((error) => {
-    const store = playerStore.getState();
-    store.setError(error.message ?? i18n.t('playbackErrorOccurred'));
-    store.setRetrying(false);
-  });
-
-  // --- Queue end: report the final track's play (completion fallback) if the
-  // milestone was missed, then pin progress to 100% so the bar completes. ---
-  tp.onQueueEnd(() => {
-    if (activeScrobbleIndex != null) reportPlay(activeScrobbleIndex);
-    const currentTrack = playerStore.getState().currentTrack;
-    const endDuration = currentTrack?.duration ?? 0;
-    if (endDuration > 0) {
-      playerStore.getState().setProgress(endDuration, endDuration, endDuration);
-    }
-  });
-
-  // --- Sleep timer → store. RNQP emits only on arm/clear/convert/fire, so a
-  // 1s interval recomputes the display countdown from the wall-clock deadline
-  // (the UI reads sleepTimerStore.remaining). The native timer fires the actual
-  // pause; this interval is display-only, so it's paused while backgrounded (the
-  // capsule is invisible) and resumed on foreground. ---
-  let sleepTimerInterval: ReturnType<typeof setInterval> | null = null;
-  const stopSleepCountdown = () => {
-    if (sleepTimerInterval) {
-      clearInterval(sleepTimerInterval);
-      sleepTimerInterval = null;
-    }
-  };
-  const startSleepCountdown = (endTimeSec: number) => {
-    stopSleepCountdown();
-    const tick = () => {
-      const remaining = Math.max(0, Math.round(endTimeSec - Date.now() / 1000));
-      sleepTimerStore.getState().setRemaining(remaining);
-    };
-    tick();
-    if (appStateStore.getState().isActive) {
-      sleepTimerInterval = setInterval(tick, 1000);
-    }
-  };
-  tp.onSleepTimerChange((state) => {
-    stopSleepCountdown();
-    const store = sleepTimerStore.getState();
-    if (!state.active) {
-      store.clear();
-      return;
-    }
-    const endTimeSec = state.endsAtEpochMs != null ? state.endsAtEpochMs / 1000 : null;
-    store.setTimer(endTimeSec, state.endOfTrack);
-    if (!state.endOfTrack && endTimeSec != null) {
-      startSleepCountdown(endTimeSec);
-    } else {
-      store.setRemaining(null);
-    }
-  });
-
-  // --- On background: flush the resume position to SQLite + pause the
-  // sleep-timer display countdown. On foreground: resume the countdown. ---
-  AppState.addEventListener('change', (next) => {
-    if (next === 'active') {
-      // Resume the sleep-timer display countdown if one is armed.
-      const st = sleepTimerStore.getState();
-      if (st.endTime != null && !st.endOfTrack) {
-        startSleepCountdown(st.endTime);
-      }
-    } else {
-      stopSleepCountdown();
-      const { position, currentTrack } = playerStore.getState();
+    // --- Progress → store. Foreground 500ms; near-paused (10s) while backgrounded
+    // — the background throttle is handled natively via configure(
+    // backgroundProgressUpdateIntervalMs), which re-emits immediately on
+    // foreground, so no app-side gating of the store write is needed here. ---
+    tp.onProgress(({ position, duration, buffered }) => {
+      // RNQP `buffered` is seconds buffered AHEAD of `position`; the store +
+      // progress bar want the absolute buffered edge from the start of the track.
+      playerStore.getState().setProgress(position, duration, position + buffered);
+      const currentTrack = playerStore.getState().currentTrack;
       if (currentTrack?.id && position > 0) {
-        flushPosition(position, currentTrack.id, currentTrack.duration);
+        persistPositionIfDue(position, currentTrack.id, currentTrack.duration);
       }
-    }
-  });
+    });
+
+    tp.onTrackChange((track, index, reason) => {
+      // Completion fallback: a natural auto-advance means the OUTGOING track
+      // finished — report it if the configured milestone was missed (e.g. a seek
+      // skipped it). User skips / queue replacement are NOT completion.
+      if (reason === 'auto-advance' && activeScrobbleIndex != null) {
+        reportPlay(activeScrobbleIndex);
+        onTrackAutoAdvanced(currentChildQueue[activeScrobbleIndex]);
+      }
+
+      if (track?.id) {
+        const child = currentChildQueue.find((c) => c.id === track.id) ?? null;
+        playerStore.getState().setCurrentTrack(child, index ?? null);
+        if (child) sendNowPlaying(child, trackPlaylistMap.get(child.id));
+        if (userQueueTrackIds.includes(track.id)) {
+          userQueueTrackIds = userQueueTrackIds.filter((id) => id !== track.id);
+          playerStore.getState().removeUserQueueTrackIds?.([track.id]);
+        }
+        // The queue is unchanged here — only the cursor moved, so this is one UPDATE.
+        if (index != null && index >= 0) persistCurrentIndex(index);
+      } else {
+        playerStore.getState().setCurrentTrack(null, null);
+      }
+      // Start a fresh playthrough for the incoming track.
+      activeScrobbleIndex = index != null && index >= 0 ? index : null;
+      activeScrobbleDone = false;
+      lastMilestoneValue = 0;
+      refreshTrackSource();
+    });
+
+    // --- Playback source (local / cached / streaming) → store. No dedicated
+    // event, so re-read on the signals that can flip it: a streaming track
+    // becomes 'cached' once the lookahead cache holds it / it fully buffers. ---
+    tp.onCacheStatusChange(() => refreshTrackSource());
+    tp.onFullyBufferedChange(() => refreshTrackSource());
+
+    // --- Playback-report scrobble at the user-configured milestone (25/50/75/90;
+    // 100 = on-completion only, which never matches a milestone so only the
+    // completion fallback fires). Exact match; the completion fallback in
+    // onTrackChange/onQueueEnd catches a milestone skipped by a seek. ---
+    tp.onPlaybackMilestone((milestone, trackIndex) => {
+      // New track, or a repeat-one loop (milestone value wraps down) → fresh play.
+      if (trackIndex !== activeScrobbleIndex || milestone < lastMilestoneValue) {
+        activeScrobbleIndex = trackIndex;
+        activeScrobbleDone = false;
+      }
+      lastMilestoneValue = milestone;
+      if (milestone === playbackSettingsStore.getState().scrobbleTrigger) {
+        reportPlay(trackIndex);
+      }
+    });
+
+    // --- Errors. Transient errors are auto-retried natively; surface the error
+    // so the UI can offer a manual "Retry" (→ tp.retry()). ---
+    tp.onError((error) => {
+      const store = playerStore.getState();
+      store.setError(error.message ?? i18n.t('playbackErrorOccurred'));
+      store.setRetrying(false);
+    });
+
+    // --- Queue end: report the final track's play (completion fallback) if the
+    // milestone was missed, then pin progress to 100% so the bar completes. ---
+    tp.onQueueEnd(() => {
+      if (activeScrobbleIndex != null) reportPlay(activeScrobbleIndex);
+      const currentTrack = playerStore.getState().currentTrack;
+      const endDuration = currentTrack?.duration ?? 0;
+      if (endDuration > 0) {
+        playerStore.getState().setProgress(endDuration, endDuration, endDuration);
+      }
+    });
+
+    // --- Sleep timer → store. RNQP emits only on arm/clear/convert/fire, so a
+    // 1s interval recomputes the display countdown from the wall-clock deadline
+    // (the UI reads sleepTimerStore.remaining). The native timer fires the actual
+    // pause; this interval is display-only, so it's paused while backgrounded (the
+    // capsule is invisible) and resumed on foreground. ---
+    let sleepTimerInterval: ReturnType<typeof setInterval> | null = null;
+    const stopSleepCountdown = () => {
+      if (sleepTimerInterval) {
+        clearInterval(sleepTimerInterval);
+        sleepTimerInterval = null;
+      }
+    };
+    const startSleepCountdown = (endTimeSec: number) => {
+      stopSleepCountdown();
+      const tick = () => {
+        const remaining = Math.max(0, Math.round(endTimeSec - Date.now() / 1000));
+        sleepTimerStore.getState().setRemaining(remaining);
+      };
+      tick();
+      if (appStateStore.getState().isActive) {
+        sleepTimerInterval = setInterval(tick, 1000);
+      }
+    };
+    tp.onSleepTimerChange((state) => {
+      stopSleepCountdown();
+      const store = sleepTimerStore.getState();
+      if (!state.active) {
+        store.clear();
+        return;
+      }
+      const endTimeSec = state.endsAtEpochMs != null ? state.endsAtEpochMs / 1000 : null;
+      store.setTimer(endTimeSec, state.endOfTrack);
+      if (!state.endOfTrack && endTimeSec != null) {
+        startSleepCountdown(endTimeSec);
+      } else {
+        store.setRemaining(null);
+      }
+    });
+
+    // --- On background: flush the resume position to SQLite + pause the
+    // sleep-timer display countdown. On foreground: resume the countdown. ---
+    AppState.addEventListener('change', (next) => {
+      if (next === 'active') {
+        // Resume the sleep-timer display countdown if one is armed.
+        const st = sleepTimerStore.getState();
+        if (st.endTime != null && !st.endOfTrack) {
+          startSleepCountdown(st.endTime);
+        }
+      } else {
+        stopSleepCountdown();
+        const { position, currentTrack } = playerStore.getState();
+        if (currentTrack?.id && position > 0) {
+          flushPosition(position, currentTrack.id, currentTrack.duration);
+        }
+      }
+    });
   })();
 
   try {
@@ -633,6 +642,7 @@ async function playTrackInternal(
       for (const child of filteredQueue) trackPlaylistMap.set(child.id, sourcePlaylistId);
     }
     playerStore.getState().setQueue(filteredQueue);
+    onManualQueueStart(track, filteredQueue);
 
     const formats: Record<string, EffectiveFormat> = {};
     for (const child of filteredQueue) formats[child.id] = stampQueueFormat(child);
@@ -926,6 +936,7 @@ async function clearPlayerStateInternal(): Promise<void> {
   currentChildQueue = [];
   userQueueTrackIds = [];
   trackPlaylistMap.clear();
+  resetAutoplaySession();
 
   await tp.clearQueue();
   clearPersistedQueue();
@@ -1309,61 +1320,61 @@ export async function reorderQueue(
   toIndex: number,
   explicitUserQueueTrackIds?: string[],
 ): Promise<void> {
+  const currentIndex = playerStore.getState().currentTrackIndex ?? 0;
+  const minValidIndex = Math.min(currentIndex + 1, currentChildQueue.length);
+
+  if (fromIndex < minValidIndex || fromIndex >= currentChildQueue.length) {
+    return;
+  }
+
+  const clampedTo = Math.max(minValidIndex, Math.min(toIndex, currentChildQueue.length - 1));
+  const isIndexSame = fromIndex === clampedTo;
+
+  if (isIndexSame && !explicitUserQueueTrackIds) {
+    return;
+  }
+
+  const child = currentChildQueue[fromIndex];
+  const wasInUserQueue = userQueueTrackIds.includes(child.id);
+
+  // User queue tracks in the upcoming section before reordering
+  const userQueueBefore = userQueueTrackIds.filter((id) =>
+    currentChildQueue.slice(minValidIndex).some((t) => t.id === id),
+  );
+  const userQueueCount = userQueueBefore.length;
+
+  if (!isIndexSame) {
+    const newQueue = [...currentChildQueue];
+    const [removed] = newQueue.splice(fromIndex, 1);
+    newQueue.splice(clampedTo, 0, removed);
+    currentChildQueue = newQueue;
+  }
+
+  if (explicitUserQueueTrackIds != null) {
+    userQueueTrackIds = explicitUserQueueTrackIds;
+  } else if (userQueueCount > 0) {
+    const userQueueEndIndex = minValidIndex + userQueueCount - 1;
+    if (!wasInUserQueue && clampedTo <= userQueueEndIndex + 1) {
+      // Promoted to user queue
+      userQueueTrackIds = [...userQueueTrackIds, child.id];
+    } else if (wasInUserQueue && clampedTo > userQueueEndIndex) {
+      // Demoted from user queue
+      userQueueTrackIds = userQueueTrackIds.filter((id) => id !== child.id);
+    }
+  }
+
+  // Keep userQueueTrackIds strictly in the relative order of the updated upcoming queue
+  const userSet = new Set(userQueueTrackIds);
+  userQueueTrackIds = currentChildQueue
+    .slice(minValidIndex)
+    .filter((t) => userSet.has(t.id))
+    .map((t) => t.id);
+
+  // Synchronous optimistic update so UI re-renders in the same tick as onReorder
+  playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
+  playerStore.getState().setQueue([...currentChildQueue]);
+
   return withQueueMutationLock(async () => {
-    const currentIndex = playerStore.getState().currentTrackIndex ?? 0;
-    const minValidIndex = Math.min(currentIndex + 1, currentChildQueue.length);
-
-    if (fromIndex < minValidIndex || fromIndex >= currentChildQueue.length) {
-      return;
-    }
-
-    const clampedTo = Math.max(minValidIndex, Math.min(toIndex, currentChildQueue.length - 1));
-    const isIndexSame = fromIndex === clampedTo;
-
-    if (isIndexSame && !explicitUserQueueTrackIds) {
-      return;
-    }
-
-    const child = currentChildQueue[fromIndex];
-    const wasInUserQueue = userQueueTrackIds.includes(child.id);
-
-    // User queue tracks in the upcoming section before reordering
-    const userQueueBefore = userQueueTrackIds.filter((id) =>
-      currentChildQueue.slice(minValidIndex).some((t) => t.id === id),
-    );
-    const userQueueCount = userQueueBefore.length;
-
-    if (!isIndexSame) {
-      const newQueue = [...currentChildQueue];
-      const [removed] = newQueue.splice(fromIndex, 1);
-      newQueue.splice(clampedTo, 0, removed);
-      currentChildQueue = newQueue;
-    }
-
-    if (explicitUserQueueTrackIds != null) {
-      userQueueTrackIds = explicitUserQueueTrackIds;
-    } else if (userQueueCount > 0) {
-      const userQueueEndIndex = minValidIndex + userQueueCount - 1;
-      if (!wasInUserQueue && clampedTo <= userQueueEndIndex + 1) {
-        // Promoted to user queue
-        userQueueTrackIds = [...userQueueTrackIds, child.id];
-      } else if (wasInUserQueue && clampedTo > userQueueEndIndex) {
-        // Demoted from user queue
-        userQueueTrackIds = userQueueTrackIds.filter((id) => id !== child.id);
-      }
-    }
-
-    // Keep userQueueTrackIds strictly in the relative order of the updated upcoming queue
-    const userSet = new Set(userQueueTrackIds);
-    userQueueTrackIds = currentChildQueue
-      .slice(minValidIndex)
-      .filter((t) => userSet.has(t.id))
-      .map((t) => t.id);
-
-    // Synchronous optimistic update so UI re-renders immediately on this tick
-    playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
-    playerStore.getState().setQueue(currentChildQueue);
-
     await awaitHydration();
 
     if (!isIndexSame) {
@@ -1513,6 +1524,9 @@ export function applyLocalPlayToPlayer(songId: string, now: string): void {
 // Wire the ephemeral player-state updater into playStatsService (inverts the
 // dependency so playStatsService doesn't import playerService).
 registerPlayerPlayStatListener(applyLocalPlayToPlayer);
+
+// Wire queue appending into autoplayController (avoids static require cycle).
+registerAutoplayQueueAppender((tracks) => addToQueue(tracks));
 
 /**
  * Shuffle the current queue in place and restart from index 0. We shuffle the

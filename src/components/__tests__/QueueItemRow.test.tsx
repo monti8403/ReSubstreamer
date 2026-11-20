@@ -11,8 +11,10 @@ jest.mock('../../services/moreOptionsService', () => ({
   removeItemFromQueue: (...args: unknown[]) => mockRemoveItemFromQueue(...args),
 }));
 
+const mockDrag = jest.fn();
+
 jest.mock('react-native-reorderable-list', () => ({
-  useReorderableDrag: () => jest.fn(),
+  useReorderableDrag: () => mockDrag,
 }));
 
 jest.mock('../../hooks/useDownloadStatus', () => ({
@@ -189,6 +191,31 @@ describe('QueueItemRow', () => {
       />,
     );
     expect(queryByTestId('queue-item-drag-handle')).toBeNull();
+  });
+
+  it('triggers drag and handle callbacks on pressIn and pressOut', () => {
+    const track = makeTrack('s1');
+    const onGrabHandle = jest.fn();
+    const onReleaseHandle = jest.fn();
+    const { getByTestId } = render(
+      <QueueItemRow
+        track={track}
+        index={1}
+        isActive={false}
+        colors={mockColors}
+        onPress={jest.fn()}
+        onGrabHandle={onGrabHandle}
+        onReleaseHandle={onReleaseHandle}
+      />,
+    );
+
+    const handle = getByTestId('queue-item-drag-handle');
+    fireEvent(handle, 'pressIn');
+    expect(onGrabHandle).toHaveBeenCalledTimes(1);
+    expect(mockDrag).toHaveBeenCalledTimes(1);
+
+    fireEvent(handle, 'pressOut');
+    expect(onReleaseHandle).toHaveBeenCalledTimes(1);
   });
 
   it('respects explicit isInUserQueue prop without reading userQueueTrackIds from store', () => {

@@ -22,6 +22,7 @@ import { teardownMusicCache } from '../services/musicCacheService';
 import { clearImageQueue } from './persistence/imageDownloadQueueTable';
 import { clearImageCache, teardownImageCache } from '../services/imageCacheService';
 import { resetFavoritesSyncFlags } from '../services/favoritesSyncService';
+import { clearApiKeySecret } from '../services/secureKeyVault';
 
 // Persisted stores
 import { albumInfoStore } from './albumInfoStore';
@@ -42,6 +43,7 @@ import { musicCacheStore } from './musicCacheStore';
 import { offlineModeStore } from './offlineModeStore';
 import { pendingScrobbleStore } from './pendingScrobbleStore';
 import { playbackSettingsStore } from './playbackSettingsStore';
+import { radioAiSettingsStore } from './radioAiSettingsStore';
 import { ratingStore } from './ratingStore';
 import { recentSearchStore } from './recentSearchStore';
 import { scanStatusStore } from './scanStatusStore';
@@ -95,6 +97,7 @@ const allStores = [
   offlineModeStore,
   pendingScrobbleStore,
   playbackSettingsStore,
+  radioAiSettingsStore,
   ratingStore,
   recentSearchStore,
   scanStatusStore,
@@ -203,6 +206,7 @@ export async function resetAllStores(): Promise<void> {
   // row, so those covers can never be repaired again.
   void clearImageQueue();
   kvStorage.removeItem('substreamer-image-cache-settings');
+  void clearApiKeySecret();
   for (const store of allStores) {
     (store.setState as (state: unknown, replace: boolean) => void)(
       store.getInitialState(),

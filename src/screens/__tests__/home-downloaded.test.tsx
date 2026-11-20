@@ -55,12 +55,12 @@ jest.mock('../../components/AtrumLogo', () => {
 // Cards have their own suites; stub them down to the id that reached them.
 const stubCard =
   (kind: string) =>
-  ({ album, playlist }: Record<string, { id: string } | undefined>) => {
-    const { Text } = require('react-native');
-    const React = require('react');
-    const item = album ?? playlist;
-    return React.createElement(Text, { testID: `${kind}:${item?.id ?? ''}` }, kind);
-  };
+    ({ album, playlist }: Record<string, { id: string } | undefined>) => {
+      const { Text } = require('react-native');
+      const React = require('react');
+      const item = album ?? playlist;
+      return React.createElement(Text, { testID: `${kind}:${item?.id ?? ''}` }, kind);
+    };
 jest.mock('../../components/AlbumCard', () => ({ AlbumCard: stubCard('album') }));
 jest.mock('../../components/PlaylistCard', () => ({ PlaylistCard: stubCard('playlist') }));
 jest.mock('../../components/GenreChipSection', () => ({ GenreChipSection: () => null }));
@@ -132,7 +132,7 @@ const db = () => getDb()!;
 const seedDownloadedAlbum = (id: string): void => {
   db().runSync(
     'INSERT INTO cached_items (item_id, type, name, expected_song_count, last_sync_at, ' +
-      'downloaded_at) VALUES (?, ?, ?, ?, ?, ?)',
+    'downloaded_at) VALUES (?, ?, ?, ?, ?, ?)',
     [id, 'album', `Album ${id}`, 0, 0, 0],
   );
   db().runSync('INSERT INTO cached_albums (item_id, name) VALUES (?, ?)', [id, `Album ${id}`]);
@@ -141,7 +141,7 @@ const seedDownloadedAlbum = (id: string): void => {
 const seedDownloadedPlaylist = (id: string): void => {
   db().runSync(
     'INSERT INTO cached_items (item_id, type, name, expected_song_count, last_sync_at, ' +
-      'downloaded_at) VALUES (?, ?, ?, ?, ?, ?)',
+    'downloaded_at) VALUES (?, ?, ?, ?, ?, ?)',
     [id, 'playlist', `Playlist ${id}`, 0, 0, 0],
   );
   db().runSync('INSERT INTO cached_playlists (item_id, name, song_count) VALUES (?, ?, ?)', [
@@ -157,7 +157,7 @@ const seedDownloadedPlaylist = (id: string): void => {
 const seedDownloadedItemOnly = (id: string): void => {
   db().runSync(
     'INSERT INTO cached_items (item_id, type, name, expected_song_count, last_sync_at, ' +
-      'downloaded_at) VALUES (?, ?, ?, ?, ?, ?)',
+    'downloaded_at) VALUES (?, ?, ?, ?, ?, ?)',
     [id, 'album', `Album ${id}`, 0, 0, 0],
   );
 };
@@ -231,7 +231,7 @@ describe('HomeScreen — Downloaded sections read SQL without flashing an empty 
   it('hides downloads whose component rows were never populated', async () => {
     db().runSync(
       'INSERT INTO cached_items (item_id, type, name, expected_song_count, last_sync_at, ' +
-        'downloaded_at) VALUES (?, ?, ?, ?, ?, ?)',
+      'downloaded_at) VALUES (?, ?, ?, ?, ?, ?)',
       ['dl1', 'album', 'Album dl1', 0, 0, 0],
     );
     const r = render(<HomeScreen />);

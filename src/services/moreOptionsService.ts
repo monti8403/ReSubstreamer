@@ -35,11 +35,15 @@ import {
   reorderQueue as _reorderQueue,
 } from './playerService';
 import {
+  onManualQueueStart,
+  registerQueuedTracks,
+  setRadioSeedLoading,
+} from './autoplayController';
+import { getSmartRadioTracks } from './smartRadioService';
+import {
   createNewPlaylist,
   getAlbum,
   getPlaylist,
-  getRandomSongsFiltered,
-  getSimilarSongs,
   getSimilarSongs2,
   getTopSongs,
   starAlbum,
@@ -208,175 +212,39 @@ export async function reorderQueue(
 /* ------------------------------------------------------------------ */
 
 /**
- * Build a "more like this" play queue for a given source song.
- *
- * Many Subsonic servers (Navidrome in particular) lean on last.fm metadata for
- * `getSimilarSongs`, so the result is often just 2-3 tracks for a less-popular
- * artist — well short of the user's list-length setting. Top up via a layered
- * fallback chain, stopping as soon as the target is reached:
- *
- *   1. `getSimilarSongs(id)`          — per-song similarity (highest signal)
- *   2. `getSimilarSongs2(artistId)`   — artist-level similarity
- *   3. `getRandomSongsFiltered(genre)`— same-genre random
- *   4. `getTopSongs(artist)`          — same artist's top tracks
- *
- * Each layer is deduped against the running set (and the source song),
- * preserving layer order so the highest-signal tracks play first.
- */
-async function buildMoreLikeThisQueue(
-  source: Child,
-  target: number,
-): Promise<Child[]> {
-  const seen = new Set<string>([source.id]);
-  const out: Child[] = [];
-  const push = (tracks: readonly Child[] | null | undefined): void => {
-    if (!tracks) return;
-    for (const t of tracks) {
-      if (out.length >= target) return;
-      if (!t?.id || seen.has(t.id)) continue;
-      seen.add(t.id);
-      out.push(t);
-    }
-  };
-
-  push(await getSimilarSongs(source.id, target));
-  if (out.length >= target) return out;
-
-  if (source.artistId) {
-    push(await getSimilarSongs2(source.artistId, target));
-    if (out.length >= target) return out;
-  }
-
-  const genre = source.genre ?? source.genres?.[0];
-  if (genre) {
-    // Request 2× target so dedup leaves us with plenty of fresh picks.
-    push(await getRandomSongsFiltered({ size: target * 2, genre }));
-    if (out.length >= target) return out;
-  }
-
-  if (source.artist) {
-    push(await getTopSongs(source.artist, target));
-  }
-
-  return out;
-}
-
-/**
- * Build a similar-songs queue from locally downloaded songs (`cached_songs` in SQLite).
- * Used when offline or when filtering by downloaded songs, making 0 network requests.
- */
-async function buildDownloadedMoreLikeThisQueue(
-  source: Child,
-  target: number,
-): Promise<Child[]> {
-  try {
-    const db = getDb();
-    if (!db || !source?.id) return [];
-    const genre = source.genre ?? source.genres?.[0];
-    const artistId = source.artistId;
-    const artist = source.artist;
-
-    const out: Child[] = [];
-    const seen = new Set<string>([source.id]);
-
-    const addRows = (rows: any[]) => {
-      for (const r of rows) {
-        if (out.length >= target) break;
-        const id = r.song_id;
-        if (!id || seen.has(id)) continue;
-        seen.add(id);
-        out.push({
-          id,
-          title: r.title,
-          artist: r.artist ?? undefined,
-          artistId: r.artist_id ?? undefined,
-          albumId: r.src_album_id || r.album_id,
-          album: r.album ?? undefined,
-          duration: r.duration,
-          coverArt: r.cover_art ?? undefined,
-          genre: r.genre ?? undefined,
-          isDir: false,
-        });
-      }
-    };
-
-    // 1. Same artist or same genre from cached_songs
-    if (artistId || artist || genre) {
-      const conditions: string[] = [];
-      const params: (string | number)[] = [source.id];
-
-      if (artistId) {
-        conditions.push('artist_id = ?');
-        params.push(artistId);
-      } else if (artist) {
-        conditions.push('artist = ?');
-        params.push(artist);
-      }
-      if (genre) {
-        conditions.push('genre = ?');
-        params.push(genre);
-      }
-
-      if (conditions.length > 0) {
-        const sql = `SELECT song_id, title, artist, artist_id, album_id, src_album_id, album, duration, cover_art, genre FROM cached_songs WHERE song_id != ? AND (${conditions.join(' OR ')}) ORDER BY RANDOM() LIMIT ?`;
-        params.push(target);
-        const rows = await db.getAllAsync<any>(sql, params);
-        if (rows?.length) addRows(rows);
-      }
-    }
-
-    // 2. If thin, fill up with other random cached_songs
-    if (out.length < target) {
-      const remaining = target - out.length;
-      const placeholders = Array.from(seen).map(() => '?').join(',');
-      const sql = `SELECT song_id, title, artist, artist_id, album_id, src_album_id, album, duration, cover_art, genre FROM cached_songs WHERE song_id NOT IN (${placeholders}) ORDER BY RANDOM() LIMIT ?`;
-      const rows = await db.getAllAsync<any>(sql, [...Array.from(seen), remaining]);
-      if (rows?.length) addRows(rows);
-    }
-
-    return out;
-  } catch (err) {
-    console.warn('[MoreOptions] Failed to build downloaded similar queue:', err);
-    return [];
-  }
-}
-
-/**
- * Fetch similar songs for a given track and set them as the play queue.
+ * Fetch similar songs for a given track via `smartRadioService` and append
+ * them to the play queue.
  * Implements the Spotify "Play-First, Fetch-Later" pattern:
  * 1. Plays the tapped song immediately (zero perceived latency, no blocking overlay).
- * 2. Fetches similar tracks in the background (via Subsonic API online, or SQLite offline/downloadedOnly).
+ * 2. Fetches smart-radio tracks in the background.
  * 3. Race Condition Guard: silently drops results if the user switched songs before the fetch finished.
- * 4. Silently appends the tracks to the queue using `addToQueue(tracks)`.
+ * 4. Registers queued tracks in `autoplayController` and appends via `addToQueue(tracks)`.
  */
 export async function playMoreLikeThis(
   song: Child,
   options?: { downloadedOnly?: boolean },
 ): Promise<void> {
-  const playPromise = playTrack(song, [song]);
+  setRadioSeedLoading(true);
+  let playFailed = false;
+  const playPromise = playTrack(song, [song]).catch(() => {
+    playFailed = true;
+  });
+  onManualQueueStart(song, [song]);
 
-  const isOffline = offlineModeStore.getState().offlineMode || !!options?.downloadedOnly;
-  const target = layoutPreferencesStore.getState().listLength;
+  const target = layoutPreferencesStore.getState().listLength || 20;
 
   const backgroundPromise = (async () => {
     try {
-      let tracks: Child[] = [];
-      if (isOffline) {
-        tracks = await buildDownloadedMoreLikeThisQueue(song, target);
-      } else {
-        try {
-          tracks = await buildMoreLikeThisQueue(song, target);
-        } catch {
-          tracks = await buildDownloadedMoreLikeThisQueue(song, target);
-        }
-        if (!tracks || tracks.length === 0) {
-          tracks = await buildDownloadedMoreLikeThisQueue(song, target);
-        }
-      }
-
-      if (!tracks || tracks.length === 0) return;
+      const tracks = await getSmartRadioTracks({
+        seedSongs: [song],
+        targetCount: target,
+        excludeIds: new Set([song.id]),
+        downloadedOnly: options?.downloadedOnly,
+        randomize: true,
+      });
 
       await playPromise;
+      if (playFailed) return;
 
       // Race condition guard: verify the user is still playing the song that triggered this queue
       const currentTrack = playerStore.getState().currentTrack;
@@ -384,9 +252,14 @@ export async function playMoreLikeThis(
         return;
       }
 
+      if (!tracks || tracks.length === 0) return;
+
+      registerQueuedTracks(tracks);
       await addToQueue(tracks);
     } catch {
       // 100% silent in background - the current song continues uninterrupted
+    } finally {
+      setRadioSeedLoading(false);
     }
   })();
 

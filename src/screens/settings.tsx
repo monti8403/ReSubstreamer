@@ -1,8 +1,10 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useMemo } from 'react';
-import { ScrollView, StyleSheet } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 
+import { AtrumAiEngineCard } from '../components/settings/AtrumAiEngineCard';
+import { RadioAutoplayCard } from '../components/settings/RadioAutoplayCard';
 import { SettingsLinkRow } from '../components/settings/SettingsLinkRow';
 import { VersionFooter } from '../components/settings/VersionFooter';
 import { devOptionsStore } from '../store/devOptionsStore';
@@ -51,6 +53,7 @@ export function SettingsScreen() {
       style={styles.container}
       contentContainerStyle={[styles.content, { paddingTop: headerHeight + 16 }]}
       showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
     >
       {visibleLinks.map((link) => (
         <SettingsLinkRow
@@ -67,6 +70,10 @@ export function SettingsScreen() {
         icon="help-circle-outline"
         onPress={handleShowOnboarding}
       />
+      <View style={styles.inlineCards}>
+        <RadioAutoplayCard />
+        <AtrumAiEngineCard />
+      </View>
       <VersionFooter />
     </ScrollView>
   );
@@ -78,5 +85,8 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 32,
     gap: 12,
+  },
+  inlineCards: {
+    marginTop: 12,
   },
 });
