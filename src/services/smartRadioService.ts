@@ -1486,22 +1486,7 @@ export async function getSmartRadioTracks(req: SmartRadioRequest): Promise<Child
     settings.sessionAntiRepeat,
   );
 
-  // Level 1: Server Subsonic similarity
-  if (settings.sources.server && !isOffline) {
-    await collectLevel1Server(primarySeed, fetchCount, pool, weights);
-  }
-
-  // Level 2 & Level 3: Offline SQLite personal co-occurrence + metadata affinity
-  if (hasAsyncDb && db) {
-    if (settings.sources.localHistory) {
-      await collectLevel2LocalHistory(db, profile, fetchCount, isOffline, pool, weights);
-    }
-    if (settings.sources.metadata) {
-      await collectLevel3Metadata(db, profile, fetchCount, isOffline, pool, weights);
-    }
-  }
-
-  // Optional AI Boost (registered override or BYOK AI service)
+  // Priority 1: BYOK AI Engine when enabled online (stops here if target is met)
   if (
     settings.sources.aiBoost &&
     settings.provider !== 'disabled' &&
@@ -1519,6 +1504,21 @@ export async function getSmartRadioTracks(req: SmartRadioRequest): Promise<Child
       } catch {
         // Safe try/catch — AI provider failure never breaks radio playback
       }
+    }
+  }
+
+  // Priority 2: Server Subsonic similarity (only if Priority 1 is off/short; stops here if target is met)
+  if (pool.usableCount() < targetCount && settings.sources.server && !isOffline) {
+    await collectLevel1Server(primarySeed, fetchCount, pool, weights);
+  }
+
+  // Priority 3: Offline SQLite personal co-occurrence + mood/metadata affinity (only if upstream tiers are short/offline)
+  if (pool.usableCount() < targetCount && hasAsyncDb && db) {
+    if (settings.sources.localHistory) {
+      await collectLevel2LocalHistory(db, profile, fetchCount, isOffline, pool, weights);
+    }
+    if (settings.sources.metadata) {
+      await collectLevel3Metadata(db, profile, fetchCount, isOffline, pool, weights);
     }
   }
 

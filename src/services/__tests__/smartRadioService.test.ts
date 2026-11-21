@@ -480,6 +480,40 @@ describe('AI Boost, Level 4 safety net, anti-repeat, and artist spacing', () => 
     expect(safeTracks.map((t) => t.id)).toEqual(['t1', 't2']);
   });
 
+  it('uses strict priority waterfall: AI-only when AI fills target, and Server-only when AI is off and Server fills target', async () => {
+    const seed = makeSong('seed', { genre: 'Indie', year: 2020 });
+    const localExtra = makeSong('local-extra', { genre: 'Indie', year: 2020 });
+    await upsertSongs(realDb, [seed, localExtra]);
+
+    // 1. AI enabled & returns >= targetCount -> skips server & local SQLite
+    registerSmartRadioAiBoostProvider(async () => [makeSong('ai-1'), makeSong('ai-2')]);
+    mockGetSimilarSongs.mockResolvedValue([makeSong('srv-1'), makeSong('srv-2')]);
+
+    const aiOnly = await getSmartRadioTracks({
+      seedSongs: [seed],
+      targetCount: 2,
+      settings: makeSettings({
+        provider: 'groq',
+        sources: { server: true, localHistory: true, metadata: true, aiBoost: true },
+      }),
+    });
+    expect(aiOnly.map((t) => t.id)).toEqual(['ai-1', 'ai-2']);
+    expect(mockGetSimilarSongs).not.toHaveBeenCalled();
+
+    // 2. AI disabled & Server returns >= targetCount -> skips localHistory & metadata
+    const serverOnly = await getSmartRadioTracks({
+      seedSongs: [seed],
+      targetCount: 2,
+      settings: makeSettings({
+        provider: 'disabled',
+        sources: { server: true, localHistory: true, metadata: true, aiBoost: false },
+      }),
+    });
+    expect(mockGetSimilarSongs).toHaveBeenCalledTimes(1);
+    expect(serverOnly.map((t) => t.id)).toEqual(['srv-1', 'srv-2']);
+    expect(serverOnly.map((t) => t.id)).not.toContain('local-extra');
+  });
+
   it('relaxes excludeIds when library pool is exhausted while still excluding playing seed', async () => {
     mockGetSimilarSongs.mockResolvedValue([
       makeSong('seed'),
