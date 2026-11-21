@@ -29,6 +29,7 @@ export const ensureCoverArtAuth = jest.fn().mockResolvedValue(undefined);
 export const getCoverArtUrl = jest.fn().mockReturnValue(null);
 export const normalizeServerUrl = jest.fn((url: string) => url.trim().replace(/\/+$/, ''));
 export const getStreamUrl = jest.fn().mockReturnValue(null);
+export const getDlnaStreamUrl = jest.fn().mockReturnValue(null);
 export const getDownloadStreamUrl = jest.fn().mockReturnValue(null);
 
 export const getRecentlyAddedAlbums = jest.fn().mockResolvedValue([]);

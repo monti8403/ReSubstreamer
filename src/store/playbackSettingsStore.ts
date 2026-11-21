@@ -153,6 +153,7 @@ export type SkipPreviousBehavior = 'always-previous' | 'restart-or-previous';
 
 export type WidgetTheme = 'dynamic' | 'oled';
 export type WidgetShuffleMode = 'toggle_queue' | 'all_songs' | 'starred' | 'downloaded';
+export type DlnaFormatPreference = 'auto' | 'mp3' | 'flac';
 
 export interface PlaybackSettingsState {
   /** Maximum bitrate for streaming (legacy/fallback). null = no limit (server default). */
@@ -213,6 +214,8 @@ export interface PlaybackSettingsState {
   widgetTheme: WidgetTheme;
   /** Android home screen widget shuffle mode. */
   widgetShuffleMode: WidgetShuffleMode;
+  /** DLNA streaming transcode compatibility preference. */
+  dlnaFormatPreference: DlnaFormatPreference;
 
   setMaxBitRate: (bitRate: MaxBitRate) => void;
   setMaxBitRateWifi: (bitRate: MaxBitRate) => void;
@@ -239,6 +242,7 @@ export interface PlaybackSettingsState {
   setSkipPreviousBehavior: (behavior: SkipPreviousBehavior) => void;
   setWidgetTheme: (theme: WidgetTheme) => void;
   setWidgetShuffleMode: (mode: WidgetShuffleMode) => void;
+  setDlnaFormatPreference: (pref: DlnaFormatPreference) => void;
 }
 
 const PERSIST_KEY = 'substreamer-playback-settings';
@@ -289,6 +293,7 @@ export const playbackSettingsStore = create<PlaybackSettingsState>()(
       skipPreviousBehavior: 'always-previous',
       widgetTheme: 'dynamic',
       widgetShuffleMode: 'toggle_queue',
+      dlnaFormatPreference: 'auto',
 
       setMaxBitRate: (maxBitRate) => set({ maxBitRate, maxBitRateWifi: maxBitRate }),
       setMaxBitRateWifi: (maxBitRateWifi) => set({ maxBitRateWifi, maxBitRate: maxBitRateWifi }),
@@ -318,6 +323,7 @@ export const playbackSettingsStore = create<PlaybackSettingsState>()(
       },
       setWidgetTheme: (widgetTheme) => set({ widgetTheme }),
       setWidgetShuffleMode: (widgetShuffleMode) => set({ widgetShuffleMode }),
+      setDlnaFormatPreference: (dlnaFormatPreference) => set({ dlnaFormatPreference }),
     }),
     {
       name: PERSIST_KEY,
@@ -355,6 +361,7 @@ export const playbackSettingsStore = create<PlaybackSettingsState>()(
         skipPreviousBehavior: state.skipPreviousBehavior,
         widgetTheme: state.widgetTheme,
         widgetShuffleMode: state.widgetShuffleMode,
+        dlnaFormatPreference: state.dlnaFormatPreference,
       }),
     }
   )

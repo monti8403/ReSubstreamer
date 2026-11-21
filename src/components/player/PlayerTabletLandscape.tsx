@@ -39,6 +39,7 @@ import { ShuffleOverlay } from '@/components/ShuffleOverlay';
 import { SkipIntervalButton } from '@/components/SkipIntervalButton';
 import { SleepTimerButton } from '@/components/SleepTimerButton';
 import { SleepTimerCapsule } from '@/components/SleepTimerCapsule';
+import { CastButton } from '@/components/RoutePicker/CastButton';
 import { closeOpenRow } from '@/components/SwipeableRow';
 import { useCanSkip } from '@/hooks/useCanSkip';
 import { PlayerCoverGradient } from './PlayerCoverGradient';
@@ -444,6 +445,7 @@ export function PlayerTabletLandscape({
                     {albumLine}
                   </Text>
                 )}
+                <CastButton />
               </View>
 
               {/* Progress bar */}

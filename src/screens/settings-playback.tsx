@@ -50,6 +50,7 @@ export function SettingsPlaybackScreen() {
   const playbackMode = playbackSettingsStore((s) => s.playbackMode);
   const crossfadeDurationMs = playbackSettingsStore((s) => s.crossfadeDurationMs);
   const replayGainMode = playbackSettingsStore((s) => s.replayGainMode);
+  const dlnaFormatPreference = playbackSettingsStore((s) => s.dlnaFormatPreference);
 
   const isDefault =
     maxBitRate === null &&
@@ -66,7 +67,8 @@ export function SettingsPlaybackScreen() {
     lookaheadCount === 3 &&
     playbackMode === 'gapless' &&
     crossfadeDurationMs === 5000 &&
-    replayGainMode === 'off';
+    replayGainMode === 'off' &&
+    dlnaFormatPreference === 'auto';
 
   const handleResetDefaults = useCallback(() => {
     confirm({
@@ -93,6 +95,7 @@ export function SettingsPlaybackScreen() {
         s.setPlaybackMode('gapless');
         s.setCrossfadeDurationMs(5000);
         s.setReplayGainMode('off');
+        s.setDlnaFormatPreference('auto');
         updateRemoteCapabilities();
         void applyLookaheadCacheConfig();
         void applyPlaybackMode();

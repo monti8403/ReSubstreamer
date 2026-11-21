@@ -59,6 +59,7 @@ import { syncStatusStore } from './syncStatusStore';
 
 // Non-persisted stores
 import { addToPlaylistStore } from './addToPlaylistStore';
+import { castStore } from './castStore';
 import { certPromptStore } from './certPromptStore';
 import { connectivityStore } from './connectivityStore';
 import { createShareStore } from './createShareStore';
@@ -113,6 +114,7 @@ const allStores = [
   migrationStore,
   // Non-persisted
   addToPlaylistStore,
+  castStore,
   certPromptStore,
   connectivityStore,
   createShareStore,

@@ -20,7 +20,7 @@ import i18n from '../i18n/i18n';
 
 import { authStore } from '../store/authStore';
 import { offlineModeStore } from '../store/offlineModeStore';
-import { FORMAT_PRESETS, getStreamingMaxBitRate, playbackSettingsStore, type StreamFormat, type MaxBitRate } from '../store/playbackSettingsStore';
+import { FORMAT_PRESETS, getStreamingMaxBitRate, playbackSettingsStore, type StreamFormat, type MaxBitRate, type DlnaFormatPreference } from '../store/playbackSettingsStore';
 import { serverInfoStore, type ServerInfo } from '../store/serverInfoStore';
 import { supports } from './serverCapabilityService';
 
@@ -327,6 +327,84 @@ export function getStreamUrl(trackId: string): string | null {
   }
 
   return `${base}?${params.toString()}`;
+}
+
+const DLNA_UNSUPPORTED_SUFFIXES = new Set(['opus', 'ogg', 'oga', 'webm']);
+
+function resolveDlnaMimeType(formatOrSuffix: string): string {
+  const f = formatOrSuffix.trim().toLowerCase();
+  if (f === 'flac') return 'audio/flac';
+  if (f === 'aac' || f === 'm4a' || f === 'mp4' || f === 'alac') return 'audio/mp4';
+  if (f === 'wav') return 'audio/wav';
+  if (f === 'aiff' || f === 'aif') return 'audio/aiff';
+  if (f === 'wma') return 'audio/x-ms-wma';
+  if (f.startsWith('mp3')) return 'audio/mpeg';
+  return 'audio/mpeg';
+}
+
+/**
+ * Build an HTTP/HTTPS Subsonic stream URL specifically for external UPnP/DLNA
+ * renderers. Never returns a local `file://` URI or loopback proxy URL, and
+ * enforces the user's DLNA compatibility preference (`auto` / `mp3` / `flac`),
+ * automatically falling back to MP3 320kbps for Opus/Ogg streams in `auto` mode.
+ */
+export function getDlnaStreamUrl(
+  trackId: string,
+  sourceSuffix?: string,
+  overridePreference?: DlnaFormatPreference,
+): { url: string; mimeType: string } | null {
+  const { isLoggedIn, serverUrl, username } = authStore.getState();
+  if (!trackId || !isLoggedIn || !serverUrl || !username) return null;
+  if (cachedCoverArtKey === null || !cachedCoverArtToken) return null;
+  if (offlineModeStore.getState().offlineMode) return null;
+
+  const base = `${normalizeServerUrl(serverUrl)}/rest/stream.view`;
+  const params = new URLSearchParams({
+    id: trackId,
+    v: SUBSONIC_API_VERSION,
+    c: SUBSONIC_CLIENT_NAME,
+    estimateContentLength: 'true',
+  });
+  applyUrlAuth(params, username);
+
+  const settings = playbackSettingsStore.getState();
+  const dlnaPref: DlnaFormatPreference =
+    overridePreference ?? settings.dlnaFormatPreference ?? 'auto';
+
+  let mimeType = 'audio/mpeg';
+
+  if (dlnaPref === 'mp3') {
+    params.set('format', 'mp3');
+    params.set('maxBitRate', '320');
+    mimeType = 'audio/mpeg';
+  } else if (dlnaPref === 'flac') {
+    params.set('format', 'flac');
+    mimeType = 'audio/flac';
+  } else {
+    const normalizedFmt = (settings.streamFormat ?? 'raw').trim().toLowerCase();
+    const normalizedSuffix = (sourceSuffix ?? '').trim().toLowerCase();
+    const isIncompatible =
+      normalizedFmt.startsWith('opus') ||
+      normalizedFmt.startsWith('ogg') ||
+      (normalizedFmt === 'raw' && DLNA_UNSUPPORTED_SUFFIXES.has(normalizedSuffix));
+
+    if (isIncompatible) {
+      params.set('format', 'mp3');
+      params.set('maxBitRate', '320');
+      mimeType = 'audio/mpeg';
+    } else {
+      const effectiveMaxBitRate = getStreamingMaxBitRate();
+      applyFormatAndBitrate(params, settings.streamFormat, effectiveMaxBitRate);
+      mimeType = resolveDlnaMimeType(
+        normalizedFmt === 'raw' ? normalizedSuffix || 'mp3' : normalizedFmt,
+      );
+    }
+  }
+
+  return {
+    url: `${base}?${params.toString()}`,
+    mimeType,
+  };
 }
 
 /**

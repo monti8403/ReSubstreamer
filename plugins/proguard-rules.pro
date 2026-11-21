@@ -56,6 +56,9 @@
 -keep class com.margelo.nitro.** { *; }
 -dontwarn com.margelo.nitro.**
 
+# Atrum native cast / SSDP module
+-keep class com.monti.atrum.cast.** { *; }
+
 # Crash-report readability. AGP's common config keeps annotations and Signature but NOT
 # line numbers, and R8 optimization inlines frames — without these, a Play Console stack
 # trace de-obfuscates to names with no lines, which is not enough to act on.

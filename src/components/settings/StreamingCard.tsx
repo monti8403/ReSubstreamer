@@ -8,6 +8,7 @@ import { settingsStyles } from '../../styles/settingsStyles';
 import {
   FORMAT_PRESETS,
   playbackSettingsStore,
+  type DlnaFormatPreference,
   type MaxBitRate,
   type StreamFormat,
 } from '../../store/playbackSettingsStore';
@@ -35,11 +36,22 @@ export function StreamingCard() {
   const maxBitRateWifi = playbackSettingsStore((s) => s.maxBitRateWifi ?? s.maxBitRate);
   const maxBitRateCellular = playbackSettingsStore((s) => s.maxBitRateCellular);
   const streamFormat = playbackSettingsStore((s) => s.streamFormat);
+  const dlnaFormatPreference = playbackSettingsStore((s) => s.dlnaFormatPreference);
   const setMaxBitRateWifi = playbackSettingsStore((s) => s.setMaxBitRateWifi);
   const setMaxBitRateCellular = playbackSettingsStore((s) => s.setMaxBitRateCellular);
+  const setDlnaFormatPreference = playbackSettingsStore((s) => s.setDlnaFormatPreference);
 
   const options: DropdownOption<MaxBitRate>[] = useMemo(
     () => BITRATE_LABEL_KEYS.map((o) => ({ value: o.value, label: t(o.labelKey) })),
+    [t],
+  );
+
+  const dlnaOptions: DropdownOption<DlnaFormatPreference>[] = useMemo(
+    () => [
+      { value: 'auto', label: t('dlnaFormatAuto') },
+      { value: 'mp3', label: t('dlnaFormatMp3') },
+      { value: 'flac', label: t('dlnaFormatFlac') },
+    ],
     [t],
   );
 
@@ -63,6 +75,10 @@ export function StreamingCard() {
           onPress={() => streamFormatSheetStore.getState().show('stream')}
           style={({ pressed }) => [
             styles.formatRow,
+            {
+              borderBottomWidth: StyleSheet.hairlineWidth,
+              borderBottomColor: colors.border,
+            },
             pressed && settingsStyles.pressed,
           ]}
         >
@@ -74,6 +90,13 @@ export function StreamingCard() {
             <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
           </View>
         </Pressable>
+        <DropdownRow
+          label={t('dlnaStreamFormat')}
+          value={dlnaFormatPreference}
+          options={dlnaOptions}
+          onChange={setDlnaFormatPreference}
+          isLast
+        />
       </View>
     </View>
   );

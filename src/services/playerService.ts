@@ -65,6 +65,7 @@ import {
   stampQueueFormat,
 } from './playerHelpers';
 import { isFireOS } from '../utils/isFireOS';
+import { castController } from './cast/castController';
 
 /** The RNQP player singleton. Safe to hold — `getTrackPlayer()` always returns
  *  the same instance; the engine is configured in `playerBootstrap.ts`. */
@@ -203,6 +204,7 @@ export async function initPlayer(): Promise<void> {
 
     // --- Playback state → store ---
     tp.onStateChange((state) => {
+      if (castController.isDlnaSessionActive()) return;
       const store = playerStore.getState();
       store.setPlaybackState(mapState(state));
       if (state === 'playing') {
@@ -216,6 +218,7 @@ export async function initPlayer(): Promise<void> {
     // backgroundProgressUpdateIntervalMs), which re-emits immediately on
     // foreground, so no app-side gating of the store write is needed here. ---
     tp.onProgress(({ position, duration, buffered }) => {
+      if (castController.isDlnaSessionActive()) return;
       // RNQP `buffered` is seconds buffered AHEAD of `position`; the store +
       // progress bar want the absolute buffered edge from the start of the track.
       playerStore.getState().setProgress(position, duration, position + buffered);
@@ -653,8 +656,15 @@ async function playTrackInternal(
     if (startIndex === -1) startIndex = 0;
 
     await tp.setQueue(rnTracks, startIndex);
-    await tp.play();
-    persistQueue(filteredQueue, startIndex, userQueueTrackIds);
+    if (castController.isDlnaSessionActive()) {
+      const selectedChild = filteredQueue[startIndex] ?? null;
+      playerStore.getState().setCurrentTrack(selectedChild, startIndex);
+      persistQueue(filteredQueue, startIndex, userQueueTrackIds);
+      await castController.playTrackFromStore(startIndex, 0, false);
+    } else {
+      await tp.play();
+      persistQueue(filteredQueue, startIndex, userQueueTrackIds);
+    }
 
     if (track.album || track.parent || sourcePlaylistId || track.id) {
       try {
@@ -699,6 +709,10 @@ export async function playTrack(
 /** Toggle between play and pause. */
 export async function togglePlayPause(): Promise<void> {
   await awaitHydration();
+  if (castController.isDlnaSessionActive()) {
+    await castController.togglePlayPause();
+    return;
+  }
   if (tp.getState() === 'playing') {
     await tp.pause();
     return;
@@ -738,6 +752,10 @@ export async function togglePlayPause(): Promise<void> {
 /** Skip to the next track in the queue. */
 export async function skipToNext(): Promise<void> {
   await awaitHydration();
+  if (castController.isDlnaSessionActive()) {
+    await castController.skipToNext();
+    return;
+  }
   await tp.skipToNext();
   await tp.play();
 }
@@ -745,6 +763,10 @@ export async function skipToNext(): Promise<void> {
 /** Skip to the previous track in the queue. */
 export async function skipToPrevious(): Promise<void> {
   await awaitHydration();
+  if (castController.isDlnaSessionActive()) {
+    await castController.skipToPrevious();
+    return;
+  }
   const { position } = playerStore.getState();
   const { skipPreviousBehavior } = playbackSettingsStore.getState();
 
@@ -774,6 +796,10 @@ export function canSkipToPrevious(): boolean {
  */
 export async function seekTo(position: number): Promise<void> {
   await awaitHydration();
+  if (castController.isDlnaSessionActive()) {
+    await castController.seekTo(position);
+    return;
+  }
   const target = Math.max(0, position);
   await tp.seekTo(target);
   const store = playerStore.getState();
@@ -783,6 +809,10 @@ export async function seekTo(position: number): Promise<void> {
 /** Skip to a specific track in the queue by index. */
 export async function skipToTrack(index: number): Promise<void> {
   await awaitHydration();
+  if (castController.isDlnaSessionActive()) {
+    await castController.skipToTrack(index);
+    return;
+  }
   await tp.skipToIndex(index);
   await tp.play();
 }
@@ -939,6 +969,9 @@ async function clearPlayerStateInternal(): Promise<void> {
   resetAutoplaySession();
 
   await tp.clearQueue();
+  if (castController.isDlnaSessionActive()) {
+    void castController.stopRemotePlayback();
+  }
   clearPersistedQueue();
 
   const store = playerStore.getState();
@@ -1040,6 +1073,9 @@ export async function addToQueue(
     currentChildQueue = [...currentChildQueue, ...playable];
     playerStore.getState().setQueue(currentChildQueue);
     persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+    if (castController.isDlnaSessionActive()) {
+      void castController.syncNextTrack();
+    }
   });
 }
 
@@ -1110,6 +1146,9 @@ export async function addTracksToUserQueue(tracks: Child[]): Promise<void> {
 
     playerStore.getState().setQueue(currentChildQueue);
     persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+    if (castController.isDlnaSessionActive()) {
+      void castController.syncNextTrack();
+    }
   });
 }
 
@@ -1168,6 +1207,9 @@ export async function playSongNext(song: Child): Promise<void> {
     playerStore.getState().setQueue(currentChildQueue);
     // Re-read the index AFTER the awaited add in case an auto-advance moved it.
     persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+    if (castController.isDlnaSessionActive()) {
+      void castController.syncNextTrack();
+    }
   });
 }
 
@@ -1203,12 +1245,17 @@ export async function clearUserQueue(): Promise<void> {
     playerStore.getState().clearUserQueueTrackIds?.();
     playerStore.getState().setQueue(currentChildQueue);
 
-    const nativeIndex = tp.getCurrentTrackIndex();
+    const resolvedIndex = castController.isDlnaSessionActive()
+      ? currentChildQueue.findIndex((c) => c === playerStore.getState().currentTrack || c.id === playerStore.getState().currentTrack?.id)
+      : tp.getCurrentTrackIndex();
     playerStore.getState().setCurrentTrack(
       playerStore.getState().currentTrack,
-      nativeIndex >= 0 ? nativeIndex : currentIndex,
+      resolvedIndex >= 0 ? resolvedIndex : currentIndex,
     );
     persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+    if (castController.isDlnaSessionActive()) {
+      void castController.syncNextTrack();
+    }
   });
 }
 
@@ -1238,13 +1285,33 @@ export async function removeFromQueue(index: number): Promise<void> {
     currentChildQueue = currentChildQueue.filter((_, i) => i !== index);
     playerStore.getState().setQueue(currentChildQueue);
 
-    // Re-sync the active index from native (recomputed on removal).
-    const nativeIndex = tp.getCurrentTrackIndex();
-    playerStore.getState().setCurrentTrack(
-      playerStore.getState().currentTrack,
-      nativeIndex >= 0 ? nativeIndex : null,
-    );
-    persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+    // Re-sync the active index from native (recomputed on removal), or from store when casting DLNA.
+    const activeBeforeRemoval = playerStore.getState().currentTrackIndex ?? 0;
+    const dlnaActive = castController.isDlnaSessionActive();
+    if (dlnaActive) {
+      const nextIdx =
+        index < activeBeforeRemoval
+          ? Math.max(0, activeBeforeRemoval - 1)
+          : Math.min(activeBeforeRemoval, currentChildQueue.length - 1);
+      const activeTrack =
+        index === activeBeforeRemoval
+          ? currentChildQueue[nextIdx] ?? null
+          : playerStore.getState().currentTrack;
+      playerStore.getState().setCurrentTrack(activeTrack, nextIdx);
+      persistQueue(currentChildQueue, nextIdx, userQueueTrackIds);
+      if (index === activeBeforeRemoval) {
+        await castController.playTrackFromStore(nextIdx, 0, false);
+      } else {
+        void castController.syncNextTrack();
+      }
+    } else {
+      const nativeIndex = tp.getCurrentTrackIndex();
+      playerStore.getState().setCurrentTrack(
+        playerStore.getState().currentTrack,
+        nativeIndex >= 0 ? nativeIndex : null,
+      );
+      persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+    }
   });
 }
 
@@ -1300,8 +1367,13 @@ export async function moveQueueItemToUserQueue(fromIndex: number): Promise<void>
       }
     }
 
-    const finalIndex = tp.getCurrentTrackIndex();
+    const finalIndex = castController.isDlnaSessionActive()
+      ? (playerStore.getState().currentTrackIndex ?? 0)
+      : tp.getCurrentTrackIndex();
     persistQueue(currentChildQueue, finalIndex >= 0 ? finalIndex : 0, userQueueTrackIds);
+    if (castController.isDlnaSessionActive()) {
+      void castController.syncNextTrack();
+    }
   });
 }
 
@@ -1388,12 +1460,17 @@ export async function reorderQueue(
       }
     }
 
-    const activeIndex = tp.getCurrentTrackIndex();
+    const activeIndex = castController.isDlnaSessionActive()
+      ? (playerStore.getState().currentTrackIndex ?? 0)
+      : tp.getCurrentTrackIndex();
     playerStore.getState().setCurrentTrack(
       playerStore.getState().currentTrack,
       activeIndex >= 0 ? activeIndex : null,
     );
     persistQueue(currentChildQueue, activeIndex >= 0 ? activeIndex : 0, userQueueTrackIds);
+    if (castController.isDlnaSessionActive()) {
+      void castController.syncNextTrack();
+    }
   });
 }
 
@@ -1465,6 +1542,9 @@ export async function cycleRepeatMode(): Promise<void> {
     current === 'off' ? 'all' : current === 'all' ? 'one' : 'off';
   playbackSettingsStore.getState().setRepeatMode(next);
   await tp.setRepeatMode(mapRepeatMode(next));
+  if (castController.isDlnaSessionActive()) {
+    void castController.syncNextTrack();
+  }
 }
 
 /** Set the playback rate (persisted store + native engine). */
@@ -1528,6 +1608,35 @@ registerPlayerPlayStatListener(applyLocalPlayToPlayer);
 // Wire queue appending into autoplayController (avoids static require cycle).
 registerAutoplayQueueAppender((tracks) => addToQueue(tracks));
 
+// Wire local Media3 / queue bridge into castController (avoids static require cycle).
+castController.registerLocalPlayerBridge({
+  pauseLocalEngine: () => tp.pause(),
+  syncLocalCursor: async (index, positionSec) => {
+    if (index >= 0 && tp.getCurrentTrackIndex() !== index && index < tp.getQueue().length) {
+      await tp.skipToIndex(index);
+    }
+    if (positionSec > 0) {
+      await tp.seekTo(positionSec);
+    }
+  },
+  onRemoteTrackChanged: (outgoingChild, incomingChild, incomingIndex, isAutoAdvance) => {
+    if (isAutoAdvance && outgoingChild) {
+      onTrackAutoAdvanced(outgoingChild);
+    }
+    playerStore.getState().setCurrentTrack(incomingChild, incomingIndex);
+    sendNowPlaying(incomingChild, trackPlaylistMap.get(incomingChild.id));
+    if (userQueueTrackIds.includes(incomingChild.id)) {
+      userQueueTrackIds = userQueueTrackIds.filter((id) => id !== incomingChild.id);
+      playerStore.getState().removeUserQueueTrackIds?.([incomingChild.id]);
+    }
+    persistCurrentIndex(incomingIndex);
+    activeScrobbleIndex = incomingIndex;
+    activeScrobbleDone = false;
+    lastMilestoneValue = 0;
+  },
+  getPlaylistIdForTrack: (trackId) => trackPlaylistMap.get(trackId),
+});
+
 /**
  * Shuffle the current queue in place and restart from index 0. We shuffle the
  * Child[] ourselves (so the shuffled order is what we persist for restore) and
@@ -1551,8 +1660,14 @@ export async function shuffleQueue(): Promise<void> {
       playerStore.getState().setQueue(filteredQueue);
 
       await tp.setQueue(rnTracks, 0);
-      await tp.play();
-      persistQueue(filteredQueue, 0, userQueueTrackIds);
+      if (castController.isDlnaSessionActive()) {
+        playerStore.getState().setCurrentTrack(filteredQueue[0] ?? null, 0);
+        persistQueue(filteredQueue, 0, userQueueTrackIds);
+        await castController.playTrackFromStore(0, 0, false);
+      } else {
+        await tp.play();
+        persistQueue(filteredQueue, 0, userQueueTrackIds);
+      }
     } catch {
       playbackToastStore.getState().fail();
     }

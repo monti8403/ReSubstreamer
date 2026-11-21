@@ -22,8 +22,9 @@ export function iconForRoute(route: RouteInfo): RouteIconName {
 }
 
 /** Glyph for the active cast session badge in the player-screen CastButton. */
-export function iconForCastProtocol(castProtocol: CastProtocol): RouteIconName {
+export function iconForCastProtocol(castProtocol: CastProtocol | 'dlna'): RouteIconName {
   switch (castProtocol) {
+    case 'dlna':
     case 'chromecast':
       return 'cast-connected';
     case 'airplay':

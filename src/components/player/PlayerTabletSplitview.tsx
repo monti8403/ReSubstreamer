@@ -24,6 +24,7 @@ import { RepeatButton } from '@/components/RepeatButton';
 import { ShuffleButton } from '@/components/ShuffleButton';
 import { ShuffleOverlay } from '@/components/ShuffleOverlay';
 import { SleepTimerCapsule } from '@/components/SleepTimerCapsule';
+import { CastButton } from '@/components/RoutePicker/CastButton';
 import { closeOpenRow } from '@/components/SwipeableRow';
 import { type ThemeColors } from '@/constants/theme';
 import { useCanSkip } from '@/hooks/useCanSkip';
@@ -360,6 +361,7 @@ const PanelHeader = memo(function PanelHeader({
                 >
                   {currentTrack.artist ?? t('unknownArtist')}
                 </Text>
+                <CastButton />
               </View>
               <FavoriteButton trackId={currentTrack.id} size={20} style={styles.favoriteButton} />
             </View>
