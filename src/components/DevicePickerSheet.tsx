@@ -18,7 +18,16 @@ import { BottomSheet } from './BottomSheet';
 import { useRoutePickerStore } from './RoutePicker/useRoutePickerStore';
 import { useTheme } from '../hooks/useTheme';
 import { castController } from '../services/cast/castController';
-import { openSystemOutputSwitcher } from '../services/cast/nativeCastBridge';
+import {
+  getSystemAudioState,
+  openSystemOutputSwitcher,
+  selectSystemAudioRoute,
+  setSystemMediaVolume,
+  subscribeSystemRoutesChanged,
+  type SystemAudioRoute,
+  type SystemAudioState,
+  type SystemRouteKind,
+} from '../services/cast/nativeCastBridge';
 import type { CastDevice, CastPlaybackStatus, CastProtocolType } from '../services/cast/types';
 import { castStore } from '../store/castStore';
 
@@ -46,6 +55,7 @@ function iconForCastDevice(device: CastDevice, isActive: boolean): IconName {
 
 function iconForLocalAudioRoute(kind: string): IconName {
   switch (kind) {
+    case 'bluetooth':
     case 'bluetoothA2DP':
     case 'bluetoothLE':
     case 'bluetoothHFP':
@@ -61,6 +71,24 @@ function iconForLocalAudioRoute(kind: string): IconName {
       return 'car';
     default:
       return 'cellphone';
+  }
+}
+
+function systemRouteKindLabel(kind: SystemRouteKind | string, t: (k: string) => string): string {
+  switch (kind) {
+    case 'bluetooth':
+    case 'bluetoothA2DP':
+    case 'bluetoothLE':
+    case 'bluetoothHFP':
+      return t('castRouteKindBluetooth');
+    case 'wired':
+      return t('castRouteKindWired');
+    case 'usb':
+      return t('castRouteKindUsb');
+    case 'hdmi':
+      return t('castRouteKindHdmi');
+    default:
+      return t('castRouteKindSpeaker');
   }
 }
 
@@ -86,6 +114,47 @@ function playbackStatusLabel(status: CastPlaybackStatus, t: (k: string) => strin
     default:
       return t('castActiveStatusIdle');
   }
+}
+
+function VolumeSliderRow({
+  value,
+  accent,
+  accessibilityLabel,
+  testID,
+  onValueChange,
+  onSlidingComplete,
+}: {
+  value: number;
+  accent: string;
+  accessibilityLabel: string;
+  testID?: string;
+  onValueChange: (val: number) => void;
+  onSlidingComplete: (val: number) => void;
+}) {
+  return (
+    <View style={styles.volumeRow}>
+      <MaterialCommunityIcons
+        name={value === 0 ? 'volume-off' : 'volume-high'}
+        size={18}
+        color={OLED_TEXT_SECONDARY}
+      />
+      <Slider
+        testID={testID}
+        style={styles.volumeSlider}
+        minimumValue={0}
+        maximumValue={100}
+        step={1}
+        value={value}
+        onValueChange={onValueChange}
+        onSlidingComplete={onSlidingComplete}
+        minimumTrackTintColor={accent}
+        maximumTrackTintColor={OLED_BORDER}
+        thumbTintColor={accent}
+        accessibilityLabel={accessibilityLabel}
+      />
+      <Text style={styles.volumeValue}>{value}%</Text>
+    </View>
+  );
 }
 
 export function DevicePickerSheet() {
@@ -122,10 +191,31 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
   const [localError, setLocalError] = useState<string | null>(null);
   const [sliderVolume, setSliderVolume] = useState<number>(playbackState.volume);
   const [isDraggingVolume, setIsDraggingVolume] = useState(false);
+  const [systemState, setSystemState] = useState<SystemAudioState | null>(null);
+  const [systemVolume, setSystemVolume] = useState<number>(50);
+  const [selectingRouteId, setSelectingRouteId] = useState<string | null>(null);
   const [pinTargetDeviceId, setPinTargetDeviceId] = useState<string | null>(null);
   const [pinValue, setPinValue] = useState('');
 
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isMountedRef = useRef(true);
+  const isDraggingSystemVolumeRef = useRef(false);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  const refreshSystemState = useCallback(async () => {
+    const next = await getSystemAudioState();
+    if (!isMountedRef.current || !next) return;
+    setSystemState(next);
+    if (!isDraggingSystemVolumeRef.current) {
+      setSystemVolume(next.volumePercent);
+    }
+  }, []);
 
   useEffect(() => {
     if (!isDraggingVolume) {
@@ -135,16 +225,26 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     void castController.startDiscovery().catch(() => {});
+    void refreshSystemState();
+    const unsubscribeRoutes = subscribeSystemRoutesChanged(() => {
+      void refreshSystemState();
+    });
     return () => {
+      unsubscribeRoutes();
       if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
       void castController.stopDiscovery();
     };
-  }, []);
+  }, [refreshSystemState]);
+
+  useEffect(() => {
+    void refreshSystemState();
+  }, [audioRoute.kind, audioRoute.name, refreshSystemState]);
 
   const handleRefresh = useCallback(() => {
     setLocalError(null);
+    void refreshSystemState();
     void castController.startDiscovery().catch(() => {});
-  }, []);
+  }, [refreshSystemState]);
 
   const handleOpenSystemSwitcher = useCallback(() => {
     setLocalError(null);
@@ -200,17 +300,73 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
     void castController.setVolume(rounded);
   }, []);
 
-  const localRouteDisplay = useMemo(() => {
-    if (
-      audioRoute.name &&
-      audioRoute.name.length > 0 &&
-      audioRoute.kind !== 'speaker' &&
-      audioRoute.kind !== 'unknown'
-    ) {
-      return audioRoute.name;
+  const handleSystemVolumeChange = useCallback((value: number) => {
+    isDraggingSystemVolumeRef.current = true;
+    setSystemVolume(Math.round(value));
+  }, []);
+
+  const handleSystemVolumeCommit = useCallback((value: number) => {
+    const rounded = Math.round(value);
+    setSystemVolume(rounded);
+    isDraggingSystemVolumeRef.current = false;
+    void setSystemMediaVolume(rounded).then((actual) => {
+      if (isMountedRef.current && actual != null && !isDraggingSystemVolumeRef.current) {
+        setSystemVolume(actual);
+      }
+    });
+  }, []);
+
+  const handleSelectSystemRoute = useCallback(
+    async (route: SystemAudioRoute) => {
+      setLocalError(null);
+      if (connectedDevice) {
+        await castController.disconnect().catch(() => {});
+      }
+      if (route.isSelected) return;
+      setSelectingRouteId(route.id);
+      try {
+        await selectSystemAudioRoute(route.id);
+        await refreshSystemState();
+      } finally {
+        if (isMountedRef.current) {
+          setSelectingRouteId(null);
+        }
+      }
+    },
+    [connectedDevice, refreshSystemState],
+  );
+
+  const selectedSystemRoute = useMemo<SystemAudioRoute | null>(() => {
+    if (!systemState?.routes?.length) return null;
+    return systemState.routes.find((r) => r.isSelected) ?? systemState.routes[0] ?? null;
+  }, [systemState]);
+
+  const activeLocalOutput = useMemo(() => {
+    if (selectedSystemRoute) {
+      const isSpeaker = selectedSystemRoute.kind === 'speaker';
+      return {
+        title: isSpeaker ? t('thisDevice') : selectedSystemRoute.name,
+        subtitle: isSpeaker
+          ? t('castThisDeviceSubtitle')
+          : systemRouteKindLabel(selectedSystemRoute.kind, t),
+        icon: iconForLocalAudioRoute(selectedSystemRoute.kind),
+      };
     }
-    return t('castThisDeviceSubtitle');
-  }, [audioRoute.kind, audioRoute.name, t]);
+
+    const hasExternalRnqpRoute = Boolean(
+      audioRoute.name &&
+        audioRoute.name.length > 0 &&
+        audioRoute.kind !== 'speaker' &&
+        audioRoute.kind !== 'unknown',
+    );
+    return {
+      title: hasExternalRnqpRoute ? audioRoute.name : t('thisDevice'),
+      subtitle: hasExternalRnqpRoute
+        ? systemRouteKindLabel(audioRoute.kind, t)
+        : t('castThisDeviceSubtitle'),
+      icon: iconForLocalAudioRoute(audioRoute.kind),
+    };
+  }, [audioRoute.kind, audioRoute.name, selectedSystemRoute, t]);
 
   const availableDevices = useMemo(() => {
     if (!connectedDevice) return discoveredDevices;
@@ -290,27 +446,14 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
             </View>
 
             {connectedDevice.supportsRemoteVolume !== false && (
-              <View style={styles.volumeRow}>
-                <MaterialCommunityIcons
-                  name={sliderVolume === 0 ? 'volume-off' : 'volume-high'}
-                  size={18}
-                  color={OLED_TEXT_SECONDARY}
-                />
-                <Slider
-                  style={styles.volumeSlider}
-                  minimumValue={0}
-                  maximumValue={100}
-                  step={1}
-                  value={sliderVolume}
-                  onValueChange={handleVolumeChange}
-                  onSlidingComplete={handleVolumeCommit}
-                  minimumTrackTintColor={accent}
-                  maximumTrackTintColor={OLED_BORDER}
-                  thumbTintColor={accent}
-                  accessibilityLabel={t('castVolume')}
-                />
-                <Text style={styles.volumeValue}>{sliderVolume}%</Text>
-              </View>
+              <VolumeSliderRow
+                value={sliderVolume}
+                accent={accent}
+                accessibilityLabel={t('castVolume')}
+                testID="remote-volume-slider"
+                onValueChange={handleVolumeChange}
+                onSlidingComplete={handleVolumeCommit}
+              />
             )}
           </View>
         ) : (
@@ -318,21 +461,86 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
             <View style={styles.cardTopRow}>
               <View style={[styles.iconBox, { backgroundColor: OLED_BG, borderColor: accent }]}>
                 <MaterialCommunityIcons
-                  name={iconForLocalAudioRoute(audioRoute.kind)}
+                  name={activeLocalOutput.icon}
                   size={22}
                   color={accent}
                 />
               </View>
               <View style={styles.labelStack}>
                 <Text style={styles.deviceTitle} numberOfLines={1}>
-                  {t('thisDevice')}
+                  {activeLocalOutput.title}
                 </Text>
                 <Text style={styles.deviceSubtitle} numberOfLines={1}>
-                  {localRouteDisplay}
+                  {activeLocalOutput.subtitle}
                 </Text>
               </View>
               <MaterialCommunityIcons name="check-circle" size={20} color={accent} />
             </View>
+
+            {systemState != null && (
+              <VolumeSliderRow
+                value={systemVolume}
+                accent={accent}
+                accessibilityLabel={t('castVolume')}
+                testID="local-volume-slider"
+                onValueChange={handleSystemVolumeChange}
+                onSlidingComplete={handleSystemVolumeCommit}
+              />
+            )}
+          </View>
+        )}
+
+        {/* Direct Android System Audio Routes (Phone Speaker / Bluetooth / USB / Wired) */}
+        {systemState != null && systemState.routes.length > 1 && (
+          <View style={styles.deviceList}>
+            {systemState.routes.map((route) => {
+              const isRouteActive = !connectedDevice && route.isSelected;
+              const isSwitching = selectingRouteId === route.id;
+              const routeTitle = route.kind === 'speaker' ? t('thisDevice') : route.name;
+              return (
+                <Pressable
+                  key={route.id}
+                  onPress={() => void handleSelectSystemRoute(route)}
+                  disabled={isSwitching}
+                  testID={`system-route-${route.id}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={routeTitle}
+                  style={({ pressed }) => [
+                    styles.card,
+                    isRouteActive && { borderColor: accent },
+                    pressed && styles.cardPressed,
+                  ]}
+                >
+                  <View style={styles.cardTopRow}>
+                    <View
+                      style={[
+                        styles.iconBox,
+                        isRouteActive && { backgroundColor: OLED_BG, borderColor: accent },
+                      ]}
+                    >
+                      <MaterialCommunityIcons
+                        name={iconForLocalAudioRoute(route.kind)}
+                        size={20}
+                        color={isRouteActive ? accent : OLED_TEXT_PRIMARY}
+                      />
+                    </View>
+                    <View style={styles.labelStack}>
+                      <Text style={styles.deviceTitle} numberOfLines={1}>
+                        {routeTitle}
+                      </Text>
+                      <Text style={styles.deviceSubtitle} numberOfLines={1}>
+                        {systemRouteKindLabel(route.kind, t)}
+                      </Text>
+                    </View>
+                    {isSwitching ? (
+                      <ActivityIndicator size="small" color={accent} />
+                    ) : isRouteActive ? (
+                      <MaterialCommunityIcons name="check-circle" size={18} color={accent} />
+                    ) : null}
+                  </View>
+                </Pressable>
+              );
+            })}
           </View>
         )}
 
@@ -354,7 +562,9 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
             </View>
             <View style={styles.labelStack}>
               <Text style={styles.deviceTitle} numberOfLines={1}>
-                {t('castSystemOutputTitle')}
+                {systemState != null && systemState.routes.length > 1
+                  ? t('castSystemSwitcherOpen')
+                  : t('castSystemOutputTitle')}
               </Text>
               <Text style={styles.deviceSubtitle} numberOfLines={1}>
                 {t('castSystemOutputSubtitle')}

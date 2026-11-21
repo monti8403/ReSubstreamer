@@ -2,7 +2,12 @@ package com.monti.atrum.cast
 
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
+import android.media.MediaRoute2Info
 import android.media.MediaRouter2
+import android.media.RouteDiscoveryPreference
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
@@ -15,6 +20,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import java.net.DatagramPacket
 import java.net.Inet4Address
@@ -28,6 +34,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.roundToInt
 
 class AtrumCastModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
@@ -39,7 +46,7 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
         private const val SSDP_PORT = 1900
         private const val EVENT_DEVICE_FOUND = "AtrumSsdpDeviceFound"
         private const val EVENT_SCAN_FINISHED = "AtrumSsdpScanFinished"
-        private const val DEFAULT_TIMEOUT_MS = 5000
+        private const val EVENT_SYSTEM_ROUTES_CHANGED = "AtrumSystemRoutesChanged"
         private const val MIN_TIMEOUT_MS = 1000
         private const val MAX_TIMEOUT_MS = 15000
     }
@@ -57,8 +64,26 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
     private var activeSocket: MulticastSocket? = null
 
     private var multicastLock: WifiManager.MulticastLock? = null
+    private var systemRouterHelper: SystemRouterHelperApi34? = null
 
     override fun getName(): String = NAME
+
+    override fun initialize() {
+        super.initialize()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            mainHandler.post {
+                try {
+                    if (systemRouterHelper == null) {
+                        systemRouterHelper = SystemRouterHelperApi34(reactApplicationContext) {
+                            emitSystemRoutesChanged()
+                        }.also { it.start() }
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Failed to initialize SystemRouterHelperApi34", t)
+                }
+            }
+        }
+    }
 
     @ReactMethod
     fun addListener(eventName: String) {
@@ -133,9 +158,90 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    @ReactMethod
+    fun getSystemAudioState(promise: Promise) {
+        mainHandler.post {
+            try {
+                val audioManager =
+                    reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                val curVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).coerceIn(0, maxVol)
+                val volumePercent = ((curVol.toFloat() / maxVol.toFloat()) * 100f).roundToInt()
+
+                val routesArray = Arguments.createArray()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    val helper = systemRouterHelper ?: SystemRouterHelperApi34(reactApplicationContext) {
+                        emitSystemRoutesChanged()
+                    }.also {
+                        systemRouterHelper = it
+                        it.start()
+                    }
+                    for (routeMap in helper.getSystemRoutes()) {
+                        routesArray.pushMap(routeMap)
+                    }
+                }
+
+                val result = Arguments.createMap().apply {
+                    putInt("volumePercent", volumePercent)
+                    putArray("routes", routesArray)
+                }
+                promise.resolve(result)
+            } catch (t: Throwable) {
+                promise.reject("SYSTEM_AUDIO_STATE_ERROR", t.message ?: "Unknown error", t)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun selectSystemAudioRoute(routeId: String, promise: Promise) {
+        mainHandler.post {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    val helper = systemRouterHelper ?: SystemRouterHelperApi34(reactApplicationContext) {
+                        emitSystemRoutesChanged()
+                    }.also {
+                        systemRouterHelper = it
+                        it.start()
+                    }
+                    val transferred = helper.transferToRoute(routeId)
+                    if (transferred) {
+                        promise.resolve(true)
+                        return@post
+                    }
+                }
+                promise.resolve(false)
+            } catch (t: Throwable) {
+                promise.reject("SELECT_SYSTEM_ROUTE_ERROR", t.message ?: "Unknown error", t)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun setSystemMediaVolume(volumePercent: Int, promise: Promise) {
+        mainHandler.post {
+            try {
+                val audioManager =
+                    reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                val clampedPct = volumePercent.coerceIn(0, 100)
+                val targetIndex = ((clampedPct.toFloat() / 100f) * maxVol.toFloat()).roundToInt().coerceIn(0, maxVol)
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetIndex, 0)
+                promise.resolve(clampedPct)
+            } catch (t: Throwable) {
+                promise.reject("SET_SYSTEM_VOLUME_ERROR", t.message ?: "Unknown error", t)
+            }
+        }
+    }
+
     override fun invalidate() {
         super.invalidate()
         stopActiveScanInternal(emitFinished = false, reason = "invalidated")
+        mainHandler.post {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                systemRouterHelper?.stop()
+                systemRouterHelper = null
+            }
+        }
         discoveryExecutor.shutdownNow()
     }
 
@@ -204,7 +310,7 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
         closeActiveSocket()
         releaseMulticastLock()
         if (emitFinished && wasScanning) {
-            emitScanFinished(reason)
+            emitScanFinished(reason, 0, 0)
         }
     }
 
@@ -220,49 +326,108 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
         }
     }
 
-    private fun findWifiMulticastInterface(): NetworkInterface? {
-        return try {
-            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
-            var fallback: NetworkInterface? = null
-            while (interfaces.hasMoreElements()) {
-                val netIf = interfaces.nextElement()
-                if (!netIf.isUp || netIf.isLoopback || netIf.isPointToPoint || !netIf.supportsMulticast()) {
-                    continue
-                }
-                val hasIpv4 = netIf.inetAddresses.toList().any { it is Inet4Address && !it.isLoopbackAddress }
-                if (!hasIpv4) continue
-                val name = netIf.name.lowercase()
-                if (name.startsWith("wlan") || name.startsWith("wifi")) {
-                    return netIf
-                }
-                if (fallback == null) {
-                    fallback = netIf
+    private data class WifiBindTarget(
+        val networkInterface: NetworkInterface?,
+        val ipv4Address: Inet4Address?,
+    )
+
+    private fun resolveWifiBindTarget(): WifiBindTarget {
+        try {
+            val cm = reactApplicationContext.applicationContext
+                .getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            if (cm != null) {
+                val networks = cm.allNetworks
+                for (network in networks) {
+                    val caps = cm.getNetworkCapabilities(network) ?: continue
+                    if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+                        !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                    ) {
+                        continue
+                    }
+                    val lp = cm.getLinkProperties(network) ?: continue
+                    val ipv4 = lp.linkAddresses
+                        .map { it.address }
+                        .firstOrNull { it is Inet4Address && !it.isLoopbackAddress } as? Inet4Address
+                    val ifName = lp.interfaceName
+                    val netIf = when {
+                        !ifName.isNullOrBlank() -> NetworkInterface.getByName(ifName)
+                        ipv4 != null -> NetworkInterface.getByInetAddress(ipv4)
+                        else -> null
+                    }
+                    if (ipv4 != null || netIf != null) {
+                        return WifiBindTarget(netIf, ipv4)
+                    }
                 }
             }
-            fallback
-        } catch (_: Throwable) {
-            null
+        } catch (t: Throwable) {
+            Log.d(TAG, "ConnectivityManager lookup failed: ${t.message}")
         }
+
+        // Fallback enumeration if ConnectivityManager didn't yield a Wi-Fi IPv4 interface
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            var fallbackNetIf: NetworkInterface? = null
+            var fallbackAddr: Inet4Address? = null
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                val netIf = interfaces.nextElement()
+                val name = netIf.name.lowercase()
+                if (!netIf.isUp || netIf.isLoopback || netIf.isPointToPoint) continue
+                if (name.startsWith("tun") || name.startsWith("ppp") || name.startsWith("rmnet") ||
+                    name.startsWith("ccmni") || name.startsWith("p2p") || name.startsWith("dummy")
+                ) {
+                    continue
+                }
+                val ipv4 = netIf.inetAddresses.toList()
+                    .firstOrNull { it is Inet4Address && !it.isLoopbackAddress } as? Inet4Address
+                    ?: continue
+                if (name.startsWith("wlan") || name.startsWith("wifi") || name.startsWith("eth")) {
+                    return WifiBindTarget(netIf, ipv4)
+                }
+                if (fallbackNetIf == null) {
+                    fallbackNetIf = netIf
+                    fallbackAddr = ipv4
+                }
+            }
+            if (fallbackNetIf != null) {
+                return WifiBindTarget(fallbackNetIf, fallbackAddr)
+            }
+        } catch (_: Throwable) {
+            // ignore
+        }
+        return WifiBindTarget(null, null)
     }
 
     private fun runSsdpScan(generation: Long, timeoutMs: Int) {
         val seenLocations = ConcurrentHashMap.newKeySet<String>()
         var socket: MulticastSocket? = null
         var finishReason = "timeout"
+        var packetsReceived = 0
 
         try {
+            val bindTarget = resolveWifiBindTarget()
             socket = MulticastSocket(null).apply {
                 reuseAddress = true
-                bind(InetSocketAddress(0))
-                soTimeout = 400
+                broadcast = true
+                if (bindTarget.ipv4Address != null) {
+                    bind(InetSocketAddress(bindTarget.ipv4Address, 0))
+                } else {
+                    bind(InetSocketAddress(0))
+                }
+                timeToLive = 4
+                soTimeout = 350
             }
-            findWifiMulticastInterface()?.let { netIf ->
+            bindTarget.networkInterface?.let { netIf ->
                 try {
                     socket.networkInterface = netIf
                 } catch (t: Throwable) {
-                    Log.d(TAG, "Could not bind multicast networkInterface: ${t.message}")
+                    Log.d(TAG, "Could not set multicast networkInterface ${netIf.name}: ${t.message}")
                 }
             }
+
+            Log.d(
+                TAG,
+                "SSDP scan started (iface=${bindTarget.networkInterface?.name ?: "default"}, ip=${bindTarget.ipv4Address?.hostAddress ?: "0.0.0.0"})",
+            )
 
             synchronized(lockMonitor) {
                 if (!isScanning.get() || scanGeneration.get() != generation) {
@@ -276,13 +441,14 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
             val targets = listOf(
                 "urn:schemas-upnp-org:device:MediaRenderer:1",
                 "urn:schemas-upnp-org:service:AVTransport:1",
+                "upnp:rootdevice",
                 "ssdp:all",
             )
 
-            sendMSearchBurst(socket, groupAddress, targets)
+            sendMSearchBurst(socket, groupAddress, targets, generation)
 
             val deadlineMs = System.currentTimeMillis() + timeoutMs
-            val secondBurstAt = System.currentTimeMillis() + 350L
+            val secondBurstAt = System.currentTimeMillis() + 650L
             var secondBurstSent = false
             val buffer = ByteArray(4096)
 
@@ -290,7 +456,7 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
                 val now = System.currentTimeMillis()
                 if (!secondBurstSent && now >= secondBurstAt) {
                     secondBurstSent = true
-                    sendMSearchBurst(socket, groupAddress, targets)
+                    sendMSearchBurst(socket, groupAddress, targets, generation)
                 }
                 if (now >= deadlineMs) {
                     break
@@ -299,10 +465,12 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
                 try {
                     val packet = DatagramPacket(buffer, buffer.size)
                     socket.receive(packet)
+                    packetsReceived += 1
                     val raw = String(packet.data, 0, packet.length, Charsets.UTF_8)
                     val headers = parseSsdpHeaders(raw)
                     val location = headers["location"]?.trim()
                     if (!location.isNullOrEmpty() && seenLocations.add(location)) {
+                        Log.d(TAG, "SSDP location found: $location (st=${headers["st"]})")
                         emitDeviceFound(
                             location = location,
                             usn = headers["usn"] ?: "",
@@ -346,8 +514,9 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
                     shouldEmitFinish = true
                 }
             }
+            Log.d(TAG, "SSDP scan finished ($finishReason): packets=$packetsReceived locations=${seenLocations.size}")
             if (shouldEmitFinish) {
-                emitScanFinished(finishReason)
+                emitScanFinished(finishReason, packetsReceived, seenLocations.size)
             }
         }
     }
@@ -356,13 +525,15 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
         socket: MulticastSocket,
         groupAddress: InetAddress,
         targets: List<String>,
+        generation: Long,
     ) {
         for (target in targets) {
+            if (!isScanning.get() || scanGeneration.get() != generation) return
             val payload = buildString {
                 append("M-SEARCH * HTTP/1.1\r\n")
                 append("HOST: ").append(SSDP_ADDRESS).append(":").append(SSDP_PORT).append("\r\n")
                 append("MAN: \"ssdp:discover\"\r\n")
-                append("MX: 3\r\n")
+                append("MX: 2\r\n")
                 append("ST: ").append(target).append("\r\n")
                 append("\r\n")
             }.toByteArray(Charsets.UTF_8)
@@ -370,6 +541,9 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
             try {
                 val packet = DatagramPacket(payload, payload.size, groupAddress, SSDP_PORT)
                 socket.send(packet)
+                Thread.sleep(50L)
+            } catch (_: InterruptedException) {
+                return
             } catch (t: Throwable) {
                 Log.w(TAG, "Failed to send M-SEARCH for $target: ${t.message}")
             }
@@ -404,13 +578,109 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
             .emit(EVENT_DEVICE_FOUND, params)
     }
 
-    private fun emitScanFinished(reason: String) {
+    private fun emitScanFinished(reason: String, packetsReceived: Int, locationsCount: Int) {
         if (!reactApplicationContext.hasActiveReactInstance()) return
         val params = Arguments.createMap().apply {
             putString("reason", reason)
+            putInt("packetsReceived", packetsReceived)
+            putInt("locationsCount", locationsCount)
         }
         reactApplicationContext
             .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
             .emit(EVENT_SCAN_FINISHED, params)
+    }
+
+    private fun emitSystemRoutesChanged() {
+        if (!reactApplicationContext.hasActiveReactInstance()) return
+        reactApplicationContext
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit(EVENT_SYSTEM_ROUTES_CHANGED, Arguments.createMap())
+    }
+}
+
+@RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+private class SystemRouterHelperApi34(
+    context: Context,
+    private val onRoutesUpdated: () -> Unit,
+) {
+    private val router = MediaRouter2.getInstance(context)
+    private val executor = context.mainExecutor
+    private var registered = false
+
+    private val routeCallback = object : MediaRouter2.RouteCallback() {
+        override fun onRoutesUpdated(routes: MutableList<MediaRoute2Info>) {
+            onRoutesUpdated()
+        }
+    }
+
+    private val transferCallback = object : MediaRouter2.TransferCallback() {
+        override fun onTransfer(
+            oldController: MediaRouter2.RoutingController,
+            newController: MediaRouter2.RoutingController,
+        ) {
+            onRoutesUpdated()
+        }
+
+        override fun onStop(controller: MediaRouter2.RoutingController) {
+            onRoutesUpdated()
+        }
+    }
+
+    fun start() {
+        if (registered) return
+        registered = true
+        val pref = RouteDiscoveryPreference.Builder(
+            listOf(MediaRoute2Info.FEATURE_LIVE_AUDIO),
+            false,
+        ).build()
+        router.registerRouteCallback(executor, routeCallback, pref)
+        router.registerTransferCallback(executor, transferCallback)
+    }
+
+    fun stop() {
+        if (!registered) return
+        registered = false
+        runCatching { router.unregisterRouteCallback(routeCallback) }
+        runCatching { router.unregisterTransferCallback(transferCallback) }
+    }
+
+    fun getSystemRoutes(): List<WritableMap> {
+        val selectedIds = router.systemController.selectedRoutes.map { it.id }.toSet()
+        val systemRoutes = router.routes.filter { it.isSystemRoute }
+        val seen = HashSet<String>()
+        val result = ArrayList<WritableMap>(systemRoutes.size)
+        for (route in systemRoutes) {
+            if (!seen.add(route.id)) continue
+            result.add(
+                Arguments.createMap().apply {
+                    putString("id", route.id)
+                    putString("name", route.name.toString())
+                    putString("kind", mapRouteKind(route.type))
+                    putBoolean("isSelected", selectedIds.contains(route.id))
+                },
+            )
+        }
+        return result
+    }
+
+    fun transferToRoute(routeId: String): Boolean {
+        val target = router.routes.firstOrNull { it.isSystemRoute && it.id == routeId }
+            ?: return false
+        router.transferTo(target)
+        return true
+    }
+
+    private fun mapRouteKind(type: Int): String = when (type) {
+        MediaRoute2Info.TYPE_BLUETOOTH_A2DP,
+        MediaRoute2Info.TYPE_BLE_HEADSET,
+        MediaRoute2Info.TYPE_HEARING_AID -> "bluetooth"
+        MediaRoute2Info.TYPE_WIRED_HEADSET,
+        MediaRoute2Info.TYPE_WIRED_HEADPHONES -> "wired"
+        MediaRoute2Info.TYPE_USB_DEVICE,
+        MediaRoute2Info.TYPE_USB_ACCESSORY,
+        MediaRoute2Info.TYPE_USB_HEADSET -> "usb"
+        MediaRoute2Info.TYPE_HDMI -> "hdmi"
+        MediaRoute2Info.TYPE_BUILTIN_SPEAKER -> "speaker"
+        else -> "unknown"
     }
 }

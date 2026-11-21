@@ -17,8 +17,8 @@ import {
   subscribeSsdpScanFinished,
 } from './nativeCastBridge';
 
-const DISCOVERY_TIMEOUT_MS = 5000;
-const DESCRIPTION_FETCH_TIMEOUT_MS = 4000;
+const DISCOVERY_TIMEOUT_MS = 6000;
+const DESCRIPTION_FETCH_TIMEOUT_MS = 5000;
 const SOAP_TIMEOUT_MS = 4000;
 const POLL_SOAP_TIMEOUT_MS = 2500;
 const DISCONNECT_STOP_TIMEOUT_MS = 1500;
@@ -351,10 +351,16 @@ export class DlnaCastAdapter implements CastAdapter {
         { method: 'GET' },
         DESCRIPTION_FETCH_TIMEOUT_MS,
       );
-      if (!response.ok) return null;
+      if (!response.ok) {
+        // eslint-disable-next-line no-console
+        console.warn(`[DLNA] Description fetch HTTP ${response.status} for ${locationUrl}`);
+        return null;
+      }
       const xml = await response.text();
       return parseDeviceDescriptionXml(xml, locationUrl);
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[DLNA] Description fetch failed for ${locationUrl}:`, err);
       return null;
     }
   }

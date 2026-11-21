@@ -30,13 +30,22 @@ jest.mock('../../services/cast/castController', () => ({
 }));
 
 jest.mock('../../services/cast/nativeCastBridge', () => ({
+  getSystemAudioState: jest.fn().mockResolvedValue(null),
   openSystemOutputSwitcher: jest.fn().mockResolvedValue('mediarouter2'),
+  selectSystemAudioRoute: jest.fn().mockResolvedValue(true),
+  setSystemMediaVolume: jest.fn().mockResolvedValue(50),
+  subscribeSystemRoutesChanged: jest.fn().mockReturnValue(jest.fn()),
 }));
 
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 import { castController } from '../../services/cast/castController';
-import { openSystemOutputSwitcher } from '../../services/cast/nativeCastBridge';
+import {
+  getSystemAudioState,
+  openSystemOutputSwitcher,
+  selectSystemAudioRoute,
+  setSystemMediaVolume,
+} from '../../services/cast/nativeCastBridge';
 import { castStore } from '../../store/castStore';
 import { DevicePickerSheet } from '../DevicePickerSheet';
 import { useRoutePickerStore } from '../RoutePicker/useRoutePickerStore';
@@ -125,6 +134,37 @@ describe('DevicePickerSheet', () => {
     rerender(<DevicePickerSheet />);
 
     expect(castController.stopDiscovery).toHaveBeenCalledTimes(1);
+    await flush();
+  });
+
+  it('shows active Bluetooth device name, media volume slider, and lets user switch system routes directly', async () => {
+    (getSystemAudioState as jest.Mock).mockResolvedValue({
+      volumePercent: 40,
+      routes: [
+        { id: 'speaker', name: 'Phone', kind: 'speaker', isSelected: false },
+        { id: 'bt-echo', name: 'Echo Dot-0HP', kind: 'bluetooth', isSelected: true },
+      ],
+    });
+
+    act(() => useRoutePickerStore.getState().open());
+    render(<DevicePickerSheet />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Echo Dot-0HP').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByTestId('local-volume-slider')).toBeTruthy();
+      expect(screen.getByText('40%')).toBeTruthy();
+    });
+
+    expect(screen.getAllByText('Bluetooth audio').length).toBeGreaterThanOrEqual(1);
+
+    fireEvent(screen.getByTestId('local-volume-slider'), 'slidingComplete', 65);
+    expect(setSystemMediaVolume).toHaveBeenCalledWith(65);
+
+    fireEvent.press(screen.getByTestId('system-route-speaker'));
+    await waitFor(() => {
+      expect(selectSystemAudioRoute).toHaveBeenCalledWith('speaker');
+    });
+
     await flush();
   });
 });

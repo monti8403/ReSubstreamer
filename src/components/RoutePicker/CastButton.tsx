@@ -1,8 +1,14 @@
 import MaterialCommunityIcons from '@react-native-vector-icons/material-design-icons/static';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pressable, StyleSheet, Text } from 'react-native';
-import { useAudioRoute, useCast } from 'react-native-queue-player';
+import { type AudioRoute, useAudioRoute, useCast } from 'react-native-queue-player';
 
+import {
+  getSystemAudioState,
+  subscribeSystemRoutesChanged,
+  type SystemAudioRoute,
+} from '../../services/cast/nativeCastBridge';
 import { castStore } from '../../store/castStore';
 import { CAST_BUTTON_PREPOSITION, castButtonLabel, localRouteDisplayName } from './copy';
 import { iconForAudioRoute, iconForCastProtocol } from './iconForRoute';
@@ -21,6 +27,29 @@ export interface CastButtonProps {
  * unified castStore session (DLNA / Chromecast / AirPlay), RNQP useCast(), and
  * the system audio route (useAudioRoute).
  */
+function mapSystemRouteToAudioRoute(route: SystemAudioRoute): AudioRoute {
+  const base = {
+    identifier: route.id,
+    name: route.name,
+    isExternal: route.kind !== 'speaker',
+    isSystemManaged: true,
+  };
+  switch (route.kind) {
+    case 'bluetooth':
+      return { ...base, kind: 'bluetoothA2DP' };
+    case 'wired':
+      return { ...base, kind: 'wired' };
+    case 'usb':
+      return { ...base, kind: 'usb' };
+    case 'hdmi':
+      return { ...base, kind: 'hdmi' };
+    case 'speaker':
+      return { ...base, kind: 'speaker' };
+    default:
+      return { ...base, kind: 'unknown' };
+  }
+}
+
 export function CastButton({ theme }: CastButtonProps) {
   const { t: translate } = useTranslation();
   const t = useRoutePickerTheme(theme);
@@ -28,6 +57,34 @@ export function CastButton({ theme }: CastButtonProps) {
   const audioRoute = useAudioRoute();
   const connectedDevice = castStore((s) => s.connectedDevice);
   const openPicker = useRoutePickerStore((s) => s.open);
+  const [systemSelectedRoute, setSystemSelectedRoute] = useState<SystemAudioRoute | null>(null);
+
+  const syncSystemRoute = useCallback(async (isActive: () => boolean) => {
+    const state = await getSystemAudioState();
+    if (!isActive() || !state || state.routes.length === 0) return;
+    const selected = state.routes.find((r) => r.isSelected) ?? state.routes[0] ?? null;
+    setSystemSelectedRoute(selected);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const isActive = () => active;
+    void syncSystemRoute(isActive);
+    const unsubscribe = subscribeSystemRoutesChanged(() => {
+      void syncSystemRoute(isActive);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [audioRoute.kind, audioRoute.name, syncSystemRoute]);
+
+  const effectiveAudioRoute = useMemo<AudioRoute>(() => {
+    if (systemSelectedRoute) {
+      return mapSystemRouteToAudioRoute(systemSelectedRoute);
+    }
+    return audioRoute;
+  }, [audioRoute, systemSelectedRoute]);
 
   const rnqpCastName =
     snapshot.route.castProtocol !== 'local' && snapshot.route.name.length > 0
@@ -37,7 +94,7 @@ export function CastButton({ theme }: CastButtonProps) {
   const activeProtocol = connectedDevice?.protocol ?? snapshot.route.castProtocol;
   const isCasting = activeCastName != null;
 
-  const rawLabel = castButtonLabel(audioRoute, activeCastName);
+  const rawLabel = castButtonLabel(effectiveAudioRoute, activeCastName);
   const label =
     !isCasting && rawLabel === localRouteDisplayName() && rawLabel === 'This device'
       ? translate('thisDevice', { defaultValue: rawLabel })
@@ -49,7 +106,7 @@ export function CastButton({ theme }: CastButtonProps) {
 
   const iconName = isCasting
     ? iconForCastProtocol(activeProtocol)
-    : iconForAudioRoute(audioRoute);
+    : iconForAudioRoute(effectiveAudioRoute);
   const lineColor = isCasting ? t.accent : t.textSubtle;
 
   return (
