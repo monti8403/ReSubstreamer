@@ -54,6 +54,23 @@ function getRadioAiSettingsSnapshot(): RadioAiSettingsSnapshot {
   return getRadioAiSettingsStore()?.getState() ?? DEFAULT_RADIO_AI_SETTINGS;
 }
 
+interface RadioSkipStoreLike {
+  recordSkip: (track: Pick<Child, 'id' | 'title' | 'artist'>) => void;
+  clearSkip: (songId: string) => void;
+}
+
+function getRadioSkipStore(): RadioSkipStoreLike | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('../store/radioSkipStore') as {
+      radioSkipStore?: { getState: () => RadioSkipStoreLike };
+    };
+    return mod?.radioSkipStore?.getState() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
@@ -63,6 +80,7 @@ const REFILL_THRESHOLD_REMAINING = 3;
 const MAX_RECENT_SEEDS = 3;
 const MIN_COMPLETED_SECONDS = 20;
 const MIN_COMPLETED_RATIO = 0.3;
+const MIN_PROGRESS_FOR_SKIP_SECONDS = 1;
 
 /* ------------------------------------------------------------------ */
 /*  Queue appender bridge (avoids Metro require cycle with playerService) */
@@ -199,10 +217,14 @@ function syncTrackProgressFromState(state: PlayerState): void {
     const outgoing = trackedCurrentTrack;
     if (lastAutoAdvancedTrackId === outgoing.id) {
       lastAutoAdvancedTrackId = null;
+      getRadioSkipStore()?.clearSkip(outgoing.id);
     } else {
       const dur = trackDurationForTrack || outgoing.duration || 0;
       if (isTrackGenuinelyPlayed(maxPositionForTrack, dur)) {
         pushCompletedSeed(outgoing);
+        getRadioSkipStore()?.clearSkip(outgoing.id);
+      } else if (maxPositionForTrack >= MIN_PROGRESS_FOR_SKIP_SECONDS) {
+        getRadioSkipStore()?.recordSkip(outgoing);
       }
     }
 
@@ -413,6 +435,7 @@ export function onTrackAutoAdvanced(outgoingTrack: Child | undefined): void {
     sessionPlayedIds.add(outgoingTrack.id);
     pushCompletedSeed(outgoingTrack);
     lastAutoAdvancedTrackId = outgoingTrack.id;
+    getRadioSkipStore()?.clearSkip(outgoingTrack.id);
   }
   maxPositionForTrack = 0;
   void maybeRefillQueue();

@@ -44,6 +44,7 @@ import { offlineModeStore } from './offlineModeStore';
 import { pendingScrobbleStore } from './pendingScrobbleStore';
 import { playbackSettingsStore } from './playbackSettingsStore';
 import { radioAiSettingsStore } from './radioAiSettingsStore';
+import { radioSkipStore } from './radioSkipStore';
 import { ratingStore } from './ratingStore';
 import { recentSearchStore } from './recentSearchStore';
 import { scanStatusStore } from './scanStatusStore';
@@ -98,6 +99,7 @@ const allStores = [
   pendingScrobbleStore,
   playbackSettingsStore,
   radioAiSettingsStore,
+  radioSkipStore,
   ratingStore,
   recentSearchStore,
   scanStatusStore,

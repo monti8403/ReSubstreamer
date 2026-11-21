@@ -63,6 +63,18 @@ function readRadioAiSettings(): RadioAiSettingsSnapshot {
   }
 }
 
+function getTrackSkipPenalty(songId: string): number {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('../store/radioSkipStore') as {
+      radioSkipStore?: { getState: () => { getSkipPenalty?: (id: string) => number } };
+    };
+    return mod?.radioSkipStore?.getState()?.getSkipPenalty?.(songId) ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /*  Public types & AI boost registry                                   */
 /* ------------------------------------------------------------------ */
@@ -631,6 +643,11 @@ function computeCandidateBonus(
         bonus += 15 * weights.discoveryBonusMultiplier;
       }
     }
+  }
+
+  const skipPenalty = getTrackSkipPenalty(song.id);
+  if (skipPenalty > 0) {
+    bonus -= skipPenalty;
   }
 
   return bonus;

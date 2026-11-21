@@ -514,6 +514,32 @@ describe('AI Boost, Level 4 safety net, anti-repeat, and artist spacing', () => 
     expect(serverOnly.map((t) => t.id)).not.toContain('local-extra');
   });
 
+  it('penalizes only a skipped track without affecting other tracks by the same artist', async () => {
+    const { radioSkipStore } = require('../../store/radioSkipStore');
+    radioSkipStore.getState().reset();
+    radioSkipStore.getState().recordSkip({ id: 'a-skipped', title: 'Skip Me', artist: 'Artist A' });
+
+    try {
+      mockGetSimilarSongs.mockResolvedValue([
+        makeSong('a-skipped', { artist: 'Artist A', genre: 'Trap' }),
+        makeSong('a-keep', { artist: 'Artist A', genre: 'Trap' }),
+      ]);
+
+      const tracks = await getSmartRadioTracks({
+        seedSongs: [makeSong('seed', { genre: 'Trap' })],
+        targetCount: 2,
+        settings: makeSettings({
+          provider: 'disabled',
+          sources: { server: true, localHistory: false, metadata: false, aiBoost: false },
+        }),
+      });
+
+      expect(tracks.map((t) => t.id)).toEqual(['a-keep', 'a-skipped']);
+    } finally {
+      radioSkipStore.getState().reset();
+    }
+  });
+
   it('relaxes excludeIds when library pool is exhausted while still excluding playing seed', async () => {
     mockGetSimilarSongs.mockResolvedValue([
       makeSong('seed'),

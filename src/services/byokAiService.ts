@@ -1074,10 +1074,33 @@ function buildPlaylistPrompts(
   return { systemPrompt, userMessage };
 }
 
+function readRecentSkippedHints(limit = 5): Array<{ title?: string; artist?: string }> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('../store/radioSkipStore') as {
+      radioSkipStore?: {
+        getState: () => {
+          getRecentSkippedTracks?: (n?: number) => Array<{ title?: string; artist?: string }>;
+        };
+      };
+    };
+    const entries = mod?.radioSkipStore?.getState()?.getRecentSkippedTracks?.(limit) ?? [];
+    return entries
+      .filter((e) => e.title || e.artist)
+      .map((e) => ({
+        ...(e.title ? { title: e.title } : {}),
+        ...(e.artist ? { artist: e.artist } : {}),
+      }));
+  } catch {
+    return [];
+  }
+}
+
 function buildRadioBoostPrompts(
   seedSongs: Child[],
   targetCount: number,
   catalog: CompactLibraryCatalog,
+  skippedHints: Array<{ title?: string; artist?: string }> = [],
 ): { systemPrompt: string; userMessage: string } {
   const compactSeeds = seedSongs.slice(0, MAX_SEED_SONGS).map((song) => {
     const entry: Record<string, string | number | string[]> = {};
@@ -1104,12 +1127,18 @@ function buildRadioBoostPrompts(
     '- Stay strictly true to the mood and genre of the seed tracks. Include the seed artist plus sonically similar artists.\n' +
     '- Only pick artists/genres from the library catalog if they genuinely match the seed mood/style; NEVER pad with unrelated popular catalog artists.\n' +
     '- Only put concise mood/subgenre tags in "keywords" (avoid song-title words or vague words like "song", "love", "night").\n' +
+    '- If recently skipped tracks are listed, steer away from those specific songs without blacklisting their whole artist or genre.\n' +
     'Respond ONLY with raw JSON.';
+
+  const skipLine =
+    skippedHints.length > 0
+      ? `\nRecently skipped tracks (avoid repeating those specific tracks): ${JSON.stringify(skippedHints)}`
+      : '';
 
   const userMessage =
     `Seed tracks: ${JSON.stringify(compactSeeds)}\n` +
     `Target track count: ${targetCount}\n` +
-    `Library catalog: ${JSON.stringify(catalog)}`;
+    `Library catalog: ${JSON.stringify(catalog)}${skipLine}`;
 
   return { systemPrompt, userMessage };
 }
@@ -1229,6 +1258,7 @@ export async function testConnection(
 export interface AiCriteriaQueryOptions {
   skipRangeTopUp?: boolean;
   metadataKeywordsOnly?: boolean;
+  varietySampling?: boolean;
 }
 
 /**
@@ -1305,10 +1335,14 @@ export async function querySongsByAiCriteria(
     const primaryWhere = primaryFrags.map((f) => f.sql).join(' OR ');
     const primaryParams = primaryFrags.flatMap((f) => f.params);
 
+    const orderSql = options?.varietySampling
+      ? `ORDER BY (${scoreSql}) DESC, RANDOM() `
+      : `ORDER BY (${scoreSql}) DESC, COALESCE(s.play_count, 0) DESC, s.id ASC `;
+
     const primaryRows = await db.getAllAsync<SongListRow>(
       `SELECT ${SONG_LIST_COLS_S} FROM songs s ` +
         `WHERE ${baseWhere} AND (${primaryWhere}) ` +
-        `ORDER BY (${scoreSql}) DESC, COALESCE(s.play_count, 0) DESC, s.id ASC ` +
+        orderSql +
         'LIMIT ?',
       [...baseParams, ...primaryParams, ...scoreParams, candidateCap],
     );
@@ -1350,11 +1384,15 @@ export async function querySongsByAiCriteria(
 
     await hydrateSongRows(db, candidateRows);
 
+    const useVariety = Boolean(options?.varietySampling);
     const scored = candidateRows
-      .map((row) => ({
-        row,
-        score: scoreSongRow(row, norm, Boolean(options?.metadataKeywordsOnly)),
-      }))
+      .map((row) => {
+        const base = scoreSongRow(row, norm, Boolean(options?.metadataKeywordsOnly));
+        return {
+          row,
+          score: useVariety ? base + (Math.random() - 0.5) * 18 : base,
+        };
+      })
       .sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         const playDiff = (b.row.play_count ?? 0) - (a.row.play_count ?? 0);
@@ -1493,10 +1531,12 @@ export async function boostRadioCandidates(
       buildCompactLibraryCatalog(),
       hydrateSeedsForPrompt(seedSongs),
     ]);
+    const skippedHints = readRecentSkippedHints(5);
     const { systemPrompt, userMessage } = buildRadioBoostPrompts(
       enrichedSeeds,
       safeTarget,
       catalog,
+      skippedHints,
     );
     const callResult = await callAiProvider(validation.settings, systemPrompt, userMessage, false);
     if (!callResult.ok) return [];
@@ -1512,6 +1552,7 @@ export async function boostRadioCandidates(
     return await querySongsByAiCriteria(criteria, safeTarget, effectiveExcludeIds, undefined, {
       skipRangeTopUp: true,
       metadataKeywordsOnly: true,
+      varietySampling: true,
     });
   } catch {
     return [];
