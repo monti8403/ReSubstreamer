@@ -30,13 +30,17 @@ import {
   getRandomSongsFiltered,
   getSimilarSongs,
   getSimilarSongs2,
+  getSonicSimilarTracks,
   getTopSongs,
+  isSonicSimilarityAvailable,
+  type SonicTrackMatch,
 } from './subsonicService';
 
 const DEFAULT_RADIO_AI_SETTINGS: RadioAiSettingsSnapshot = {
   infiniteAutoplay: true,
   radioMode: 'mood',
   sources: {
+    sonicSimilarity: true,
     server: true,
     localHistory: true,
     metadata: true,
@@ -95,13 +99,27 @@ export type AiBoostProvider = (
   excludeIds?: Set<string>,
 ) => Promise<Child[]>;
 
+export type AiRerankProvider = (
+  seedSongs: Child[],
+  candidates: Child[],
+  targetCount?: number,
+) => Promise<Child[]>;
+
 let registeredAiBoostProvider: AiBoostProvider | null = null;
+let registeredAiRerankProvider: AiRerankProvider | null = null;
 
 /** Register or clear an override AI boost candidate provider (e.g. for tests). */
 export function registerSmartRadioAiBoostProvider(
   provider: AiBoostProvider | null,
 ): void {
   registeredAiBoostProvider = provider;
+}
+
+/** Register or clear an override AI rerank provider for sonic pools (e.g. for tests). */
+export function registerSmartRadioAiRerankProvider(
+  provider: AiRerankProvider | null,
+): void {
+  registeredAiRerankProvider = provider;
 }
 
 function resolveAiBoostProvider(): AiBoostProvider | null {
@@ -115,6 +133,21 @@ function resolveAiBoostProvider(): AiBoostProvider | null {
     };
     return typeof mod?.boostRadioCandidates === 'function'
       ? mod.boostRadioCandidates
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveAiRerankProvider(): AiRerankProvider | null {
+  if (registeredAiRerankProvider) return registeredAiRerankProvider;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('./byokAiService') as {
+      rerankSonicCandidates?: AiRerankProvider;
+    };
+    return typeof mod?.rerankSonicCandidates === 'function'
+      ? mod.rerankSonicCandidates
       : null;
   } catch {
     return null;
@@ -170,6 +203,8 @@ export function extractPrimaryArtistName(
 /* ------------------------------------------------------------------ */
 
 interface ModeWeights {
+  sonicSimilarityMax: number;
+  sonicSimilarityMin: number;
   serverSimilarSong: number;
   serverSimilarArtist: number;
   serverLevel1TopSongs: number;
@@ -192,6 +227,8 @@ interface ModeWeights {
 
 const MODE_WEIGHTS: Record<RadioMode, ModeWeights> = {
   mood: {
+    sonicSimilarityMax: 120,
+    sonicSimilarityMin: 78,
     serverSimilarSong: 100,
     serverSimilarArtist: 65,
     serverLevel1TopSongs: 45,
@@ -212,6 +249,8 @@ const MODE_WEIGHTS: Record<RadioMode, ModeWeights> = {
     discoveryBonusMultiplier: 0.35,
   },
   faithful: {
+    sonicSimilarityMax: 135,
+    sonicSimilarityMin: 88,
     serverSimilarSong: 120,
     serverSimilarArtist: 95,
     serverLevel1TopSongs: 70,
@@ -232,6 +271,8 @@ const MODE_WEIGHTS: Record<RadioMode, ModeWeights> = {
     discoveryBonusMultiplier: 0,
   },
   balanced: {
+    sonicSimilarityMax: 125,
+    sonicSimilarityMin: 82,
     serverSimilarSong: 105,
     serverSimilarArtist: 75,
     serverLevel1TopSongs: 60,
@@ -252,6 +293,8 @@ const MODE_WEIGHTS: Record<RadioMode, ModeWeights> = {
     discoveryBonusMultiplier: 0.25,
   },
   discovery: {
+    sonicSimilarityMax: 115,
+    sonicSimilarityMin: 76,
     serverSimilarSong: 85,
     serverSimilarArtist: 70,
     serverLevel1TopSongs: 45,
@@ -555,6 +598,7 @@ function buildSeedProfile(seedSongs: readonly Child[]): SeedProfile {
 /* ------------------------------------------------------------------ */
 
 type RadioSourceTag =
+  | 'sonicSimilarity'
   | 'serverSimilarSong'
   | 'serverSimilarArtist'
   | 'serverLevel1TopSongs'
@@ -720,6 +764,23 @@ class CandidatePool {
     return this.entries.size;
   }
 
+  /**
+   * Apply a light rank-order nudge from BYOK AI reranking without overwriting
+   * the underlying acoustic similarity or local corroboration scores.
+   */
+  applyRerankOrder(reranked: readonly Child[]): void {
+    if (!reranked || reranked.length === 0) return;
+    const total = reranked.length;
+    for (let i = 0; i < total; i++) {
+      const id = reranked[i]?.id;
+      if (!id) continue;
+      const entry = this.entries.get(id);
+      if (!entry) continue;
+      const nudge = Math.max(0, Math.round(14 * (1 - i / total)));
+      entry.score += nudge;
+    }
+  }
+
   getRankedPartition(randomize = false): { fresh: Child[]; repeated: Child[] } {
     const ranked = randomize
       ? Array.from(this.entries.values())
@@ -751,6 +812,52 @@ class CandidatePool {
       }
     }
     return { fresh, repeated };
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Level 0 — OpenSubsonic sonicSimilarity                             */
+/* ------------------------------------------------------------------ */
+
+function isTrackSeed(seed: Child): boolean {
+  if (!seed?.id || seed.isDir) return false;
+  if (seed.type && seed.type !== 'music') return false;
+  return true;
+}
+
+async function collectLevel0SonicSimilarity(
+  primarySeed: Child,
+  targetCount: number,
+  pool: CandidatePool,
+  weights: ModeWeights,
+): Promise<SonicTrackMatch[]> {
+  if (!isTrackSeed(primarySeed)) return [];
+  if (
+    typeof isSonicSimilarityAvailable !== 'function' ||
+    typeof getSonicSimilarTracks !== 'function' ||
+    !isSonicSimilarityAvailable()
+  ) {
+    return [];
+  }
+
+  try {
+    const requestCount = Math.max(targetCount, 40);
+    const matches = await getSonicSimilarTracks(primarySeed.id, requestCount);
+    if (!matches || matches.length === 0) return [];
+
+    const range = Math.max(1, weights.sonicSimilarityMax - weights.sonicSimilarityMin);
+    for (let i = 0; i < matches.length; i++) {
+      const match = matches[i];
+      if (!match?.song?.id) continue;
+      const baseScore =
+        match.similarity >= 0
+          ? weights.sonicSimilarityMin + Math.max(0, Math.min(1, match.similarity)) * range
+          : weights.sonicSimilarityMax * 0.9 - Math.min(20, i * 0.5);
+      pool.add(match.song, baseScore, 'sonicSimilarity');
+    }
+    return matches;
+  } catch {
+    return [];
   }
 }
 
@@ -1491,6 +1598,10 @@ export async function getSmartRadioTracks(req: SmartRadioRequest): Promise<Child
   }
 
   const settings = req.settings ?? readRadioAiSettings();
+  const sources = {
+    ...settings.sources,
+    sonicSimilarity: settings.sources?.sonicSimilarity ?? true,
+  };
   const isOffline = Boolean(req.downloadedOnly || offlineModeStore.getState().offlineMode);
   const weights = MODE_WEIGHTS[settings.radioMode] ?? MODE_WEIGHTS.balanced;
   const randomize = Boolean(req.randomize);
@@ -1503,38 +1614,69 @@ export async function getSmartRadioTracks(req: SmartRadioRequest): Promise<Child
     settings.sessionAntiRepeat,
   );
 
-  // Priority 1: BYOK AI Engine when enabled online (stops here if target is met)
-  if (
-    settings.sources.aiBoost &&
-    settings.provider !== 'disabled' &&
-    !isOffline
-  ) {
-    const aiBoostFn = resolveAiBoostProvider();
-    if (aiBoostFn) {
-      try {
-        const boosted = await aiBoostFn(
-          hydratedSeeds,
-          fetchCount,
-          req.excludeIds,
-        );
-        pool.addMany(boosted, weights.aiBoost, 'aiBoost', 0.4);
-      } catch {
-        // Safe try/catch — AI provider failure never breaks radio playback
+  // Level 0: OpenSubsonic sonicSimilarity (online, capability advertised, song seed)
+  let sonicMatches: SonicTrackMatch[] = [];
+  if (sources.sonicSimilarity && !isOffline) {
+    sonicMatches = await collectLevel0SonicSimilarity(
+      primarySeed,
+      fetchCount,
+      pool,
+      weights,
+    );
+  }
+
+  let ranLocalHistoryForSonic = false;
+  if (sonicMatches.length > 0 && sources.localHistory && hasAsyncDb && db) {
+    await collectLevel2LocalHistory(db, profile, fetchCount, isOffline, pool, weights);
+    ranLocalHistoryForSonic = true;
+  }
+
+  // Level 1: BYOK AI Engine
+  // - When sonicSimilarity populated the acoustic pool, only run BYOK AI as a lightweight
+  //   reranker in `discovery` mode (no extra LLM latency on mood/faithful/balanced refills).
+  // - Otherwise keep BYOK AI at the top of the non-sonic cascade.
+  if (sources.aiBoost && settings.provider !== 'disabled' && !isOffline) {
+    if (sonicMatches.length > 0) {
+      if (settings.radioMode === 'discovery') {
+        const aiRerankFn = resolveAiRerankProvider();
+        if (aiRerankFn) {
+          try {
+            const sonicSongs = sonicMatches.map((m) => m.song);
+            const reranked = await aiRerankFn(hydratedSeeds, sonicSongs, fetchCount);
+            pool.applyRerankOrder(reranked);
+          } catch {
+            // Safe try/catch — AI rerank failure never breaks radio playback
+          }
+        }
+      }
+    } else {
+      const aiBoostFn = resolveAiBoostProvider();
+      if (aiBoostFn) {
+        try {
+          const boosted = await aiBoostFn(
+            hydratedSeeds,
+            fetchCount,
+            req.excludeIds,
+          );
+          pool.addMany(boosted, weights.aiBoost, 'aiBoost', 0.4);
+        } catch {
+          // Safe try/catch — AI provider failure never breaks radio playback
+        }
       }
     }
   }
 
-  // Priority 2: Server Subsonic similarity (only if Priority 1 is off/short; stops here if target is met)
-  if (pool.usableCount() < targetCount && settings.sources.server && !isOffline) {
+  // Level 2: Standard Subsonic server similarity (fallback when Level 0/1 short)
+  if (pool.usableCount() < targetCount && sources.server && !isOffline) {
     await collectLevel1Server(primarySeed, fetchCount, pool, weights);
   }
 
-  // Priority 3: Offline SQLite personal co-occurrence + mood/metadata affinity (only if upstream tiers are short/offline)
+  // Level 3: Offline SQLite personal co-occurrence + mood/metadata affinity
   if (pool.usableCount() < targetCount && hasAsyncDb && db) {
-    if (settings.sources.localHistory) {
+    if (sources.localHistory && !ranLocalHistoryForSonic) {
       await collectLevel2LocalHistory(db, profile, fetchCount, isOffline, pool, weights);
     }
-    if (settings.sources.metadata) {
+    if (sources.metadata) {
       await collectLevel3Metadata(db, profile, fetchCount, isOffline, pool, weights);
     }
   }
@@ -1548,7 +1690,7 @@ export async function getSmartRadioTracks(req: SmartRadioRequest): Promise<Child
       profile,
       targetCount,
       isOffline,
-      settings,
+      { ...settings, sources },
       pool,
       weights,
     );

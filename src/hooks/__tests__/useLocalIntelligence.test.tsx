@@ -14,6 +14,8 @@ const mockGetHourlyDaylist = jest.fn<Promise<HourlyDaylist>, []>();
 const mockGetOnRepeat = jest.fn<Promise<Child[]>, []>();
 const mockGetForgottenGems = jest.fn<Promise<Child[]>, []>();
 const mockGetQuickMoodChips = jest.fn<Promise<QuickMoodChip[]>, []>();
+const mockGetDynamicMixSummaries = jest.fn().mockResolvedValue([]);
+const mockResolveDynamicMix = jest.fn().mockResolvedValue(null);
 
 jest.mock('../../services/localIntelligenceService', () => ({
   getJumpBackIn: () => mockGetJumpBackIn(),
@@ -21,6 +23,8 @@ jest.mock('../../services/localIntelligenceService', () => ({
   getOnRepeat: () => mockGetOnRepeat(),
   getForgottenGems: () => mockGetForgottenGems(),
   getQuickMoodChips: () => mockGetQuickMoodChips(),
+  getDynamicMixSummaries: () => mockGetDynamicMixSummaries(),
+  resolveDynamicMix: (...args: any[]) => mockResolveDynamicMix(...args),
 }));
 
 import { useLocalIntelligence } from '../useLocalIntelligence';

@@ -20,6 +20,7 @@ export type RadioMode = 'mood' | 'faithful' | 'balanced' | 'discovery';
 export type AiProvider = 'disabled' | 'gemini' | 'groq' | 'openai' | 'custom';
 
 export interface RadioSources {
+  sonicSimilarity: boolean;
   server: boolean;
   localHistory: boolean;
   metadata: boolean;
@@ -86,6 +87,7 @@ export const AI_PROVIDERS: readonly AiProvider[] = [
 const PERSIST_KEY = 'substreamer-radio-ai-settings';
 
 const DEFAULT_SOURCES: RadioSources = {
+  sonicSimilarity: true,
   server: true,
   localHistory: true,
   metadata: true,
@@ -224,6 +226,9 @@ export const radioAiSettingsStore = create<RadioAiSettingsState>()(
       storage: createJSONStorage(() => kvStorage),
       onRehydrateStorage: () => (state) => {
         if (!state) return;
+        if (state.sources?.sonicSimilarity === undefined) {
+          state.setSource('sonicSimilarity', true);
+        }
         if (state.provider === 'disabled' && state.sources?.aiBoost) {
           state.setSource('aiBoost', false);
         }

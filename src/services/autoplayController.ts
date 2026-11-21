@@ -5,13 +5,22 @@
  */
 import type { Child } from 'subsonic-api';
 
+import { offlineModeStore } from '../store/offlineModeStore';
 import { playbackSettingsStore } from '../store/playbackSettingsStore';
 import { playerStore, type PlayerState } from '../store/playerStore';
+import { getDb } from '../store/persistence/db';
 import type {
   RadioAiSettingsSnapshot,
   RadioAiSettingsState,
 } from '../store/radioAiSettingsStore';
+import { withTimeout } from '../utils/withTimeout';
+import {
+  getForgottenGems,
+  getQuickMoodChips,
+  getSongsForMoodChip,
+} from './localIntelligenceService';
 import { getSmartRadioTracks } from './smartRadioService';
+import { findSonicPath, isSonicSimilarityAvailable } from './subsonicService';
 
 interface RadioAiSettingsStoreLike {
   getState: () => RadioAiSettingsSnapshot;
@@ -24,6 +33,7 @@ const DEFAULT_RADIO_AI_SETTINGS: RadioAiSettingsSnapshot = {
   infiniteAutoplay: true,
   radioMode: 'mood',
   sources: {
+    sonicSimilarity: true,
     server: true,
     localHistory: true,
     metadata: true,
@@ -81,6 +91,11 @@ const MAX_RECENT_SEEDS = 3;
 const MIN_COMPLETED_SECONDS = 20;
 const MIN_COMPLETED_RATIO = 0.3;
 const MIN_PROGRESS_FOR_SKIP_SECONDS = 1;
+const SONIC_PATH_MIN_SESSION_TRACKS = 15;
+const SONIC_PATH_COOLDOWN_TRACKS = 15;
+const SONIC_PATH_WINDOW_SIZE = 8;
+const SONIC_PATH_COUNT = 12;
+const SONIC_PATH_TIMEOUT_MS = 2500;
 
 /* ------------------------------------------------------------------ */
 /*  Queue appender bridge (avoids Metro require cycle with playerService) */
@@ -119,6 +134,8 @@ let sessionEpoch = 0;
 
 const sessionPlayedIds = new Set<string>();
 let recentCompletedSeeds: Child[] = [];
+let recentSessionTracks: Child[] = [];
+let lastSonicPathAtSessionSize = 0;
 let lastAttemptedRefillKey: string | null = null;
 
 // Per-track progress tracker for genuine-completion detection on manual skips
@@ -158,6 +175,156 @@ function pushCompletedSeed(track: Child | null | undefined): void {
   ].slice(0, MAX_RECENT_SEEDS);
 }
 
+function pushRecentSessionTrack(track: Child | null | undefined): void {
+  if (!track?.id) return;
+  if (recentSessionTracks[0]?.id === track.id) return;
+  recentSessionTracks = [
+    track,
+    ...recentSessionTracks.filter((t) => t.id !== track.id),
+  ].slice(0, SONIC_PATH_WINDOW_SIZE);
+}
+
+function isMicroClusterStagnating(recentTracks: readonly Child[]): boolean {
+  if (recentTracks.length < 6) return false;
+  const artists = new Set<string>();
+  const genres = new Set<string>();
+  let tracksWithGenre = 0;
+
+  for (const t of recentTracks) {
+    const artist = t.artist?.trim().toLowerCase();
+    if (artist) artists.add(artist);
+    const genre = t.genre?.trim().toLowerCase();
+    if (genre) {
+      genres.add(genre);
+      tracksWithGenre += 1;
+    }
+  }
+
+  if (artists.size > 0 && artists.size <= 2) return true;
+  if (tracksWithGenre >= 4 && genres.size <= 1) return true;
+  return false;
+}
+
+async function selectSonicBridgeTarget(
+  currentTrack: Child,
+  excludeIds: ReadonlySet<string>,
+): Promise<Child | null> {
+  try {
+    const chips = await getQuickMoodChips(8);
+    if (chips.length > 0) {
+      const currentGenreLower = currentTrack.genre?.trim().toLowerCase();
+      const sortedChips = [...chips].sort((a, b) => {
+        const aSame = a.kind === 'genre' && a.genre?.toLowerCase() === currentGenreLower ? 1 : 0;
+        const bSame = b.kind === 'genre' && b.genre?.toLowerCase() === currentGenreLower ? 1 : 0;
+        return aSame - bSame;
+      });
+      for (const chip of sortedChips.slice(0, 3)) {
+        const chipSongs = await getSongsForMoodChip(chip, 15);
+        const match = chipSongs.find(
+          (s) => s?.id && s.id !== currentTrack.id && !excludeIds.has(s.id),
+        );
+        if (match) return match;
+      }
+    }
+  } catch {
+    // Fall through to forgotten gems / starred fallback
+  }
+
+  try {
+    const gems = await getForgottenGems(15);
+    const gemMatch = gems.find(
+      (s) => s?.id && s.id !== currentTrack.id && !excludeIds.has(s.id),
+    );
+    if (gemMatch) return gemMatch;
+  } catch {
+    // Fall through to starred SQLite fallback
+  }
+
+  try {
+    const db = getDb();
+    if (db && typeof db.getAllAsync === 'function') {
+      const rows = await db.getAllAsync<{ id: string; title: string | null; artist: string | null }>(
+        `SELECT id, title, artist FROM songs
+          WHERE starred IS NOT NULL AND id <> ?
+          ORDER BY RANDOM() LIMIT 10`,
+        [currentTrack.id],
+      );
+      const hit = rows?.find((r) => r?.id && !excludeIds.has(r.id));
+      if (hit) {
+        return {
+          id: hit.id,
+          title: hit.title ?? hit.id,
+          artist: hit.artist ?? undefined,
+          isDir: false,
+        } as Child;
+      }
+    }
+  } catch {
+    // Best-effort bridge target selection
+  }
+
+  return null;
+}
+
+function canAttemptSonicBridge(
+  currentTrack: Child | null | undefined,
+  radioSettings: RadioAiSettingsSnapshot,
+): boolean {
+  if (
+    radioSettings.radioMode !== 'balanced' &&
+    radioSettings.radioMode !== 'discovery'
+  ) {
+    return false;
+  }
+  if (radioSettings.sources?.sonicSimilarity === false) return false;
+  if (offlineModeStore.getState().offlineMode) return false;
+  if (
+    typeof isSonicSimilarityAvailable !== 'function' ||
+    typeof findSonicPath !== 'function' ||
+    !isSonicSimilarityAvailable()
+  ) {
+    return false;
+  }
+  if (!currentTrack?.id || currentTrack.isDir) return false;
+  if (sessionPlayedIds.size < SONIC_PATH_MIN_SESSION_TRACKS) return false;
+  if (sessionPlayedIds.size - lastSonicPathAtSessionSize < SONIC_PATH_COOLDOWN_TRACKS) {
+    return false;
+  }
+  return isMicroClusterStagnating(recentSessionTracks);
+}
+
+async function tryBuildSonicBridge(
+  currentTrack: Child,
+  excludeIds: ReadonlySet<string>,
+): Promise<Child[] | null> {
+  const target = await selectSonicBridgeTarget(currentTrack, excludeIds);
+  if (!target?.id) return null;
+
+  const pathResult = await withTimeout(
+    () => findSonicPath(currentTrack.id, target.id, SONIC_PATH_COUNT),
+    SONIC_PATH_TIMEOUT_MS,
+  );
+  if (pathResult === 'timeout' || !Array.isArray(pathResult) || pathResult.length === 0) {
+    return null;
+  }
+
+  // Spec guarantees startSongId as first element and endSongId as last;
+  // strip currentTrack.id, already-played session tracks, and duplicates.
+  const seen = new Set<string>(excludeIds);
+  seen.add(currentTrack.id);
+  const bridge: Child[] = [];
+  for (const match of pathResult) {
+    const song = match?.song;
+    if (!song?.id || seen.has(song.id)) continue;
+    seen.add(song.id);
+    bridge.push(song);
+  }
+
+  if (bridge.length < 2) return null;
+  lastSonicPathAtSessionSize = sessionPlayedIds.size;
+  return bridge;
+}
+
 function buildSeedSongs(
   currentTrack: Child | null,
   completedSeeds: readonly Child[],
@@ -195,6 +362,7 @@ function syncTrackProgressFromState(state: PlayerState): void {
   const incoming = state.currentTrack;
   if (incoming?.id) {
     sessionPlayedIds.add(incoming.id);
+    pushRecentSessionTrack(incoming);
 
     if (!trackedCurrentTrack) {
       trackedCurrentTrack = incoming;
@@ -285,13 +453,19 @@ async function maybeRefillQueue(): Promise<void> {
   lastAttemptedRefillKey = attemptKey;
 
   try {
-    const newTracks = await getSmartRadioTracks({
-      seedSongs,
-      targetCount: AUTOPLAY_REFILL_COUNT,
-      excludeIds,
-      settings: radioSettings,
-      randomize: true,
-    });
+    const bridgeSeed = currentTrack ?? seedSongs[0];
+    let newTracks: Child[] | null = canAttemptSonicBridge(bridgeSeed, radioSettings)
+      ? await tryBuildSonicBridge(bridgeSeed, excludeIds)
+      : null;
+    if (!newTracks || newTracks.length === 0) {
+      newTracks = await getSmartRadioTracks({
+        seedSongs,
+        targetCount: AUTOPLAY_REFILL_COUNT,
+        excludeIds,
+        settings: radioSettings,
+        randomize: true,
+      });
+    }
 
     if (!newTracks || newTracks.length === 0) return;
 
@@ -414,10 +588,15 @@ export function onManualQueueStart(startTrack: Child, queue: Child[]): void {
   sessionEpoch += 1;
   sessionPlayedIds.clear();
   recentCompletedSeeds = [];
+  recentSessionTracks = [];
+  lastSonicPathAtSessionSize = 0;
   lastAttemptedRefillKey = null;
   lastAutoAdvancedTrackId = null;
 
-  if (startTrack?.id) sessionPlayedIds.add(startTrack.id);
+  if (startTrack?.id) {
+    sessionPlayedIds.add(startTrack.id);
+    pushRecentSessionTrack(startTrack);
+  }
   for (const track of queue) {
     if (track?.id) sessionPlayedIds.add(track.id);
   }
@@ -433,6 +612,7 @@ export function onManualQueueStart(startTrack: Child, queue: Child[]): void {
 export function onTrackAutoAdvanced(outgoingTrack: Child | undefined): void {
   if (outgoingTrack?.id) {
     sessionPlayedIds.add(outgoingTrack.id);
+    pushRecentSessionTrack(outgoingTrack);
     pushCompletedSeed(outgoingTrack);
     lastAutoAdvancedTrackId = outgoingTrack.id;
     getRadioSkipStore()?.clearSkip(outgoingTrack.id);
@@ -456,6 +636,8 @@ export function resetAutoplaySession(): void {
   sessionEpoch += 1;
   sessionPlayedIds.clear();
   recentCompletedSeeds = [];
+  recentSessionTracks = [];
+  lastSonicPathAtSessionSize = 0;
   isRadioSeedLoading = false;
   lastAttemptedRefillKey = null;
   trackedCurrentTrack = null;

@@ -1558,3 +1558,92 @@ export async function boostRadioCandidates(
     return [];
   }
 }
+
+/**
+ * Lightweight reranker for an already-fetched `sonicSimilarity` candidate pool
+ * (primarily used in `discovery` mode when `sources.aiBoost` is enabled).
+ * Returns the reranked list on success, or falls back silently to `candidates`
+ * on any failure, timeout, disabled provider, or offline state.
+ */
+export async function rerankSonicCandidates(
+  seedSongs: Child[],
+  candidates: Child[],
+  targetCount?: number,
+): Promise<Child[]> {
+  if (!Array.isArray(candidates) || candidates.length <= 1) {
+    return candidates ?? [];
+  }
+  const safeLimit = targetCount ? Math.max(1, Math.min(Math.floor(targetCount), candidates.length)) : candidates.length;
+
+  if (offlineModeStore.getState().offlineMode) {
+    return candidates.slice(0, safeLimit);
+  }
+
+  const resolved = await resolveAiSettings();
+  const validation = validateAiSettings(resolved);
+  if (!validation.ok) {
+    return candidates.slice(0, safeLimit);
+  }
+
+  try {
+    const pool = candidates.slice(0, 35);
+    const seedList = seedSongs
+      .slice(0, 4)
+      .map((s) => `${s.artist ?? 'Unknown'} - ${s.title ?? 'Unknown'}${s.genre ? ` [${s.genre}]` : ''}`)
+      .join('; ');
+    const compactCandidates = pool.map((c) => ({
+      id: c.id,
+      t: c.title,
+      a: c.artist,
+      ...(c.genre ? { g: c.genre } : {}),
+      ...(c.year ? { y: c.year } : {}),
+    }));
+    const skippedHints = readRecentSkippedHints(5);
+    const skipLine = skippedHints.length > 0 ? `\nRecently skipped (demote similar): ${skippedHints.join('; ')}` : '';
+
+    const systemPrompt =
+      'You are a music radio curator reranking acoustically similar tracks for discovery variety and smooth flow. ' +
+      'Respond ONLY with valid JSON: {"rankedIds":["id1","id2",...]}. Use ONLY IDs from the provided candidates.';
+    const userMessage =
+      `Seed(s): ${seedList || 'Unknown'}${skipLine}\n` +
+      `Candidates: ${JSON.stringify(compactCandidates)}\n` +
+      'Return JSON {"rankedIds":[...]} ordering the best candidates first.';
+
+    const callResult = await callAiProvider(validation.settings, systemPrompt, userMessage, false);
+    if (!callResult.ok) {
+      return candidates.slice(0, safeLimit);
+    }
+
+    const parsed = parseJsonObject(callResult.text);
+    const rankedRaw = parsed?.rankedIds;
+    if (!Array.isArray(rankedRaw) || rankedRaw.length === 0) {
+      return candidates.slice(0, safeLimit);
+    }
+
+    const byId = new Map<string, Child>();
+    for (const c of candidates) {
+      if (c?.id) byId.set(c.id, c);
+    }
+
+    const seen = new Set<string>();
+    const reranked: Child[] = [];
+    for (const id of rankedRaw) {
+      if (typeof id !== 'string' || seen.has(id)) continue;
+      const match = byId.get(id);
+      if (!match) continue;
+      seen.add(id);
+      reranked.push(match);
+    }
+
+    for (const c of candidates) {
+      if (c?.id && !seen.has(c.id)) {
+        seen.add(c.id);
+        reranked.push(c);
+      }
+    }
+
+    return reranked.slice(0, safeLimit);
+  } catch {
+    return candidates.slice(0, safeLimit);
+  }
+}

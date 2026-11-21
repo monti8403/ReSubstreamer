@@ -1661,3 +1661,60 @@ describe('legacy auth', () => {
     expect(url.searchParams.has('s')).toBe(false);
   });
 });
+
+describe('OpenSubsonic sonicSimilarity endpoints', () => {
+  it('calls getSonicSimilarTracks with id and count query parameters', async () => {
+    const { mockFetch, calls } = createMockFetch({
+      status: 'ok',
+      version: '1.16.1',
+      openSubsonic: true,
+      sonicMatch: [
+        { entry: { id: 's-2', title: 'Track 2', isDir: false }, similarity: 0.92 },
+      ],
+    });
+    const api = new SubsonicAPI({ ...PASSWORD_CONFIG, fetch: mockFetch });
+    const res = await api.getSonicSimilarTracks({ id: 's-1', count: 30 });
+
+    const url = parseUrl(calls[0].url);
+    expect(url.pathname).toBe('/rest/getSonicSimilarTracks.view');
+    expect(url.searchParams.get('id')).toBe('s-1');
+    expect(url.searchParams.get('count')).toBe('30');
+    expect(Array.isArray(res.sonicMatch)).toBe(true);
+  });
+
+  it('calls findSonicPath with startSongId, endSongId, and count', async () => {
+    const { mockFetch, calls } = createMockFetch({
+      status: 'ok',
+      version: '1.16.1',
+      openSubsonic: true,
+      sonicMatch: [
+        { entry: { id: 's-start', title: 'Start', isDir: false }, similarity: 1.0 },
+        { entry: { id: 's-mid', title: 'Mid', isDir: false }, similarity: 0.78 },
+        { entry: { id: 's-end', title: 'End', isDir: false }, similarity: 0.54 },
+      ],
+    });
+    const api = new SubsonicAPI({ ...PASSWORD_CONFIG, fetch: mockFetch });
+    const res = await api.findSonicPath({ startSongId: 's-start', endSongId: 's-end', count: 15 });
+
+    const url = parseUrl(calls[0].url);
+    expect(url.pathname).toBe('/rest/findSonicPath.view');
+    expect(url.searchParams.get('startSongId')).toBe('s-start');
+    expect(url.searchParams.get('endSongId')).toBe('s-end');
+    expect(url.searchParams.get('count')).toBe('15');
+    expect((res.sonicMatch as any[])).toHaveLength(3);
+  });
+
+  it('attaches HTTP status code on non-ok errors (e.g. 404)', async () => {
+    const mockFetch = jest.fn(async () => ({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      json: async () => ({}),
+    })) as unknown as typeof fetch;
+
+    const api = new SubsonicAPI({ ...PASSWORD_CONFIG, fetch: mockFetch });
+    await expect(api.getSonicSimilarTracks({ id: 's-1' })).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+});

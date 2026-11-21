@@ -1999,3 +1999,26 @@ export const imageDownloadQueue = sqliteTable(
     cycleIdx: index('idx_image_download_queue_cycle').on(t.cycleId),
   }),
 );
+
+/**
+ * Cached resolved dynamic mixes (Daily Mix clusters, Enhanced Hourly Daylist,
+ * Rediscovery Bridge) for 0ms Home rendering and lazy expansion.
+ */
+export const dynamicMixCache = sqliteTable(
+  'dynamic_mix_cache',
+  {
+    mixKey: text('mix_key').primaryKey(),
+    mixType: text('mix_type'),
+    title: text('title'),
+    subtitle: text('subtitle'),
+    seedIdsJson: text('seed_ids_json'),
+    songIdsJson: text('song_ids_json'),
+    source: text('source'),
+    updatedAt: integer('updated_at'),
+    expiresAt: integer('expires_at'),
+  },
+  (t) => ({
+    mixTypeIdx: index('idx_dynamic_mix_cache_type').on(t.mixType),
+    expiresIdx: index('idx_dynamic_mix_cache_expires').on(t.expiresAt),
+  }),
+);

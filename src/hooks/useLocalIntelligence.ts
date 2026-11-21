@@ -2,14 +2,19 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Child } from 'subsonic-api';
 
 import {
+  getDynamicMixSummaries,
   getForgottenGems,
   getHourlyDaylist,
   getJumpBackIn,
   getOnRepeat,
   getQuickMoodChips,
+  resolveDynamicMix as resolveDynamicMixService,
+  type DynamicMixSummary,
   type HourlyDaylist,
   type JumpBackInItem,
   type QuickMoodChip,
+  type ResolveDynamicMixOptions,
+  type ResolvedDynamicMix,
 } from '../services/localIntelligenceService';
 import { completedScrobbleStore } from '../store/completedScrobbleStore';
 import { offlineModeStore } from '../store/offlineModeStore';
@@ -20,13 +25,19 @@ export interface UseLocalIntelligenceResult {
   onRepeat: Child[];
   forgottenGems: Child[];
   quickMoodChips: QuickMoodChip[];
+  dynamicMixes: DynamicMixSummary[];
+  resolveDynamicMix: (
+    mixKey: string,
+    options?: ResolveDynamicMixOptions,
+  ) => Promise<ResolvedDynamicMix | null>;
   loading: boolean;
   refresh: () => Promise<void>;
 }
 
 /**
- * Loads all five local SQLite intelligence feeds in parallel and refreshes
- * reactively when scrobble history length or offline mode changes.
+ * Loads all local SQLite intelligence feeds (including 0ms dynamic mix
+ * summaries) in parallel and refreshes reactively when scrobble history length
+ * or offline mode changes.
  */
 export function useLocalIntelligence(): UseLocalIntelligenceResult {
   const scrobbleCount = completedScrobbleStore((s) => s.recentScrobbles.length);
@@ -37,6 +48,7 @@ export function useLocalIntelligence(): UseLocalIntelligenceResult {
   const [onRepeat, setOnRepeat] = useState<Child[]>([]);
   const [forgottenGems, setForgottenGems] = useState<Child[]>([]);
   const [quickMoodChips, setQuickMoodChips] = useState<QuickMoodChip[]>([]);
+  const [dynamicMixes, setDynamicMixes] = useState<DynamicMixSummary[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
   const mountedRef = useRef(true);
@@ -62,12 +74,16 @@ export function useLocalIntelligence(): UseLocalIntelligenceResult {
         nextOnRepeat,
         nextForgottenGems,
         nextQuickMoodChips,
+        nextDynamicMixes,
       ] = await Promise.all([
         getJumpBackIn(),
         getHourlyDaylist(),
         getOnRepeat(),
         getForgottenGems(),
         getQuickMoodChips(),
+        typeof getDynamicMixSummaries === 'function'
+          ? getDynamicMixSummaries()
+          : Promise.resolve([]),
       ]);
 
       if (!mountedRef.current || isCancelled?.() || reqId !== requestIdRef.current) {
@@ -79,6 +95,7 @@ export function useLocalIntelligence(): UseLocalIntelligenceResult {
       setOnRepeat(nextOnRepeat);
       setForgottenGems(nextForgottenGems);
       setQuickMoodChips(nextQuickMoodChips);
+      setDynamicMixes(nextDynamicMixes);
     } catch {
       // Service functions already degrade safely to empty results.
     } finally {
@@ -87,6 +104,23 @@ export function useLocalIntelligence(): UseLocalIntelligenceResult {
       }
     }
   }, []);
+
+  const resolveDynamicMix = useCallback(
+    async (
+      mixKey: string,
+      options?: ResolveDynamicMixOptions,
+    ): Promise<ResolvedDynamicMix | null> => {
+      const resolved = await resolveDynamicMixService(mixKey, options);
+      if (resolved && mountedRef.current) {
+        const nextSummaries = await getDynamicMixSummaries();
+        if (mountedRef.current) {
+          setDynamicMixes(nextSummaries);
+        }
+      }
+      return resolved;
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -106,6 +140,8 @@ export function useLocalIntelligence(): UseLocalIntelligenceResult {
     onRepeat,
     forgottenGems,
     quickMoodChips,
+    dynamicMixes,
+    resolveDynamicMix,
     loading,
     refresh,
   };

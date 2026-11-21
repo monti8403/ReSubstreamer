@@ -512,6 +512,20 @@ CREATE TABLE `download_queue_songs` (
 );
 --> statement-breakpoint
 CREATE INDEX `idx_download_queue_songs_song_id` ON `download_queue_songs` (`song_id`);--> statement-breakpoint
+CREATE TABLE `dynamic_mix_cache` (
+	`mix_key` text PRIMARY KEY NOT NULL,
+	`mix_type` text,
+	`title` text,
+	`subtitle` text,
+	`seed_ids_json` text,
+	`song_ids_json` text,
+	`source` text,
+	`updated_at` integer,
+	`expires_at` integer
+);
+--> statement-breakpoint
+CREATE INDEX `idx_dynamic_mix_cache_type` ON `dynamic_mix_cache` (`mix_type`);--> statement-breakpoint
+CREATE INDEX `idx_dynamic_mix_cache_expires` ON `dynamic_mix_cache` (`expires_at`);--> statement-breakpoint
 CREATE TABLE `favorite_album_artists` (
 	`album_id` text NOT NULL,
 	`pos` integer NOT NULL,

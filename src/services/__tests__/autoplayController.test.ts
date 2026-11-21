@@ -18,6 +18,22 @@ jest.mock('../smartRadioService', () => ({
   getSmartRadioTracks: (...args: any[]) => mockGetSmartRadioTracks(...args),
 }));
 
+const mockIsSonicSimilarityAvailable = jest.fn().mockReturnValue(false);
+const mockFindSonicPath = jest.fn().mockResolvedValue([]);
+jest.mock('../subsonicService', () => ({
+  isSonicSimilarityAvailable: () => mockIsSonicSimilarityAvailable(),
+  findSonicPath: (...args: any[]) => mockFindSonicPath(...args),
+}));
+
+const mockGetQuickMoodChips = jest.fn().mockResolvedValue([]);
+const mockGetSongsForMoodChip = jest.fn().mockResolvedValue([]);
+const mockGetForgottenGems = jest.fn().mockResolvedValue([]);
+jest.mock('../localIntelligenceService', () => ({
+  getQuickMoodChips: (...args: any[]) => mockGetQuickMoodChips(...args),
+  getSongsForMoodChip: (...args: any[]) => mockGetSongsForMoodChip(...args),
+  getForgottenGems: (...args: any[]) => mockGetForgottenGems(...args),
+}));
+
 import type { Child } from 'subsonic-api';
 
 import { playbackSettingsStore } from '../../store/playbackSettingsStore';
@@ -53,6 +69,11 @@ beforeAll(() => {
 beforeEach(() => {
   jest.clearAllMocks();
   mockGetSmartRadioTracks.mockResolvedValue([]);
+  mockIsSonicSimilarityAvailable.mockReturnValue(false);
+  mockFindSonicPath.mockResolvedValue([]);
+  mockGetQuickMoodChips.mockResolvedValue([]);
+  mockGetSongsForMoodChip.mockResolvedValue([]);
+  mockGetForgottenGems.mockResolvedValue([]);
   resetAutoplaySession();
   radioAiSettingsStore.getState().resetRadioAiSettings();
   radioAiSettingsStore.getState().setInfiniteAutoplay(true);
@@ -232,5 +253,45 @@ describe('autoplayController', () => {
 
     expect(mockAddToQueue).not.toHaveBeenCalled();
     expect(getAutoplaySessionState().isRefilling).toBe(false);
+  });
+
+  it('triggers findSonicPath anti-stagnation after >=15 session tracks in balanced/discovery and strips currentSongId', async () => {
+    mockIsSonicSimilarityAvailable.mockReturnValue(true);
+    mockGetForgottenGems.mockResolvedValue([makeSong('gem-target')]);
+    mockFindSonicPath.mockResolvedValue([
+      { song: makeSong('s15'), similarity: 1.0 },
+      { song: makeSong('bridge-1'), similarity: 0.8 },
+      { song: makeSong('bridge-2'), similarity: 0.7 },
+      { song: makeSong('gem-target'), similarity: 0.5 },
+    ]);
+
+    radioAiSettingsStore.getState().setRadioMode('balanced');
+    radioAiSettingsStore.getState().setSource('sonicSimilarity', true);
+
+    const initialTracks = Array.from({ length: 20 }, (_, i) => ({
+      ...makeSong(`s${i}`),
+      artist: 'Same Cluster Artist',
+      genre: 'Techno',
+    })) as Child[];
+
+    onManualQueueStart(initialTracks[0], [initialTracks[0]]);
+    // Step through 16 played tracks while remaining > 3; at index 16 remaining === 3 triggers refill
+    for (let i = 1; i <= 16; i++) {
+      playerStore.setState({
+        queue: initialTracks,
+        currentTrack: initialTracks[i],
+        currentTrackIndex: i,
+        playbackState: 'playing',
+        position: 5,
+      });
+    }
+    await flushPromises();
+
+    expect(mockFindSonicPath).toHaveBeenCalledWith('s16', 'gem-target', 12);
+    expect(mockGetSmartRadioTracks).not.toHaveBeenCalled();
+    expect(mockAddToQueue).toHaveBeenCalledTimes(1);
+    const appendedIds = mockAddToQueue.mock.calls[0][0].map((t: Child) => t.id);
+    expect(appendedIds).toEqual(['bridge-1', 'bridge-2', 'gem-target']);
+    expect(appendedIds).not.toContain('s16');
   });
 });

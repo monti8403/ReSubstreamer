@@ -8,6 +8,7 @@ import {
   type RadioMode,
   type RadioSources,
 } from '../../store/radioAiSettingsStore';
+import { serverInfoStore } from '../../store/serverInfoStore';
 import { settingsStyles } from '../../styles/settingsStyles';
 import { SettingsRow } from './SettingsRow';
 import { SettingsSectionTitle } from './SettingsSectionTitle';
@@ -31,6 +32,11 @@ const SOURCE_ITEMS: readonly {
   labelKey: string;
   hintKey: string;
 }[] = [
+  {
+    key: 'sonicSimilarity',
+    labelKey: 'radioSourceSonicSimilarity',
+    hintKey: 'radioSourceSonicSimilarityHint',
+  },
   {
     key: 'server',
     labelKey: 'radioSourceServer',
@@ -68,6 +74,8 @@ export function RadioAutoplayCard() {
   const radioMode = radioAiSettingsStore((s) => s.radioMode);
   const sources = radioAiSettingsStore((s) => s.sources);
   const provider = radioAiSettingsStore((s) => s.provider);
+  const supportsSonicSimilarity = serverInfoStore((s) => s.supportsSonicSimilarity);
+  const sonicSimilarityVersion = serverInfoStore((s) => s.sonicSimilarityVersion);
 
   const setInfiniteAutoplay = radioAiSettingsStore((s) => s.setInfiniteAutoplay);
   const setRadioMode = radioAiSettingsStore((s) => s.setRadioMode);
@@ -80,6 +88,9 @@ export function RadioAutoplayCard() {
   const textPrimary = isDark ? '#F4F6FA' : colors.textPrimary;
 
   const isProviderDisabled = provider === 'disabled';
+  const visibleSources = supportsSonicSimilarity
+    ? SOURCE_ITEMS
+    : SOURCE_ITEMS.filter((item) => item.key !== 'sonicSimilarity');
 
   return (
     <View style={settingsStyles.section}>
@@ -154,14 +165,32 @@ export function RadioAutoplayCard() {
           </Text>
         </View>
 
-        <Text style={[styles.subHeader, { color: colors.label }]}>
-          {t('radioActiveSources')}
-        </Text>
+        <View style={styles.subHeaderRow}>
+          <Text style={[styles.subHeader, { color: colors.label }]}>
+            {t('radioActiveSources')}
+          </Text>
+          {supportsSonicSimilarity && (
+            <View
+              testID="radio-sonic-similarity-badge"
+              style={[
+                styles.sonicBadge,
+                { backgroundColor: deepBg, borderColor },
+              ]}
+            >
+              <Text style={[styles.sonicBadgeText, { color: colors.primary }]}>
+                {t('radioSonicSimilarityBadge', {
+                  version: sonicSimilarityVersion ?? 1,
+                })}
+              </Text>
+            </View>
+          )}
+        </View>
 
-        {SOURCE_ITEMS.map((item, idx) => {
+        {visibleSources.map((item, idx) => {
           const isAiBoost = item.key === 'aiBoost';
           const isDisabled = isAiBoost && isProviderDisabled;
-          const isLastSource = idx === SOURCE_ITEMS.length - 1;
+          const isLastSource =
+            supportsSonicSimilarity && idx === visibleSources.length - 1;
           return (
             <View
               key={item.key}
@@ -188,6 +217,17 @@ export function RadioAutoplayCard() {
             </View>
           );
         })}
+
+        {!supportsSonicSimilarity && (
+          <View
+            testID="radio-sonic-similarity-unavailable"
+            style={styles.sonicUnavailableRow}
+          >
+            <Text style={[styles.sonicUnavailableText, { color: colors.textSecondary }]}>
+              {t('radioSonicSimilarityNotDetected')}
+            </Text>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -234,12 +274,36 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     marginTop: 8,
   },
+  subHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 14,
+    marginBottom: 2,
+    gap: 8,
+  },
   subHeader: {
     fontSize: 12,
     fontWeight: '600',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-    marginTop: 14,
-    marginBottom: 2,
+  },
+  sonicBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  sonicBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  sonicUnavailableRow: {
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  sonicUnavailableText: {
+    fontSize: 12,
+    lineHeight: 16,
   },
 });

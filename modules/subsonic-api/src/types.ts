@@ -619,3 +619,10 @@ export interface Limitation {
 	values: string[];
 	required?: boolean;
 }
+
+// sonicSimilarity extension
+
+export interface SonicMatch {
+	entry: Child;
+	similarity?: number;
+}

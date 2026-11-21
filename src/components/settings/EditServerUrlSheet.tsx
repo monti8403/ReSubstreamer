@@ -9,7 +9,7 @@ import { useThemedAlert } from '../../hooks/useThemedAlert';
 import { settingsStyles } from '../../styles/settingsStyles';
 import { switchToServer } from '../../services/failoverService';
 import { syncProxyUpstreams, trustCertificateForHost } from '../../services/sslTrustService';
-import { clearApiCache, ensureCoverArtAuth, login, normalizeServerUrl } from '../../services/subsonicService';
+import { clearApiCache, ensureCoverArtAuth, getOpenSubsonicExtensions, login, normalizeServerUrl } from '../../services/subsonicService';
 import { retryRemoteImagesForServerSwitch } from '../../services/imageCacheService';
 import { clearQueue } from '../../services/playerService';
 import { authStore } from '../../store/authStore';
@@ -183,6 +183,7 @@ export function EditServerUrlSheet({
     // failoverService (no queue rebuild, no failover-prompt clear).
     auth.setPrimaryServerUrl(normalised);
     clearApiCache();
+    void getOpenSubsonicExtensions({ force: true });
     // Mirror failoverService: re-mint the cover-art token the clear dropped, and let
     // mounted covers retry against the new address instead of staying failed.
     void ensureCoverArtAuth();

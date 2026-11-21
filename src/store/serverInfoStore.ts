@@ -4,9 +4,22 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { setSortArticles } from '../db/sortArticles';
 import { kvStorage } from './persistence';
 
-interface OpenSubsonicExtension {
+export interface OpenSubsonicExtension {
   name: string;
   versions: number[];
+}
+
+export function resolveSonicSimilaritySupport(
+  extensions: readonly OpenSubsonicExtension[] | undefined,
+): { supportsSonicSimilarity: boolean; sonicSimilarityVersion: number | null } {
+  if (!Array.isArray(extensions)) {
+    return { supportsSonicSimilarity: false, sonicSimilarityVersion: null };
+  }
+  const ext = extensions.find((e) => e?.name === 'sonicSimilarity');
+  if (ext && Array.isArray(ext.versions) && ext.versions.includes(1)) {
+    return { supportsSonicSimilarity: true, sonicSimilarityVersion: 1 };
+  }
+  return { supportsSonicSimilarity: false, sonicSimilarityVersion: null };
 }
 
 export interface ServerInfo {
@@ -15,6 +28,8 @@ export interface ServerInfo {
   apiVersion: string | null;
   openSubsonic: boolean;
   extensions: OpenSubsonicExtension[];
+  supportsSonicSimilarity: boolean;
+  sonicSimilarityVersion: number | null;
   lastFetchedAt: number | null;
   adminRole: boolean | null;
   shareRole: boolean | null;
@@ -28,8 +43,19 @@ export interface ServerInfo {
   ignoredArticles: string[] | null;
 }
 
+export type ServerInfoInput = Omit<
+  ServerInfo,
+  'supportsSonicSimilarity' | 'sonicSimilarityVersion'
+> &
+  Partial<Pick<ServerInfo, 'supportsSonicSimilarity' | 'sonicSimilarityVersion'>>;
+
 export interface ServerInfoState extends ServerInfo {
-  setServerInfo: (info: ServerInfo) => void;
+  /** Session-only runtime invalidation if a `sonicSimilarity` endpoint returns 404. */
+  sonicSimilaritySessionDisabled: boolean;
+  setServerInfo: (info: ServerInfoInput) => void;
+  setOpenSubsonicExtensions: (extensions: OpenSubsonicExtension[]) => void;
+  invalidateSonicSimilarityForSession: () => void;
+  resetSonicSimilaritySessionOverride: () => void;
   setIgnoredArticles: (articles: string[] | null) => void;
   clearServerInfo: () => void;
 }
@@ -42,6 +68,8 @@ const initialServerInfo: ServerInfo = {
   apiVersion: null,
   openSubsonic: false,
   extensions: [],
+  supportsSonicSimilarity: false,
+  sonicSimilarityVersion: null,
   lastFetchedAt: null,
   adminRole: null,
   shareRole: null,
@@ -52,12 +80,38 @@ export const serverInfoStore = create<ServerInfoState>()(
   persist(
     (set) => ({
       ...initialServerInfo,
+      sonicSimilaritySessionDisabled: false,
 
-      setServerInfo: (info) =>
+      setServerInfo: (info) => {
+        const derived = resolveSonicSimilaritySupport(info.extensions);
         set({
           ...info,
+          supportsSonicSimilarity:
+            info.supportsSonicSimilarity ?? derived.supportsSonicSimilarity,
+          sonicSimilarityVersion:
+            info.sonicSimilarityVersion !== undefined
+              ? info.sonicSimilarityVersion
+              : derived.sonicSimilarityVersion,
+          sonicSimilaritySessionDisabled: false,
           lastFetchedAt: info.lastFetchedAt ?? Date.now(),
-        }),
+        });
+      },
+
+      setOpenSubsonicExtensions: (extensions) => {
+        const derived = resolveSonicSimilaritySupport(extensions);
+        set({
+          extensions,
+          supportsSonicSimilarity: derived.supportsSonicSimilarity,
+          sonicSimilarityVersion: derived.sonicSimilarityVersion,
+          sonicSimilaritySessionDisabled: false,
+        });
+      },
+
+      invalidateSonicSimilarityForSession: () =>
+        set({ sonicSimilaritySessionDisabled: true }),
+
+      resetSonicSimilaritySessionOverride: () =>
+        set({ sonicSimilaritySessionDisabled: false }),
 
       setIgnoredArticles: (articles) => {
         set({ ignoredArticles: articles });
@@ -66,7 +120,7 @@ export const serverInfoStore = create<ServerInfoState>()(
       },
 
       clearServerInfo: () => {
-        set(initialServerInfo);
+        set({ ...initialServerInfo, sonicSimilaritySessionDisabled: false });
         setSortArticles(null);
       },
     }),
@@ -79,6 +133,8 @@ export const serverInfoStore = create<ServerInfoState>()(
         apiVersion: state.apiVersion,
         openSubsonic: state.openSubsonic,
         extensions: state.extensions,
+        supportsSonicSimilarity: state.supportsSonicSimilarity,
+        sonicSimilarityVersion: state.sonicSimilarityVersion,
         lastFetchedAt: state.lastFetchedAt,
         adminRole: state.adminRole,
         shareRole: state.shareRole,
@@ -86,7 +142,15 @@ export const serverInfoStore = create<ServerInfoState>()(
       }),
       // Seed the mirror from persisted state on boot.
       onRehydrateStorage: () => (state) => {
-        if (state) setSortArticles(state.ignoredArticles);
+        if (!state) return;
+        setSortArticles(state.ignoredArticles);
+        if (typeof state.supportsSonicSimilarity !== 'boolean') {
+          const derived = resolveSonicSimilaritySupport(state.extensions);
+          serverInfoStore.setState({
+            supportsSonicSimilarity: derived.supportsSonicSimilarity,
+            sonicSimilarityVersion: derived.sonicSimilarityVersion,
+          });
+        }
       },
     }
   )

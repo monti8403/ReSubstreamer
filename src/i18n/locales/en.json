@@ -1221,5 +1221,12 @@
   "dlnaStreamFormat": "DLNA compatibility format",
   "dlnaFormatAuto": "Auto (MP3 fallback for Opus/Ogg)",
   "dlnaFormatMp3": "MP3 (320 kbps)",
-  "dlnaFormatFlac": "FLAC (Lossless)"
+  "dlnaFormatFlac": "FLAC (Lossless)",
+  "radioSonicSimilarityBadge": "Sonic Similarity v{{version}}",
+  "radioSourceSonicSimilarity": "Server acoustic analysis (Sonic Similarity)",
+  "radioSourceSonicSimilarityHint": "Use OpenSubsonic audio-feature similarity from your server.",
+  "radioSonicSimilarityNotDetected": "Server acoustic analysis: not detected",
+  "dailyMixTitle": "Daily Mix {{index}}",
+  "rediscoveryBridgeTitle": "Rediscovery Bridge",
+  "rediscoveryBridgeSubtitle": "{{from}} → {{to}}"
 }

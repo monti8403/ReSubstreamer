@@ -36,6 +36,13 @@ import {
 } from '../store/persistence/scrobbleSnapshot';
 import { recentPlaysStore } from '../store/recentPlaysStore';
 import { defaultCollator } from '../utils/intl';
+import { withTimeout } from '../utils/withTimeout';
+import {
+  findSonicPath,
+  getSonicSimilarTracks,
+  isSonicSimilarityAvailable,
+  type SonicTrackMatch,
+} from './subsonicService';
 
 /* ------------------------------------------------------------------ */
 /*  Public Types                                                       */
@@ -69,6 +76,42 @@ export interface QuickMoodChip {
   minBpm?: number;
   maxBpm?: number;
   songCount: number;
+}
+
+export type DynamicMixType = 'daily_mix' | 'daylist' | 'rediscovery_bridge';
+export type DynamicMixSource = 'sonic' | 'local';
+
+export interface DynamicMixSummary {
+  mixKey: string;
+  mixType: DynamicMixType;
+  title: string;
+  subtitle: string;
+  seedIds: string[];
+  source: DynamicMixSource;
+  songCount: number;
+  updatedAt: number | null;
+  expiresAt: number | null;
+  isCached: boolean;
+}
+
+export interface ResolveDynamicMixOptions {
+  forceRefresh?: boolean;
+  ttlMs?: number;
+  targetCount?: number;
+  timeoutMs?: number;
+}
+
+export interface ResolvedDynamicMix {
+  mixKey: string;
+  mixType: DynamicMixType;
+  title: string;
+  subtitle: string;
+  seedIds: string[];
+  songs: Child[];
+  source: DynamicMixSource;
+  updatedAt: number;
+  expiresAt: number;
+  fromCache: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1236,5 +1279,773 @@ export async function getSongsForMoodChip(
     return [...children, ...cachedChildren];
   } catch {
     return [];
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  6. Dynamic Mix Cache & Lazy Sonic Expansion (0ms Home + Lazy)      */
+/* ------------------------------------------------------------------ */
+
+const DEFAULT_DYNAMIC_MIX_TTL_MS = 8 * 3_600_000; // 8 hours (within 6-12h window)
+const DEFAULT_DYNAMIC_MIX_TIMEOUT_MS = 2500;
+const DEFAULT_DYNAMIC_MIX_TARGET_COUNT = 25;
+const DAILY_MIX_MAX_CLUSTERS = 4;
+
+interface DynamicMixCacheRow {
+  mix_key: string;
+  mix_type: string | null;
+  title: string | null;
+  subtitle: string | null;
+  seed_ids_json: string | null;
+  song_ids_json: string | null;
+  source: string | null;
+  updated_at: number | null;
+  expires_at: number | null;
+}
+
+interface DynamicMixDescriptor {
+  mixKey: string;
+  mixType: DynamicMixType;
+  title: string;
+  subtitle: string;
+  seedSongs: Child[];
+  clusterSongs: Child[];
+  bridgeEndSong?: Child;
+}
+
+function getMixSkipPenalty(songId: string): number {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('../store/radioSkipStore') as {
+      radioSkipStore?: { getState: () => { getSkipPenalty?: (id: string) => number } };
+    };
+    return mod?.radioSkipStore?.getState()?.getSkipPenalty?.(songId) ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+function isSonicSettingEnabled(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('../store/radioAiSettingsStore') as {
+      radioAiSettingsStore?: { getState: () => { sources?: { sonicSimilarity?: boolean } } };
+    };
+    return mod?.radioAiSettingsStore?.getState()?.sources?.sonicSimilarity !== false;
+  } catch {
+    return true;
+  }
+}
+
+function safeParseStringArray(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v): v is string => typeof v === 'string' && v.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+function extractSongGenresLower(song: Child): string[] {
+  const out: string[] = [];
+  if (song.genre?.trim()) out.push(song.genre.trim().toLowerCase());
+  for (const g of (song.genres ?? []) as unknown[]) {
+    if (typeof g === 'string' && g.trim()) {
+      out.push(g.trim().toLowerCase());
+    } else if (g && typeof g === 'object' && 'name' in g) {
+      const name = (g as { name?: unknown }).name;
+      if (typeof name === 'string' && name.trim()) out.push(name.trim().toLowerCase());
+    }
+  }
+  return Array.from(new Set(out));
+}
+
+async function hydrateMixSongsByIds(
+  db: InternalDb,
+  ids: readonly string[],
+  offline: boolean,
+): Promise<Child[]> {
+  if (ids.length === 0) return [];
+  const byId = new Map<string, Child>();
+
+  const libRows = await db.getAllAsync<SongListRow>(
+    `SELECT ${SONG_LIST_COLS_S}
+       FROM songs s
+      WHERE s.id IN (SELECT value FROM json_each(?))
+      ${offlineSongFilter(offline, 's')}`,
+    [JSON.stringify([...ids])],
+  );
+  const libSongs = await hydrateAndMapSongRows(db, libRows);
+  for (const s of libSongs) {
+    byId.set(s.id, s);
+  }
+
+  const missing = ids.filter((id) => !byId.has(id));
+  if (missing.length > 0) {
+    const cachedMap = await loadCachedSongsByIds(db, missing);
+    for (const [id, child] of cachedMap) {
+      byId.set(id, child);
+    }
+  }
+
+  const ordered: Child[] = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    const song = byId.get(id);
+    if (!song) continue;
+    seen.add(id);
+    ordered.push(song);
+  }
+  return ordered;
+}
+
+/**
+ * Group `getOnRepeat(14d)` tracks into 2–4 clusters using local SQLite
+ * `playlist_songs` co-occurrence and `song_genres` overlap. Zero network calls.
+ */
+async function buildDailyMixDescriptors(
+  db: InternalDb,
+  onRepeatSongs: readonly Child[],
+): Promise<DynamicMixDescriptor[]> {
+  if (onRepeatSongs.length === 0) return [];
+
+  const songs = onRepeatSongs.slice(0, 40);
+  const n = songs.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x: number): number => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
+  };
+  const union = (a: number, b: number): void => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[rb] = ra;
+  };
+
+  // Connect songs sharing playlists in `playlist_songs`
+  const songIds = songs.map((s) => s.id);
+  const indexById = new Map<string, number>();
+  for (let i = 0; i < n; i++) indexById.set(songIds[i], i);
+
+  try {
+    const plRows = await db.getAllAsync<{ playlist_id: string; song_id: string }>(
+      `SELECT playlist_id, song_id
+         FROM playlist_songs
+        WHERE song_id IN (SELECT value FROM json_each(?))`,
+      [JSON.stringify(songIds)],
+    );
+    const byPlaylist = new Map<string, number[]>();
+    for (const r of plRows ?? []) {
+      const idx = indexById.get(r.song_id);
+      if (idx === undefined) continue;
+      const list = byPlaylist.get(r.playlist_id) ?? [];
+      list.push(idx);
+      byPlaylist.set(r.playlist_id, list);
+    }
+    for (const members of byPlaylist.values()) {
+      for (let i = 1; i < members.length; i++) {
+        union(members[0], members[i]);
+      }
+    }
+  } catch {
+    // Missing playlist_songs or partial DB — continue with genre clustering
+  }
+
+  // Connect songs sharing primary genre
+  const firstByGenre = new Map<string, number>();
+  for (let i = 0; i < n; i++) {
+    const genres = extractSongGenresLower(songs[i]);
+    if (genres.length === 0) continue;
+    const primary = genres[0];
+    const prev = firstByGenre.get(primary);
+    if (prev !== undefined) {
+      union(prev, i);
+    } else {
+      firstByGenre.set(primary, i);
+    }
+  }
+
+  const groupMap = new Map<number, Child[]>();
+  for (let i = 0; i < n; i++) {
+    const root = find(i);
+    const list = groupMap.get(root) ?? [];
+    list.push(songs[i]);
+    groupMap.set(root, list);
+  }
+
+  let clusters = Array.from(groupMap.values()).sort((a, b) => b.length - a.length);
+
+  // If everything merged into 1 big cluster and we have >= 4 songs, split by genre/artist
+  // so the user gets 2-4 distinct Daily Mixes.
+  if (clusters.length === 1 && songs.length >= 4) {
+    const bySubKey = new Map<string, Child[]>();
+    for (const s of songs) {
+      const key = (s.genre?.trim() || s.artist?.trim() || s.id).toLowerCase();
+      const bucket = bySubKey.get(key) ?? [];
+      bucket.push(s);
+      bySubKey.set(key, bucket);
+    }
+    const subClusters = Array.from(bySubKey.values()).sort((a, b) => b.length - a.length);
+    if (subClusters.length >= 2) {
+      clusters = subClusters;
+    } else {
+      const mid = Math.ceil(songs.length / 2);
+      clusters = [songs.slice(0, mid), songs.slice(mid)];
+    }
+  }
+
+  // Cap at 4 clusters (folding tiny remainder groups into the last cluster if needed)
+  if (clusters.length > DAILY_MIX_MAX_CLUSTERS) {
+    const top = clusters.slice(0, DAILY_MIX_MAX_CLUSTERS);
+    const rest = clusters.slice(DAILY_MIX_MAX_CLUSTERS).flat();
+    // Spread small remainders round-robin only if top clusters are small, or keep top 4 focused
+    for (let i = 0; i < rest.length; i++) {
+      if (top[i % DAILY_MIX_MAX_CLUSTERS].length < 4) {
+        top[i % DAILY_MIX_MAX_CLUSTERS].push(rest[i]);
+      }
+    }
+    clusters = top;
+  }
+
+  return clusters.map((clusterSongs, idx) => {
+    const num = idx + 1;
+    const artists = Array.from(
+      new Set(
+        clusterSongs
+          .map((s) => s.artist?.trim())
+          .filter((a): a is string => Boolean(a)),
+      ),
+    ).slice(0, 3);
+    const genres = Array.from(
+      new Set(
+        clusterSongs
+          .map((s) => s.genre?.trim())
+          .filter((g): g is string => Boolean(g)),
+      ),
+    ).slice(0, 2);
+
+    const subtitle =
+      artists.length > 0
+        ? artists.join(', ')
+        : genres.length > 0
+          ? genres.join(' · ')
+          : translateWithFallback('onRepeat', 'On Repeat');
+
+    return {
+      mixKey: `daily-mix-${num}`,
+      mixType: 'daily_mix',
+      title: translateWithFallback('dailyMixTitle', `Daily Mix ${num}`, { index: num }),
+      subtitle,
+      seedSongs: clusterSongs.slice(0, 3),
+      clusterSongs,
+    };
+  });
+}
+
+async function buildAllDynamicMixDescriptors(
+  db: InternalDb,
+): Promise<DynamicMixDescriptor[]> {
+  const [onRepeat, daylist, forgottenGems] = await Promise.all([
+    getOnRepeat(40),
+    getHourlyDaylist(25),
+    getForgottenGems(15),
+  ]);
+
+  const descriptors: DynamicMixDescriptor[] = [];
+
+  const dailyMixes = await buildDailyMixDescriptors(db, onRepeat);
+  descriptors.push(...dailyMixes);
+
+  if (daylist && daylist.songs.length > 0) {
+    descriptors.push({
+      mixKey: 'daylist',
+      mixType: 'daylist',
+      title: daylist.title,
+      subtitle: daylist.subtitle,
+      seedSongs: daylist.songs.slice(0, 3),
+      clusterSongs: daylist.songs,
+    });
+  }
+
+  if (onRepeat.length > 0 && forgottenGems.length > 0) {
+    const startSeed = onRepeat[0];
+    const endSeed = forgottenGems.find((g) => g.id !== startSeed.id);
+    if (startSeed && endSeed) {
+      descriptors.push({
+        mixKey: 'rediscovery-bridge',
+        mixType: 'rediscovery_bridge',
+        title: translateWithFallback('rediscoveryBridgeTitle', 'Rediscovery Bridge'),
+        subtitle: translateWithFallback(
+          'rediscoveryBridgeSubtitle',
+          `${startSeed.artist ?? startSeed.title} → ${endSeed.artist ?? endSeed.title}`,
+          {
+            from: startSeed.artist ?? startSeed.title,
+            to: endSeed.artist ?? endSeed.title,
+          },
+        ),
+        seedSongs: [startSeed, endSeed],
+        clusterSongs: [startSeed],
+        bridgeEndSong: endSeed,
+      });
+    }
+  }
+
+  return descriptors;
+}
+
+/**
+ * 0 ms Home summary reader: returns cached and/or locally derived dynamic mix
+ * card definitions purely from SQLite, with zero network calls.
+ */
+export async function getDynamicMixSummaries(): Promise<DynamicMixSummary[]> {
+  const db = getDb();
+  if (!db) return [];
+
+  try {
+    const [cachedRows, descriptors] = await Promise.all([
+      db.getAllAsync<DynamicMixCacheRow>(
+        `SELECT mix_key, mix_type, title, subtitle, seed_ids_json, song_ids_json, source, updated_at, expires_at
+           FROM dynamic_mix_cache`,
+      ),
+      buildAllDynamicMixDescriptors(db),
+    ]);
+
+    const cachedByKey = new Map<string, DynamicMixCacheRow>();
+    for (const row of cachedRows ?? []) {
+      if (row?.mix_key) cachedByKey.set(row.mix_key, row);
+    }
+
+    const summaries: DynamicMixSummary[] = [];
+    const seenKeys = new Set<string>();
+
+    for (const desc of descriptors) {
+      seenKeys.add(desc.mixKey);
+      const cached = cachedByKey.get(desc.mixKey);
+      const cachedSongIds = safeParseStringArray(cached?.song_ids_json);
+      const cachedSeedIds = safeParseStringArray(cached?.seed_ids_json);
+      const source: DynamicMixSource =
+        cached?.source === 'sonic' ? 'sonic' : 'local';
+
+      summaries.push({
+        mixKey: desc.mixKey,
+        mixType: desc.mixType,
+        title:
+          desc.mixType === 'daylist'
+            ? desc.title
+            : cached?.title || desc.title,
+        subtitle:
+          desc.mixType === 'daylist'
+            ? desc.subtitle
+            : cached?.subtitle || desc.subtitle,
+        seedIds:
+          cachedSeedIds.length > 0
+            ? cachedSeedIds
+            : desc.seedSongs.map((s) => s.id),
+        source,
+        songCount:
+          cachedSongIds.length > 0
+            ? cachedSongIds.length
+            : desc.clusterSongs.length,
+        updatedAt: cached?.updated_at ?? null,
+        expiresAt: cached?.expires_at ?? null,
+        isCached: Boolean(cached && cachedSongIds.length > 0),
+      });
+    }
+
+    // Include any cached mixes whose seeds might not currently appear in derived descriptors
+    for (const row of cachedRows ?? []) {
+      if (!row?.mix_key || seenKeys.has(row.mix_key)) continue;
+      const songIds = safeParseStringArray(row.song_ids_json);
+      if (songIds.length === 0) continue;
+      const mixType: DynamicMixType =
+        row.mix_type === 'daylist' || row.mix_type === 'rediscovery_bridge'
+          ? row.mix_type
+          : 'daily_mix';
+      summaries.push({
+        mixKey: row.mix_key,
+        mixType,
+        title: row.title || row.mix_key,
+        subtitle: row.subtitle || '',
+        seedIds: safeParseStringArray(row.seed_ids_json),
+        source: row.source === 'sonic' ? 'sonic' : 'local',
+        songCount: songIds.length,
+        updatedAt: row.updated_at ?? null,
+        expiresAt: row.expires_at ?? null,
+        isCached: true,
+      });
+    }
+
+    return summaries;
+  } catch {
+    return [];
+  }
+}
+
+async function resolveMixViaSonic(
+  desc: DynamicMixDescriptor,
+  targetCount: number,
+): Promise<Child[]> {
+  if (desc.mixType === 'rediscovery_bridge') {
+    const start = desc.seedSongs[0];
+    const end = desc.bridgeEndSong ?? desc.seedSongs[1];
+    if (!start?.id || !end?.id || start.id === end.id) return [];
+    const path = await findSonicPath(start.id, end.id, 15);
+    if (!path || path.length === 0) return [];
+    const seen = new Set<string>();
+    const out: Child[] = [];
+    for (const match of path) {
+      const s = match?.song;
+      if (!s?.id || seen.has(s.id)) continue;
+      if (s.id !== start.id && s.id !== end.id && getMixSkipPenalty(s.id) >= 45) {
+        continue;
+      }
+      seen.add(s.id);
+      out.push(s);
+    }
+    return out.slice(0, targetCount);
+  }
+
+  // Daily Mix & Enhanced Hourly Daylist: parallel getSonicSimilarTracks on 2-3 seeds
+  const seeds = desc.seedSongs.slice(0, 3).filter((s) => Boolean(s?.id));
+  if (seeds.length === 0) return [];
+
+  const batches = await Promise.all(
+    seeds.map((s) => getSonicSimilarTracks(s.id, 25)),
+  );
+
+  const seedIdSet = new Set(desc.clusterSongs.map((s) => s.id));
+  const aggregated = new Map<
+    string,
+    { song: Child; score: number; hitCount: number }
+  >();
+
+  for (const batch of batches) {
+    for (let i = 0; i < batch.length; i++) {
+      const match: SonicTrackMatch | undefined = batch[i];
+      const song = match?.song;
+      if (!song?.id || seedIdSet.has(song.id)) continue;
+      const baseSim =
+        match.similarity >= 0
+          ? Math.max(0, Math.min(1, match.similarity))
+          : Math.max(0.25, 0.85 - i * 0.025);
+      const prev = aggregated.get(song.id);
+      if (prev) {
+        // Boost tracks recurring across multiple cluster seeds
+        prev.hitCount += 1;
+        prev.score += baseSim + 0.35;
+      } else {
+        aggregated.set(song.id, { song, score: baseSim, hitCount: 1 });
+      }
+    }
+  }
+
+  if (aggregated.size === 0) return [];
+
+  const rankedDiscovery = Array.from(aggregated.values())
+    .map((entry) => {
+      const penalty = getMixSkipPenalty(entry.song.id);
+      return {
+        song: entry.song,
+        finalScore: entry.score - penalty / 100,
+      };
+    })
+    .sort((a, b) => b.finalScore - a.finalScore)
+    .map((e) => e.song);
+
+  // Compose ~30% known cluster tracks + ~70% sonically similar tracks
+  const knownCap = Math.min(
+    desc.clusterSongs.length,
+    Math.max(1, Math.round(targetCount * 0.3)),
+  );
+  const knownFiltered = desc.clusterSongs
+    .filter((s) => getMixSkipPenalty(s.id) < 45)
+    .slice(0, knownCap);
+  const knownToUse =
+    knownFiltered.length > 0 ? knownFiltered : desc.clusterSongs.slice(0, knownCap);
+
+  const seen = new Set<string>(knownToUse.map((s) => s.id));
+  const discoveryNeeded = Math.max(0, targetCount - knownToUse.length);
+  const discoveryPicked: Child[] = [];
+  for (const s of rankedDiscovery) {
+    if (discoveryPicked.length >= discoveryNeeded) break;
+    if (seen.has(s.id)) continue;
+    seen.add(s.id);
+    discoveryPicked.push(s);
+  }
+
+  // Interleave ~30% known and ~70% sonic discoveries smoothly
+  const composed: Child[] = [];
+  let ki = 0;
+  let di = 0;
+  while (
+    composed.length < targetCount &&
+    (ki < knownToUse.length || di < discoveryPicked.length)
+  ) {
+    if (ki < knownToUse.length) composed.push(knownToUse[ki++]);
+    for (let step = 0; step < 2 && di < discoveryPicked.length && composed.length < targetCount; step++) {
+      composed.push(discoveryPicked[di++]);
+    }
+  }
+  return composed;
+}
+
+async function resolveMixLocally(
+  db: InternalDb,
+  desc: DynamicMixDescriptor,
+  targetCount: number,
+  offline: boolean,
+): Promise<Child[]> {
+  if (desc.mixType === 'daylist') {
+    const daylist = await getHourlyDaylist(targetCount);
+    if (daylist && daylist.songs.length > 0) {
+      return daylist.songs.slice(0, targetCount);
+    }
+    return desc.clusterSongs.slice(0, targetCount);
+  }
+
+  if (desc.mixType === 'rediscovery_bridge') {
+    const start = desc.seedSongs[0];
+    const end = desc.bridgeEndSong ?? desc.seedSongs[1];
+    const [onRepeat, gems] = await Promise.all([
+      getOnRepeat(10),
+      getForgottenGems(10),
+    ]);
+    const genres = Array.from(
+      new Set([
+        ...extractSongGenresLower(start),
+        ...(end ? extractSongGenresLower(end) : []),
+      ]),
+    );
+    let midSongs: Child[] = [];
+    if (genres.length > 0) {
+      const marks = genres.map(() => '?').join(',');
+      const rows = await db.getAllAsync<SongListRow>(
+        `SELECT ${SONG_LIST_COLS_S}
+           FROM songs s
+          WHERE (LOWER(TRIM(COALESCE(s.genre, ''))) IN (${marks})
+             OR EXISTS (SELECT 1 FROM song_genres sg WHERE sg.song_id = s.id AND LOWER(TRIM(sg.name)) IN (${marks})))
+            ${offlineSongFilter(offline, 's')}
+          ORDER BY COALESCE(s.play_count, 0) DESC, s.id ASC
+          LIMIT ?`,
+        [...genres, ...genres, targetCount],
+      );
+      midSongs = await hydrateAndMapSongRows(db, rows);
+    }
+    const seen = new Set<string>();
+    const out: Child[] = [];
+    const push = (s: Child | undefined): void => {
+      if (!s?.id || seen.has(s.id)) return;
+      seen.add(s.id);
+      out.push(s);
+    };
+    push(start);
+    for (const m of midSongs.slice(0, Math.max(0, targetCount - 4))) push(m);
+    for (const r of onRepeat.slice(1, 3)) push(r);
+    for (const g of gems) push(g);
+    if (end) push(end);
+    return out.slice(0, targetCount);
+  }
+
+  // Daily Mix local fallback: cluster seeds + local SQLite genre / playlist co-occurrence
+  const knownCap = Math.min(
+    desc.clusterSongs.length,
+    Math.max(1, Math.round(targetCount * 0.3)),
+  );
+  const known = desc.clusterSongs.slice(0, knownCap);
+  const seen = new Set<string>(known.map((s) => s.id));
+  const seedIds = desc.clusterSongs.map((s) => s.id);
+  const genres = Array.from(
+    new Set(desc.clusterSongs.flatMap((s) => extractSongGenresLower(s))),
+  );
+  const candidates: Child[] = [];
+
+  if (seedIds.length > 0) {
+    const sMarks = seedIds.map(() => '?').join(',');
+    const plRows = await db.getAllAsync<SongListRow>(
+      `SELECT ${SONG_LIST_COLS_S}
+         FROM playlist_songs ps1
+         JOIN playlist_songs ps2
+           ON ps1.playlist_id = ps2.playlist_id
+          AND ps2.song_id NOT IN (${sMarks})
+         JOIN songs s ON s.id = ps2.song_id
+        WHERE ps1.song_id IN (${sMarks})
+          ${offlineSongFilter(offline, 's')}
+        GROUP BY s.id
+        ORDER BY COUNT(DISTINCT ps1.playlist_id) DESC, COALESCE(s.play_count, 0) DESC
+        LIMIT ?`,
+      [...seedIds, ...seedIds, targetCount],
+    );
+    candidates.push(...(await hydrateAndMapSongRows(db, plRows)));
+  }
+
+  if (candidates.length < targetCount && genres.length > 0) {
+    const gMarks = genres.map(() => '?').join(',');
+    const genreRows = await db.getAllAsync<SongListRow>(
+      `SELECT ${SONG_LIST_COLS_S}
+         FROM songs s
+        WHERE (LOWER(TRIM(COALESCE(s.genre, ''))) IN (${gMarks})
+           OR EXISTS (SELECT 1 FROM song_genres sg WHERE sg.song_id = s.id AND LOWER(TRIM(sg.name)) IN (${gMarks})))
+          ${offlineSongFilter(offline, 's')}
+        ORDER BY COALESCE(s.play_count, 0) DESC, s.id ASC
+        LIMIT ?`,
+      [...genres, ...genres, targetCount * 2],
+    );
+    candidates.push(...(await hydrateAndMapSongRows(db, genreRows)));
+  }
+
+  const extraFiltered = candidates
+    .filter((s) => !seen.has(s.id) && getMixSkipPenalty(s.id) < 45)
+    .slice(0, Math.max(0, targetCount - known.length));
+
+  const out: Child[] = [...known];
+  for (const s of extraFiltered) {
+    if (out.length >= targetCount) break;
+    if (seen.has(s.id)) continue;
+    seen.add(s.id);
+    out.push(s);
+  }
+  for (const s of desc.clusterSongs.slice(knownCap)) {
+    if (out.length >= targetCount) break;
+    if (seen.has(s.id)) continue;
+    seen.add(s.id);
+    out.push(s);
+  }
+  return out.slice(0, targetCount);
+}
+
+/**
+ * Lazy-expand a dynamic mix by `mixKey`.
+ *
+ * Returns a valid non-expired cached entry from `dynamic_mix_cache` if present;
+ * otherwise resolves via OpenSubsonic `sonicSimilarity` (with strict 2.5s timeout
+ * and `radioSkipStore` penalties) or falls back instantaneously to local SQLite.
+ */
+export async function resolveDynamicMix(
+  mixKey: string,
+  options?: ResolveDynamicMixOptions,
+): Promise<ResolvedDynamicMix | null> {
+  const db = getDb();
+  if (!db || !mixKey) return null;
+
+  const now = Date.now();
+  const offline = isOfflineMode();
+  const ttlMs = options?.ttlMs ?? DEFAULT_DYNAMIC_MIX_TTL_MS;
+  const targetCount = Math.max(1, options?.targetCount ?? DEFAULT_DYNAMIC_MIX_TARGET_COUNT);
+  const timeoutMs = Math.max(100, options?.timeoutMs ?? DEFAULT_DYNAMIC_MIX_TIMEOUT_MS);
+
+  try {
+    if (!options?.forceRefresh) {
+      const cached = await db.getFirstAsync<DynamicMixCacheRow>(
+        `SELECT mix_key, mix_type, title, subtitle, seed_ids_json, song_ids_json, source, updated_at, expires_at
+           FROM dynamic_mix_cache
+          WHERE mix_key = ?`,
+        [mixKey],
+      );
+      if (
+        cached &&
+        cached.expires_at != null &&
+        cached.expires_at > now
+      ) {
+        const songIds = safeParseStringArray(cached.song_ids_json);
+        const seedIds = safeParseStringArray(cached.seed_ids_json);
+        if (songIds.length > 0) {
+          const hydrated = await hydrateMixSongsByIds(db, songIds, offline);
+          if (hydrated.length > 0) {
+            const mixType: DynamicMixType =
+              cached.mix_type === 'daylist' || cached.mix_type === 'rediscovery_bridge'
+                ? cached.mix_type
+                : 'daily_mix';
+            return {
+              mixKey: cached.mix_key,
+              mixType,
+              title: cached.title || cached.mix_key,
+              subtitle: cached.subtitle || '',
+              seedIds,
+              songs: hydrated.slice(0, targetCount),
+              source: cached.source === 'sonic' ? 'sonic' : 'local',
+              updatedAt: cached.updated_at ?? now,
+              expiresAt: cached.expires_at,
+              fromCache: true,
+            };
+          }
+        }
+      }
+    }
+
+    const descriptors = await buildAllDynamicMixDescriptors(db);
+    const desc = descriptors.find((d) => d.mixKey === mixKey);
+    if (!desc) return null;
+
+    let songs: Child[] = [];
+    let source: DynamicMixSource = 'local';
+
+    const canUseSonic =
+      !offline &&
+      isSonicSettingEnabled() &&
+      typeof isSonicSimilarityAvailable === 'function' &&
+      isSonicSimilarityAvailable();
+
+    if (canUseSonic) {
+      try {
+        const sonicResult = await withTimeout(
+          () => resolveMixViaSonic(desc, targetCount),
+          timeoutMs,
+        );
+        if (sonicResult !== 'timeout' && Array.isArray(sonicResult) && sonicResult.length > 0) {
+          songs = sonicResult;
+          source = 'sonic';
+        }
+      } catch {
+        // Strict fallback to local SQLite on any network/server error
+      }
+    }
+
+    if (songs.length === 0) {
+      songs = await resolveMixLocally(db, desc, targetCount, offline);
+      source = 'local';
+    }
+
+    const seedIds = desc.seedSongs.map((s) => s.id);
+    const songIds = songs.map((s) => s.id);
+    const updatedAt = Date.now();
+    const expiresAt = updatedAt + ttlMs;
+
+    await db.runAsync(
+      `INSERT OR REPLACE INTO dynamic_mix_cache
+         (mix_key, mix_type, title, subtitle, seed_ids_json, song_ids_json, source, updated_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        desc.mixKey,
+        desc.mixType,
+        desc.title,
+        desc.subtitle,
+        JSON.stringify(seedIds),
+        JSON.stringify(songIds),
+        source,
+        updatedAt,
+        expiresAt,
+      ],
+    );
+
+    return {
+      mixKey: desc.mixKey,
+      mixType: desc.mixType,
+      title: desc.title,
+      subtitle: desc.subtitle,
+      seedIds,
+      songs,
+      source,
+      updatedAt,
+      expiresAt,
+      fromCache: false,
+    };
+  } catch {
+    return null;
   }
 }

@@ -12,6 +12,7 @@ import SubsonicAPI, {
   type PlaylistWithSongs,
   type ScanStatus,
   type Share,
+  type SonicMatch,
   type StructuredLyrics,
 } from 'subsonic-api';
 
@@ -21,7 +22,12 @@ import i18n from '../i18n/i18n';
 import { authStore } from '../store/authStore';
 import { offlineModeStore } from '../store/offlineModeStore';
 import { FORMAT_PRESETS, getStreamingMaxBitRate, playbackSettingsStore, type StreamFormat, type MaxBitRate, type DlnaFormatPreference } from '../store/playbackSettingsStore';
-import { serverInfoStore, type ServerInfo } from '../store/serverInfoStore';
+import {
+  resolveSonicSimilaritySupport,
+  serverInfoStore,
+  type OpenSubsonicExtension,
+  type ServerInfo,
+} from '../store/serverInfoStore';
 import { supports } from './serverCapabilityService';
 
 const reactNativeCrypto: Crypto = {
@@ -57,6 +63,7 @@ const SUBSONIC_API_VERSION = '1.15.0';
 
 let cachedApi: SubsonicAPI | null = null;
 let cachedKey: string | null = null;
+let extensionsProbeKey: string | null = null;
 
 let cachedCoverArtKey: string | null = null;
 let cachedCoverArtSalt: string | null = null;
@@ -98,6 +105,7 @@ export async function login(
       response.openSubsonic && 'serverVersion' in response
         ? response.serverVersion
         : response.version;
+    extensionsProbeKey = null;
     return { success: true, version: version ?? response.version };
   } catch (err) {
     const message = err instanceof Error ? err.message : i18n.t('connectionFailed');
@@ -161,6 +169,7 @@ export function getApiUnchecked(): SubsonicAPI | null {
 export function clearApiCache(): void {
   cachedApi = null;
   cachedKey = null;
+  extensionsProbeKey = null;
   cachedCoverArtKey = null;
   cachedCoverArtSalt = null;
   cachedCoverArtToken = null;
@@ -190,7 +199,7 @@ export function buildPingApi(url: string): SubsonicAPI | null {
   });
 }
 
-export type { AlbumID3, AlbumInfo, AlbumWithSongsID3, ArtistID3, ArtistInfo2, ArtistWithAlbumsID3, Child, Genre, Playlist, PlaylistWithSongs, ScanStatus, Share };
+export type { AlbumID3, AlbumInfo, AlbumWithSongsID3, ArtistID3, ArtistInfo2, ArtistWithAlbumsID3, Child, Genre, Playlist, PlaylistWithSongs, ScanStatus, Share, SonicMatch };
 
 // ------------------------------------------------------------------ //
 //  Various Artists pseudo-artist                                      //
@@ -874,6 +883,161 @@ export async function getSimilarSongs2(artistId: string, count = 20): Promise<Ch
   }
 }
 
+export interface SonicTrackMatch {
+  song: Child;
+  similarity: number;
+}
+
+function getExtensionsSessionKey(): string | null {
+  const { isLoggedIn, serverUrl, username, legacyAuth } = authStore.getState();
+  if (!isLoggedIn || !serverUrl || !username) return null;
+  return `${normalizeServerUrl(serverUrl)}|${username}|${legacyAuth}`;
+}
+
+function isHttp404Error(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const status = (err as { status?: unknown }).status;
+  if (status === 404) return true;
+  if (err instanceof Error && /\b404\b/.test(err.message)) return true;
+  return false;
+}
+
+function normalizeSimilarityScore(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return -1;
+  if (raw < 0) return -1;
+  return Math.max(0, Math.min(1, raw));
+}
+
+function parseSonicMatches(raw: unknown): SonicTrackMatch[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const obj = raw as {
+    sonicMatch?: SonicMatch | SonicMatch[];
+    sonicSimilarTracks?: { sonicMatch?: SonicMatch | SonicMatch[] };
+  };
+  const candidate = obj.sonicMatch ?? obj.sonicSimilarTracks?.sonicMatch;
+  const items = Array.isArray(candidate) ? candidate : candidate ? [candidate] : [];
+
+  const results: SonicTrackMatch[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || !item.entry?.id) continue;
+    results.push({
+      song: item.entry,
+      similarity: normalizeSimilarityScore(item.similarity),
+    });
+  }
+  return results;
+}
+
+/**
+ * True when online, the active server advertises OpenSubsonic `sonicSimilarity` (v1),
+ * and the capability has not been invalidated by a runtime 404 in this session.
+ */
+export function isSonicSimilarityAvailable(): boolean {
+  if (offlineModeStore.getState().offlineMode) return false;
+  const state = serverInfoStore.getState();
+  return Boolean(state.supportsSonicSimilarity && !state.sonicSimilaritySessionDisabled);
+}
+
+/**
+ * Fetch and cache OpenSubsonic server extensions (`getOpenSubsonicExtensions`).
+ * Runs at most once per server session unless `options.force` is true.
+ */
+export async function getOpenSubsonicExtensions(
+  options?: { force?: boolean },
+): Promise<OpenSubsonicExtension[]> {
+  const sessionKey = getExtensionsSessionKey();
+  if (!options?.force && sessionKey && extensionsProbeKey === sessionKey) {
+    return serverInfoStore.getState().extensions;
+  }
+
+  const api = getApi();
+  if (!api) return serverInfoStore.getState().extensions;
+
+  try {
+    const extResponse = await api.getOpenSubsonicExtensions();
+    const extensions: OpenSubsonicExtension[] =
+      extResponse.status === 'ok' && Array.isArray(extResponse.openSubsonicExtensions)
+        ? extResponse.openSubsonicExtensions.map((e) => ({
+            name: e.name,
+            versions: Array.isArray(e.versions) ? e.versions : [],
+          }))
+        : [];
+    extensionsProbeKey = sessionKey;
+    serverInfoStore.getState().setOpenSubsonicExtensions(extensions);
+    return extensions;
+  } catch {
+    extensionsProbeKey = sessionKey;
+    serverInfoStore.getState().setOpenSubsonicExtensions([]);
+    return [];
+  }
+}
+
+/**
+ * Fetch sonically similar tracks for a song ID via OpenSubsonic `getSonicSimilarTracks`.
+ * Enforces the anti-404 guard: never calls the endpoint unless `sonicSimilarity` is
+ * advertised by the server and not invalidated for the current session.
+ */
+export async function getSonicSimilarTracks(
+  songId: string,
+  count = 30,
+): Promise<SonicTrackMatch[]> {
+  if (!songId || !isSonicSimilarityAvailable()) return [];
+  const api = getApi();
+  if (!api) return [];
+
+  try {
+    const response = await api.getSonicSimilarTracks({ id: songId, count });
+    if (response.status !== 'ok') return [];
+    return parseSonicMatches(response);
+  } catch (err) {
+    if (isHttp404Error(err)) {
+      serverInfoStore.getState().invalidateSonicSimilarityForSession();
+    }
+    return [];
+  }
+}
+
+/**
+ * Find a sonic transition path from `startSongId` to `endSongId` via OpenSubsonic `findSonicPath`.
+ * Preserves path order (`startSongId` first, `endSongId` last per spec) while deduplicating
+ * accidental repeated entries. Enforces the anti-404 guard.
+ */
+export async function findSonicPath(
+  startSongId: string,
+  endSongId: string,
+  count = 15,
+): Promise<SonicTrackMatch[]> {
+  if (
+    !startSongId ||
+    !endSongId ||
+    startSongId === endSongId ||
+    !isSonicSimilarityAvailable()
+  ) {
+    return [];
+  }
+  const api = getApi();
+  if (!api) return [];
+
+  try {
+    const response = await api.findSonicPath({ startSongId, endSongId, count });
+    if (response.status !== 'ok') return [];
+    const parsed = parseSonicMatches(response);
+    const seen = new Set<string>();
+    const ordered: SonicTrackMatch[] = [];
+    for (const match of parsed) {
+      if (seen.has(match.song.id)) continue;
+      seen.add(match.song.id);
+      ordered.push(match);
+    }
+    return ordered;
+  } catch (err) {
+    if (isHttp404Error(err)) {
+      serverInfoStore.getState().invalidateSonicSimilarityForSession();
+    }
+    return [];
+  }
+}
+
 /**
  * Fetch all playlists via the getPlaylists endpoint.
  */
@@ -1030,20 +1194,33 @@ export async function fetchServerInfo(): Promise<ServerInfo | null> {
         ? pingResponse.serverVersion
         : null;
 
-    let extensions: ServerInfo['extensions'] = [];
+    const sessionKey = getExtensionsSessionKey();
+    let extensions: ServerInfo['extensions'] = serverInfoStore.getState().extensions;
     if (openSubsonic) {
-      try {
-        const extResponse = await api.getOpenSubsonicExtensions();
-        if (extResponse.status === 'ok' && extResponse.openSubsonicExtensions) {
-          extensions = extResponse.openSubsonicExtensions.map((e) => ({
-            name: e.name,
-            versions: e.versions ?? [],
-          }));
+      if (!sessionKey || extensionsProbeKey !== sessionKey) {
+        try {
+          const extResponse = await api.getOpenSubsonicExtensions();
+          if (extResponse.status === 'ok' && extResponse.openSubsonicExtensions) {
+            extensions = extResponse.openSubsonicExtensions.map((e) => ({
+              name: e.name,
+              versions: e.versions ?? [],
+            }));
+          } else {
+            extensions = [];
+          }
+          extensionsProbeKey = sessionKey;
+        } catch {
+          extensions = [];
+          extensionsProbeKey = sessionKey;
         }
-      } catch {
-        // Server may not support getOpenSubsonicExtensions
       }
+    } else {
+      extensions = [];
+      extensionsProbeKey = sessionKey;
     }
+
+    const { supportsSonicSimilarity, sonicSimilarityVersion } =
+      resolveSonicSimilaritySupport(extensions);
 
     let adminRole: boolean | null = null;
     let shareRole: boolean | null = null;
@@ -1066,6 +1243,8 @@ export async function fetchServerInfo(): Promise<ServerInfo | null> {
       apiVersion,
       openSubsonic,
       extensions,
+      supportsSonicSimilarity,
+      sonicSimilarityVersion,
       lastFetchedAt: Date.now(),
       adminRole,
       shareRole,

@@ -25,6 +25,7 @@ import {
   buildCompactLibraryCatalog,
   generatePlaylistFromPrompt,
   querySongsByAiCriteria,
+  rerankSonicCandidates,
   testConnection,
   type AiCuratedCriteria,
 } from '../byokAiService';
@@ -967,5 +968,43 @@ describe('boostRadioCandidates', () => {
     await fetchStarted;
     jest.advanceTimersByTime(5000);
     expect(await pending).toEqual([]);
+  });
+});
+
+describe('rerankSonicCandidates', () => {
+  const seed = makeChild({ id: 'seed-1', artist: 'Massive Attack', genre: 'Trip-Hop' });
+  const c1 = makeChild({ id: 'c1', title: 'Track 1', artist: 'Artist A' });
+  const c2 = makeChild({ id: 'c2', title: 'Track 2', artist: 'Artist B' });
+  const c3 = makeChild({ id: 'c3', title: 'Track 3', artist: 'Artist C' });
+
+  it('reorders sonic candidates per rankedIds while preserving remaining candidates and degrades safely on error', async () => {
+    radioAiSettingsStore.setState({
+      provider: 'groq',
+      baseUrl: 'https://api.groq.com/openai/v1',
+      modelName: 'llama-3.3-70b-versatile',
+      apiKey: 'gsk-radio-secret',
+    });
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '{"rankedIds":["c3","c1","unknown-id"]}',
+              },
+            },
+          ],
+        }),
+    });
+
+    const reranked = await rerankSonicCandidates([seed], [c1, c2, c3]);
+    expect(reranked.map((c) => c.id)).toEqual(['c3', 'c1', 'c2']);
+
+    mockFetch.mockRejectedValueOnce(new Error('timeout'));
+    const fallback = await rerankSonicCandidates([seed], [c1, c2, c3]);
+    expect(fallback.map((c) => c.id)).toEqual(['c1', 'c2', 'c3']);
   });
 });

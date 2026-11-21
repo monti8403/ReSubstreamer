@@ -182,6 +182,8 @@ export const MODEL_TABLES: readonly string[] = [
   // in `resetAllStores`, so this reproduces what ships today.
   'mbid_overrides',
   'scrobble_exclusions',
+  // Dynamic mix cache holds server-scoped seed/song IDs and sonic similarity results.
+  'dynamic_mix_cache',
 ];
 
 /**

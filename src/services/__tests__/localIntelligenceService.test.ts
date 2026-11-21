@@ -1,3 +1,12 @@
+const mockIsSonicSimilarityAvailable = jest.fn().mockReturnValue(false);
+const mockGetSonicSimilarTracks = jest.fn().mockResolvedValue([]);
+const mockFindSonicPath = jest.fn().mockResolvedValue([]);
+jest.mock('../subsonicService', () => ({
+  isSonicSimilarityAvailable: () => mockIsSonicSimilarityAvailable(),
+  getSonicSimilarTracks: (...args: any[]) => mockGetSonicSimilarTracks(...args),
+  findSonicPath: (...args: any[]) => mockFindSonicPath(...args),
+}));
+
 import type { AlbumID3, ArtistID3, Child, Playlist } from 'subsonic-api';
 
 import { ensureNormalizedSchema } from '../../db/createNormalizedTables';
@@ -17,12 +26,14 @@ import {
 import { insertScrobble } from '../../store/persistence/scrobbleTable';
 import { recentPlaysStore } from '../../store/recentPlaysStore';
 import {
+  getDynamicMixSummaries,
   getForgottenGems,
   getHourlyDaylist,
   getJumpBackIn,
   getOnRepeat,
   getQuickMoodChips,
   getSongsForMoodChip,
+  resolveDynamicMix,
 } from '../localIntelligenceService';
 
 const db = () => getDb()!;
@@ -57,6 +68,7 @@ const TABLES_TO_CLEAR = [
   'songs',
   'albums',
   'artists',
+  'dynamic_mix_cache',
 ];
 
 const makeSong = (id: string, extra: Partial<Child> = {}): Child =>
@@ -132,6 +144,10 @@ beforeAll(() => {
 
 beforeEach(() => {
   jest.useRealTimers();
+  jest.clearAllMocks();
+  mockIsSonicSimilarityAvailable.mockReturnValue(false);
+  mockGetSonicSimilarTracks.mockResolvedValue([]);
+  mockFindSonicPath.mockResolvedValue([]);
   offlineModeStore.setState({ offlineMode: false });
   recentPlaysStore.setState({ recentItems: [] });
   completedScrobbleStore.setState({ recentScrobbles: [] });
@@ -504,5 +520,119 @@ describe('getQuickMoodChips & getSongsForMoodChip', () => {
     const dreamyChip = chips.find((c) => c.id === 'mood:dreamy');
     expect(dreamyChip?.songCount).toBe(1);
     expect((await getSongsForMoodChip(dreamyChip!)).map((s) => s.id)).toEqual(['dl-only']);
+  });
+});
+
+describe('Dynamic Mixes & dynamic_mix_cache', () => {
+  it('getDynamicMixSummaries returns mix summaries at 0ms from SQLite with zero network calls', async () => {
+    const now = Date.now();
+    const s1 = makeSong('r1', { artist: 'Artist A', genre: 'Electronic' });
+    const s2 = makeSong('r2', { artist: 'Artist A', genre: 'Electronic' });
+    const s3 = makeSong('r3', { artist: 'Artist B', genre: 'Jazz' });
+    const s4 = makeSong('r4', { artist: 'Artist B', genre: 'Jazz' });
+    const gem = makeSong('gem1', {
+      artist: 'Gem Artist',
+      genre: 'Ambient',
+      playCount: 5,
+      played: new Date(now - 90 * DAY_MS).toISOString(),
+    });
+    await upsertSongs(db(), [s1, s2, s3, s4, gem]);
+    await upsertPlaylists(db(), [makePlaylist('pl1', 'Club Mix')]);
+    await setPlaylistSongs(db(), 'pl1', ['r1', 'r2']);
+
+    await insertScrobble({ id: 'sc1', song: s1, time: now - 1 * DAY_MS });
+    await insertScrobble({ id: 'sc2', song: s2, time: now - 2 * DAY_MS });
+    await insertScrobble({ id: 'sc3', song: s3, time: now - 3 * DAY_MS });
+    await insertScrobble({ id: 'sc4', song: s4, time: now - 4 * DAY_MS });
+
+    mockIsSonicSimilarityAvailable.mockReturnValue(true);
+    const summaries = await getDynamicMixSummaries();
+
+    expect(mockGetSonicSimilarTracks).not.toHaveBeenCalled();
+    expect(mockFindSonicPath).not.toHaveBeenCalled();
+    expect(summaries.some((m) => m.mixKey === 'daily-mix-1')).toBe(true);
+    expect(summaries.some((m) => m.mixKey === 'daily-mix-2')).toBe(true);
+    expect(summaries.some((m) => m.mixKey === 'daylist')).toBe(true);
+    expect(summaries.some((m) => m.mixKey === 'rediscovery-bridge')).toBe(true);
+  });
+
+  it('resolveDynamicMix resolves Daily Mix via sonicSimilarity, caches it, and returns cache hit on subsequent call', async () => {
+    const now = Date.now();
+    const seed1 = makeSong('r1', { artist: 'Artist A', genre: 'Electronic' });
+    const seed2 = makeSong('r2', { artist: 'Artist A', genre: 'Electronic' });
+    const sonicShared = makeSong('son-shared', { artist: 'Artist C', genre: 'Electronic' });
+    const sonicOther = makeSong('son-other', { artist: 'Artist D', genre: 'Electronic' });
+    await upsertSongs(db(), [seed1, seed2, sonicShared, sonicOther]);
+
+    await insertScrobble({ id: 'sc1', song: seed1, time: now - 1 * DAY_MS });
+    await insertScrobble({ id: 'sc2', song: seed1, time: now - 2 * DAY_MS });
+    await insertScrobble({ id: 'sc3', song: seed2, time: now - 3 * DAY_MS });
+
+    mockIsSonicSimilarityAvailable.mockReturnValue(true);
+    mockGetSonicSimilarTracks.mockImplementation(async (id: string) => {
+      if (id === 'r1') {
+        return [
+          { song: sonicShared, similarity: 0.85 },
+          { song: sonicOther, similarity: 0.9 },
+        ];
+      }
+      return [{ song: sonicShared, similarity: 0.88 }];
+    });
+
+    const first = await resolveDynamicMix('daily-mix-1', { targetCount: 10 });
+    expect(first).not.toBeNull();
+    expect(first!.source).toBe('sonic');
+    expect(first!.fromCache).toBe(false);
+    expect(first!.songs.map((s) => s.id)).toContain('son-shared');
+    // Recurring song across both seeds ranks ahead of single-seed song
+    const ids = first!.songs.map((s) => s.id);
+    expect(ids.indexOf('son-shared')).toBeLessThan(ids.indexOf('son-other'));
+
+    // Second call hits dynamic_mix_cache without hitting network again
+    mockGetSonicSimilarTracks.mockClear();
+    const second = await resolveDynamicMix('daily-mix-1', { targetCount: 10 });
+    expect(second).not.toBeNull();
+    expect(second!.fromCache).toBe(true);
+    expect(second!.source).toBe('sonic');
+    expect(mockGetSonicSimilarTracks).not.toHaveBeenCalled();
+  });
+
+  it('resolveDynamicMix resolves rediscovery-bridge via findSonicPath and falls back locally on timeout/offline', async () => {
+    const now = Date.now();
+    const onRep = makeSong('rep-1', { artist: 'Repeat Artist', genre: 'Ambient' });
+    const mid = makeSong('mid-1', { artist: 'Mid Artist', genre: 'Ambient', playCount: 3 });
+    const gem = makeSong('gem-1', {
+      artist: 'Gem Artist',
+      genre: 'Ambient',
+      playCount: 4,
+      played: new Date(now - 90 * DAY_MS).toISOString(),
+    });
+    await upsertSongs(db(), [onRep, mid, gem]);
+    await insertScrobble({ id: 'sc1', song: onRep, time: now - 1 * DAY_MS });
+
+    mockIsSonicSimilarityAvailable.mockReturnValue(true);
+    mockFindSonicPath.mockResolvedValue([
+      { song: onRep, similarity: 1.0 },
+      { song: mid, similarity: 0.8 },
+      { song: gem, similarity: 0.6 },
+    ]);
+
+    const sonicBridge = await resolveDynamicMix('rediscovery-bridge');
+    expect(sonicBridge).not.toBeNull();
+    expect(sonicBridge!.source).toBe('sonic');
+    expect(sonicBridge!.songs.map((s) => s.id)).toEqual(['rep-1', 'mid-1', 'gem-1']);
+
+    // Timeout (>2.5s) forces instantaneous local fallback
+    mockFindSonicPath.mockImplementation(
+      () => new Promise(() => { /* never resolves */ }),
+    );
+    const localBridge = await resolveDynamicMix('rediscovery-bridge', {
+      forceRefresh: true,
+      timeoutMs: 120,
+    });
+    expect(localBridge).not.toBeNull();
+    expect(localBridge!.source).toBe('local');
+    expect(localBridge!.songs.map((s) => s.id)).toContain('rep-1');
+    expect(localBridge!.songs.map((s) => s.id)).toContain('gem-1');
   });
 });

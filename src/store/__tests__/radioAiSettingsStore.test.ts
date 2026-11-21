@@ -69,6 +69,7 @@ describe('radioAiSettingsStore', () => {
     expect(state.infiniteAutoplay).toBe(true);
     expect(state.radioMode).toBe('mood');
     expect(state.sources).toEqual({
+      sonicSimilarity: true,
       server: true,
       localHistory: true,
       metadata: true,
@@ -146,7 +147,7 @@ describe('radioAiSettingsStore', () => {
       baseUrl: 'https://api.openai.com/v1',
       modelName: 'gpt-4o-mini',
       apiKey: 'sk-live-test',
-      sources: { server: false, localHistory: false, metadata: false, aiBoost: true },
+      sources: { sonicSimilarity: false, server: false, localHistory: false, metadata: false, aiBoost: true },
     });
 
     mockFetch.mockResolvedValueOnce({

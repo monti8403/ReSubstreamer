@@ -14,6 +14,8 @@ jest.mock('../subsonicService', () => ({
   getRandomSongsFiltered: jest.fn(),
   getTopSongs: jest.fn(),
   search3: jest.fn(),
+  isSonicSimilarityAvailable: jest.fn().mockReturnValue(false),
+  getSonicSimilarTracks: jest.fn().mockResolvedValue([]),
 }));
 
 import type { Child, Playlist } from 'subsonic-api';
@@ -31,12 +33,15 @@ import {
   getSmartRadioTracks,
   hasFeaturingOrSeparator,
   registerSmartRadioAiBoostProvider,
+  registerSmartRadioAiRerankProvider,
 } from '../smartRadioService';
 import {
   getRandomSongsFiltered,
   getSimilarSongs,
   getSimilarSongs2,
+  getSonicSimilarTracks,
   getTopSongs,
+  isSonicSimilarityAvailable,
   search3,
 } from '../subsonicService';
 
@@ -45,6 +50,8 @@ const mockGetSimilarSongs2 = getSimilarSongs2 as jest.Mock;
 const mockGetRandomSongsFiltered = getRandomSongsFiltered as jest.Mock;
 const mockGetTopSongs = getTopSongs as jest.Mock;
 const mockSearch3 = search3 as jest.Mock;
+const mockIsSonicSimilarityAvailable = isSonicSimilarityAvailable as jest.Mock;
+const mockGetSonicSimilarTracks = getSonicSimilarTracks as jest.Mock;
 
 const realDb = getDb()!;
 
@@ -88,6 +95,7 @@ function makeSettings(overrides: Partial<RadioAiSettingsSnapshot> = {}): RadioAi
     infiniteAutoplay: true,
     radioMode: 'balanced',
     sources: {
+      sonicSimilarity: true,
       server: true,
       localHistory: true,
       metadata: true,
@@ -126,14 +134,18 @@ beforeEach(() => {
   mockGetRandomSongsFiltered.mockResolvedValue([]);
   mockGetTopSongs.mockResolvedValue([]);
   mockSearch3.mockResolvedValue({});
+  mockIsSonicSimilarityAvailable.mockReturnValue(false);
+  mockGetSonicSimilarTracks.mockResolvedValue([]);
   offlineModeStore.setState({ offlineMode: false });
   radioAiSettingsStore.getState().resetRadioAiSettings();
   registerSmartRadioAiBoostProvider(null);
+  registerSmartRadioAiRerankProvider(null);
 });
 
 afterEach(() => {
   __setDbForTests(realDb);
   registerSmartRadioAiBoostProvider(null);
+  registerSmartRadioAiRerankProvider(null);
 });
 
 describe('hasFeaturingOrSeparator & extractPrimaryArtistName', () => {
@@ -187,7 +199,7 @@ describe('Level 1 — Server Subsonic waterfall', () => {
       ],
       targetCount: 6,
       settings: makeSettings({
-        sources: { server: true, localHistory: false, metadata: false, aiBoost: false },
+        sources: { sonicSimilarity: true, server: true, localHistory: false, metadata: false, aiBoost: false },
       }),
     });
 
@@ -207,7 +219,7 @@ describe('Level 1 — Server Subsonic waterfall', () => {
       seedSongs: [makeSong('seed', { artist: 'Artie 5ive/Kid Yugi', title: 'SACRIFICIO' })],
       targetCount: 6,
       settings: makeSettings({
-        sources: { server: true, localHistory: false, metadata: false, aiBoost: false },
+        sources: { sonicSimilarity: true, server: true, localHistory: false, metadata: false, aiBoost: false },
       }),
     });
 
@@ -223,7 +235,7 @@ describe('Level 1 — Server Subsonic waterfall', () => {
       seedSongs: [makeSong('seed', { artist: 'Solo Artist' })],
       targetCount: 10,
       settings: makeSettings({
-        sources: { server: true, localHistory: false, metadata: false, aiBoost: false },
+        sources: { sonicSimilarity: true, server: true, localHistory: false, metadata: false, aiBoost: false },
       }),
     });
 
@@ -273,7 +285,7 @@ describe('Level 2 — Personal Co-occurrence (SQLite, offline)', () => {
       targetCount: 5,
       downloadedOnly: true,
       settings: makeSettings({
-        sources: { server: false, localHistory: true, metadata: false, aiBoost: false },
+        sources: { sonicSimilarity: true, server: false, localHistory: true, metadata: false, aiBoost: false },
       }),
     });
 
@@ -297,7 +309,7 @@ describe('Level 2 — Personal Co-occurrence (SQLite, offline)', () => {
       seedSongs: [seed],
       targetCount: 5,
       settings: makeSettings({
-        sources: { server: false, localHistory: true, metadata: false, aiBoost: false },
+        sources: { sonicSimilarity: true, server: false, localHistory: true, metadata: false, aiBoost: false },
       }),
     });
 
@@ -342,7 +354,7 @@ describe('Level 3 — Metadata Affinity & Modes', () => {
       targetCount: 2,
       settings: makeSettings({
         radioMode: 'faithful',
-        sources: { server: false, localHistory: false, metadata: true, aiBoost: false },
+        sources: { sonicSimilarity: true, server: false, localHistory: false, metadata: true, aiBoost: false },
       }),
     });
 
@@ -374,7 +386,7 @@ describe('Level 3 — Metadata Affinity & Modes', () => {
       targetCount: 2,
       settings: makeSettings({
         radioMode: 'discovery',
-        sources: { server: false, localHistory: false, metadata: true, aiBoost: false },
+        sources: { sonicSimilarity: true, server: false, localHistory: false, metadata: true, aiBoost: false },
       }),
     });
 
@@ -413,7 +425,7 @@ describe('Level 3 — Metadata Affinity & Modes', () => {
       targetCount: 2,
       settings: makeSettings({
         radioMode: 'mood',
-        sources: { server: false, localHistory: false, metadata: true, aiBoost: false },
+        sources: { sonicSimilarity: true, server: false, localHistory: false, metadata: true, aiBoost: false },
       }),
     });
 
@@ -442,7 +454,7 @@ describe('Level 3 — Metadata Affinity & Modes', () => {
       targetCount: 5,
       downloadedOnly: true,
       settings: makeSettings({
-        sources: { server: false, localHistory: false, metadata: true, aiBoost: false },
+        sources: { sonicSimilarity: true, server: false, localHistory: false, metadata: true, aiBoost: false },
       }),
     });
 
@@ -460,7 +472,7 @@ describe('AI Boost, Level 4 safety net, anti-repeat, and artist spacing', () => 
       targetCount: 3,
       settings: makeSettings({
         provider: 'openai',
-        sources: { server: true, localHistory: false, metadata: false, aiBoost: true },
+        sources: { sonicSimilarity: true, server: true, localHistory: false, metadata: false, aiBoost: true },
       }),
     });
     expect(tracks.map((t) => t.id)).toContain('ai-1');
@@ -474,7 +486,7 @@ describe('AI Boost, Level 4 safety net, anti-repeat, and artist spacing', () => 
       targetCount: 2,
       settings: makeSettings({
         provider: 'openai',
-        sources: { server: true, localHistory: false, metadata: false, aiBoost: true },
+        sources: { sonicSimilarity: true, server: true, localHistory: false, metadata: false, aiBoost: true },
       }),
     });
     expect(safeTracks.map((t) => t.id)).toEqual(['t1', 't2']);
@@ -494,7 +506,7 @@ describe('AI Boost, Level 4 safety net, anti-repeat, and artist spacing', () => 
       targetCount: 2,
       settings: makeSettings({
         provider: 'groq',
-        sources: { server: true, localHistory: true, metadata: true, aiBoost: true },
+        sources: { sonicSimilarity: true, server: true, localHistory: true, metadata: true, aiBoost: true },
       }),
     });
     expect(aiOnly.map((t) => t.id)).toEqual(['ai-1', 'ai-2']);
@@ -506,7 +518,7 @@ describe('AI Boost, Level 4 safety net, anti-repeat, and artist spacing', () => 
       targetCount: 2,
       settings: makeSettings({
         provider: 'disabled',
-        sources: { server: true, localHistory: true, metadata: true, aiBoost: false },
+        sources: { sonicSimilarity: true, server: true, localHistory: true, metadata: true, aiBoost: false },
       }),
     });
     expect(mockGetSimilarSongs).toHaveBeenCalledTimes(1);
@@ -530,7 +542,7 @@ describe('AI Boost, Level 4 safety net, anti-repeat, and artist spacing', () => 
         targetCount: 2,
         settings: makeSettings({
           provider: 'disabled',
-          sources: { server: true, localHistory: false, metadata: false, aiBoost: false },
+          sources: { sonicSimilarity: true, server: true, localHistory: false, metadata: false, aiBoost: false },
         }),
       });
 
@@ -554,7 +566,7 @@ describe('AI Boost, Level 4 safety net, anti-repeat, and artist spacing', () => 
       excludeIds: new Set(['prev-1', 'prev-2']),
       settings: makeSettings({
         sessionAntiRepeat: true,
-        sources: { server: true, localHistory: false, metadata: false, aiBoost: false },
+        sources: { sonicSimilarity: true, server: true, localHistory: false, metadata: false, aiBoost: false },
       }),
     });
 
@@ -574,7 +586,7 @@ describe('AI Boost, Level 4 safety net, anti-repeat, and artist spacing', () => 
       seedSongs: [makeSong('seed')],
       targetCount: 4,
       settings: makeSettings({
-        sources: { server: true, localHistory: false, metadata: false, aiBoost: false },
+        sources: { sonicSimilarity: true, server: true, localHistory: false, metadata: false, aiBoost: false },
       }),
     });
 
@@ -594,7 +606,7 @@ describe('AI Boost, Level 4 safety net, anti-repeat, and artist spacing', () => 
         targetCount: 10,
         randomize: true,
         settings: makeSettings({
-          sources: { server: true, localHistory: false, metadata: false, aiBoost: false },
+          sources: { sonicSimilarity: true, server: true, localHistory: false, metadata: false, aiBoost: false },
         }),
       });
       expect(mockGetSimilarSongs).toHaveBeenLastCalledWith('seed', 35);
@@ -617,7 +629,7 @@ describe('AI Boost, Level 4 safety net, anti-repeat, and artist spacing', () => 
       seedSongs: [seed],
       targetCount: 3,
       settings: makeSettings({
-        sources: { server: false, localHistory: false, metadata: false, aiBoost: false },
+        sources: { sonicSimilarity: false, server: false, localHistory: false, metadata: false, aiBoost: false },
       }),
     });
 
@@ -643,5 +655,110 @@ describe('AI Boost, Level 4 safety net, anti-repeat, and artist spacing', () => 
       targetCount: 5,
     });
     expect(tracksNullDb.map((t) => t.id)).toEqual(['t1']);
+  });
+});
+
+describe('Level 0 — OpenSubsonic sonicSimilarity & AI rerank interaction', () => {
+  it('uses getSonicSimilarTracks at Level 0, integrates normalized similarity + local corroboration + skip penalty, and skips getSimilarSongs when satisfied', async () => {
+    const seed = makeSong('seed', { genre: 'Electronic', year: 2020 });
+    const sLow = makeSong('sonic-low', { artist: 'Artist X', genre: 'Electronic', year: 2020 });
+    const sHigh = makeSong('sonic-high', { artist: 'Artist Y', genre: 'Electronic', year: 2020 });
+    const sSkipped = makeSong('sonic-skipped', { artist: 'Artist Z', genre: 'Electronic', year: 2020 });
+    await upsertSongs(realDb, [seed, sLow, sHigh, sSkipped]);
+    await upsertPlaylists(realDb, [
+      { id: 'pl-sonic', name: 'Sonic Mix', songCount: 2, duration: 400, created: new Date() } as Playlist,
+    ]);
+    await setPlaylistSongs(realDb, 'pl-sonic', ['seed', 'sonic-low']);
+
+    const { radioSkipStore } = require('../../store/radioSkipStore');
+    radioSkipStore.getState().reset();
+    radioSkipStore.getState().recordSkip({ id: 'sonic-skipped', title: 'Skip', artist: 'Artist Z' });
+
+    mockIsSonicSimilarityAvailable.mockReturnValue(true);
+    mockGetSonicSimilarTracks.mockResolvedValue([
+      { song: sLow, similarity: 0.4 },
+      { song: sSkipped, similarity: 0.99 },
+      { song: sHigh, similarity: 0.95 },
+    ]);
+
+    try {
+      const tracks = await getSmartRadioTracks({
+        seedSongs: [seed],
+        targetCount: 3,
+        settings: makeSettings({
+          radioMode: 'balanced',
+          sources: { sonicSimilarity: true, server: true, localHistory: true, metadata: true, aiBoost: false },
+        }),
+      });
+
+      expect(mockGetSonicSimilarTracks).toHaveBeenCalledWith('seed', 40);
+      expect(mockGetSimilarSongs).not.toHaveBeenCalled();
+      expect(tracks.map((t) => t.id)).toEqual(['sonic-high', 'sonic-low', 'sonic-skipped']);
+    } finally {
+      radioSkipStore.getState().reset();
+    }
+  });
+
+  it('uses BYOK AI only as a lightweight reranker in discovery mode when sonicSimilarity populates the pool, and skips AI in balanced mode', async () => {
+    const seed = makeSong('seed');
+    const c1 = makeSong('c1');
+    const c2 = makeSong('c2');
+    const c3 = makeSong('c3');
+
+    mockIsSonicSimilarityAvailable.mockReturnValue(true);
+    mockGetSonicSimilarTracks.mockResolvedValue([
+      { song: c1, similarity: 0.9 },
+      { song: c2, similarity: 0.85 },
+      { song: c3, similarity: 0.8 },
+    ]);
+
+    const boostSpy = jest.fn().mockResolvedValue([makeSong('ai-only')]);
+    const rerankSpy = jest.fn().mockResolvedValue([c3, c2, c1]);
+    registerSmartRadioAiBoostProvider(boostSpy);
+    registerSmartRadioAiRerankProvider(rerankSpy);
+
+    // Balanced mode: skips BYOK AI completely when sonicSimilarity populated the pool
+    await getSmartRadioTracks({
+      seedSongs: [seed],
+      targetCount: 3,
+      settings: makeSettings({
+        radioMode: 'balanced',
+        provider: 'openai',
+        sources: { sonicSimilarity: true, server: true, localHistory: false, metadata: false, aiBoost: true },
+      }),
+    });
+    expect(boostSpy).not.toHaveBeenCalled();
+    expect(rerankSpy).not.toHaveBeenCalled();
+
+    // Discovery mode: runs lightweight reranker over sonic candidates without boostRadioCandidates
+    const discoveryTracks = await getSmartRadioTracks({
+      seedSongs: [seed],
+      targetCount: 3,
+      settings: makeSettings({
+        radioMode: 'discovery',
+        provider: 'openai',
+        sources: { sonicSimilarity: true, server: true, localHistory: false, metadata: false, aiBoost: true },
+      }),
+    });
+    expect(boostSpy).not.toHaveBeenCalled();
+    expect(rerankSpy).toHaveBeenCalledTimes(1);
+    expect(discoveryTracks[0].id).toBe('c3');
+  });
+
+  it('skips getSonicSimilarTracks for directory/artist pseudo-seeds and falls back to Level 2 server radio', async () => {
+    mockIsSonicSimilarityAvailable.mockReturnValue(true);
+    mockGetSimilarSongs2.mockResolvedValue([makeSong('art-sim-1')]);
+
+    const tracks = await getSmartRadioTracks({
+      seedSongs: [makeSong('artist-dir', { isDir: true, artistId: 'artist-1' })],
+      targetCount: 1,
+      settings: makeSettings({
+        sources: { sonicSimilarity: true, server: true, localHistory: false, metadata: false, aiBoost: false },
+      }),
+    });
+
+    expect(mockGetSonicSimilarTracks).not.toHaveBeenCalled();
+    expect(mockGetSimilarSongs2).toHaveBeenCalledWith('artist-1', 1);
+    expect(tracks.map((t) => t.id)).toEqual(['art-sim-1']);
   });
 });

@@ -8,6 +8,8 @@ const baseInfo: ServerInfo = {
   apiVersion: '1.16.1',
   openSubsonic: true,
   extensions: [{ name: 'transcodeOffset', versions: [1] }],
+  supportsSonicSimilarity: false,
+  sonicSimilarityVersion: null,
   lastFetchedAt: 999,
   adminRole: true,
   shareRole: true,
@@ -59,5 +61,34 @@ describe('serverInfoStore', () => {
     expect(state.lastFetchedAt).toBeNull();
     expect(state.adminRole).toBeNull();
     expect(state.shareRole).toBeNull();
+    expect(state.supportsSonicSimilarity).toBe(false);
+    expect(state.sonicSimilarityVersion).toBeNull();
+    expect(state.sonicSimilaritySessionDisabled).toBe(false);
+  });
+
+  it('derives supportsSonicSimilarity and supports session 404 invalidation', () => {
+    serverInfoStore.getState().setOpenSubsonicExtensions([
+      { name: 'transcodeOffset', versions: [1] },
+      { name: 'sonicSimilarity', versions: [1] },
+    ]);
+
+    let state = serverInfoStore.getState();
+    expect(state.supportsSonicSimilarity).toBe(true);
+    expect(state.sonicSimilarityVersion).toBe(1);
+    expect(state.sonicSimilaritySessionDisabled).toBe(false);
+
+    state.invalidateSonicSimilarityForSession();
+    expect(serverInfoStore.getState().sonicSimilaritySessionDisabled).toBe(true);
+
+    // Fresh setServerInfo resets the session 404 override
+    serverInfoStore.getState().setServerInfo({
+      ...baseInfo,
+      extensions: [{ name: 'sonicSimilarity', versions: [1] }],
+      supportsSonicSimilarity: true,
+      sonicSimilarityVersion: 1,
+    });
+    state = serverInfoStore.getState();
+    expect(state.supportsSonicSimilarity).toBe(true);
+    expect(state.sonicSimilaritySessionDisabled).toBe(false);
   });
 });
