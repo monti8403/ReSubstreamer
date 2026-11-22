@@ -11,12 +11,6 @@ jest.mock('../../services/moreOptionsService', () => ({
   removeItemFromQueue: (...args: unknown[]) => mockRemoveItemFromQueue(...args),
 }));
 
-const mockDrag = jest.fn();
-
-jest.mock('react-native-reorderable-list', () => ({
-  useReorderableDrag: () => mockDrag,
-}));
-
 jest.mock('../../hooks/useDownloadStatus', () => ({
   useDownloadStatus: () => 'none',
 }));
@@ -90,7 +84,7 @@ describe('QueueItemRow', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockCapturedProps = {};
-    playerStore.setState({ userQueueTrackIds: [] });
+    playerStore.setState({ userQueueTrackIds: [], userQueueKeys: [] });
   });
 
   it('shows right swipe (Add to Queue) on Next Up tracks', () => {
@@ -193,7 +187,7 @@ describe('QueueItemRow', () => {
     expect(queryByTestId('queue-item-drag-handle')).toBeNull();
   });
 
-  it('triggers drag and handle callbacks on pressIn and pressOut', () => {
+  it('triggers handle callbacks on pressIn and pressOut when provided', () => {
     const track = makeTrack('s1');
     const onGrabHandle = jest.fn();
     const onReleaseHandle = jest.fn();
@@ -212,13 +206,47 @@ describe('QueueItemRow', () => {
     const handle = getByTestId('queue-item-drag-handle');
     fireEvent(handle, 'pressIn');
     expect(onGrabHandle).toHaveBeenCalledTimes(1);
-    expect(mockDrag).toHaveBeenCalledTimes(1);
 
     fireEvent(handle, 'pressOut');
     expect(onReleaseHandle).toHaveBeenCalledTimes(1);
   });
 
-  it('respects explicit isInUserQueue prop without reading userQueueTrackIds from store', () => {
+  it('forwards queueKey as SwipeableRow recyclingKey, hides handle when showDragHandle is false, and dims when isDragging', () => {
+    const track = makeTrack('s1');
+    const { queryByTestId, rerender, toJSON } = render(
+      <QueueItemRow
+        track={track}
+        index={1}
+        isActive={false}
+        isInUserQueue={false}
+        queueKey="s1_99"
+        isDragging={true}
+        showDragHandle={false}
+        colors={mockColors}
+        onPress={jest.fn()}
+      />,
+    );
+
+    expect(mockCapturedProps.recyclingKey).toBe('s1_99');
+    expect(queryByTestId('queue-item-drag-handle')).toBeNull();
+    expect(JSON.stringify(toJSON())).toContain('"opacity":0.25');
+
+    rerender(
+      <QueueItemRow
+        track={track}
+        index={1}
+        isActive={false}
+        isInUserQueue={false}
+        colors={mockColors}
+        onPress={jest.fn()}
+      />,
+    );
+    expect(mockCapturedProps.recyclingKey).toBe('s1');
+    expect(queryByTestId('queue-item-drag-handle')).toBeTruthy();
+  });
+
+  it('respects explicit isInUserQueue prop without subscribing to playerStore', () => {
+    const subscribeSpy = jest.spyOn(playerStore, 'subscribe');
     const track = makeTrack('s1');
     render(
       <QueueItemRow
@@ -232,5 +260,30 @@ describe('QueueItemRow', () => {
     );
     expect(mockCapturedProps.enableFullSwipeRight).toBe(false);
     expect(mockCapturedProps.rightActions).toHaveLength(0);
+    expect(subscribeSpy).not.toHaveBeenCalled();
+    subscribeSpy.mockRestore();
+  });
+
+  it('checks userQueueKeys in fallback mode when userQueueKeys is populated', () => {
+    const { ensureQueueKey } = require('../../utils/queueKeys');
+    const track = makeTrack('s1');
+    const otherCopy = makeTrack('s1');
+    const otherKey = ensureQueueKey(otherCopy);
+
+    playerStore.setState({ userQueueKeys: [otherKey], userQueueTrackIds: ['s1'] });
+
+    render(
+      <QueueItemRow
+        track={track}
+        index={1}
+        isActive={false}
+        colors={mockColors}
+        onPress={jest.fn()}
+      />,
+    );
+
+    // Track's own entry key is NOT in userQueueKeys, even though track.id is in userQueueTrackIds
+    expect(mockCapturedProps.enableFullSwipeRight).toBe(true);
+    expect(mockCapturedProps.rightActions).toHaveLength(1);
   });
 });

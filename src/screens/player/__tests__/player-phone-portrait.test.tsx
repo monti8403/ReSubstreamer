@@ -56,24 +56,6 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ back: mockRouterBack, push: mockRouterPush }),
 }));
 
-jest.mock('react-native-reorderable-list', () => {
-  const { View } = require('react-native');
-  const ReorderableList = ({ data, renderItem, ListHeaderComponent }: any) => (
-    <View testID="reorderable-list">
-      {ListHeaderComponent}
-      {data?.map((item: any, index: number) => (
-        <View key={item.id || index}>{renderItem({ item, index })}</View>
-      ))}
-    </View>
-  );
-  return {
-    __esModule: true,
-    default: ReorderableList,
-    ReorderableListItem: ({ children }: { children: React.ReactNode }) => <View>{children}</View>,
-    useReorderableDrag: () => jest.fn(),
-  };
-});
-
 jest.mock('expo-linear-gradient', () => {
   const { View } = require('react-native');
   return { LinearGradient: (props: object) => <View {...props} /> };
@@ -119,8 +101,10 @@ jest.mock('react-native-gesture-handler', () => {
   const makeChainable = () => {
     const g: Record<string, () => unknown> = {};
     const methods = [
-      'enabled', 'activeOffsetY', 'failOffsetY', 'activeOffsetX', 'failOffsetX',
+      'enabled', 'manualActivation', 'shouldCancelWhenOutside',
+      'activeOffsetY', 'failOffsetY', 'activeOffsetX', 'failOffsetX',
       'cancelsTouchesInView',
+      'onTouchesDown', 'onTouchesMove',
       'onBegin', 'onStart', 'onUpdate', 'onChange', 'onEnd', 'onFinalize',
       'simultaneousWithExternalGesture', 'requireExternalGestureToFail',
     ];
@@ -197,7 +181,10 @@ jest.mock('@/components/SkipIntervalButton', () => {
 
 jest.mock('@/components/QueueItemRow', () => {
   const { Text } = require('react-native');
-  return { QueueItemRow: ({ track }: { track: { title: string } }) => <Text>{track.title}</Text> };
+  return {
+    QUEUE_ROW_HEIGHT: 64,
+    QueueItemRow: ({ track }: { track: { title: string } }) => <Text>{track.title}</Text>,
+  };
 });
 
 jest.mock('@/components/SwipeableRow', () => ({
@@ -244,8 +231,11 @@ jest.mock('@/store/lyricsStore', () => {
   return { lyricsStore: store };
 });
 
+const mockFlashScrollToOffset = jest.fn();
+
 jest.mock('@/services/playerService', () => ({
   clearQueue: jest.fn(),
+  clearUserQueue: jest.fn(),
   retryPlayback: jest.fn(),
   seekTo: jest.fn(),
   shuffleQueue: jest.fn(),
@@ -256,6 +246,7 @@ jest.mock('@/services/playerService', () => ({
 }));
 
 jest.mock('@/services/moreOptionsService', () => ({
+  reorderQueue: jest.fn(),
   toggleStar: jest.fn(),
 }));
 
@@ -278,8 +269,11 @@ jest.mock('@shopify/flash-list', () => {
         ListHeaderComponent?: React.ReactNode;
         keyExtractor?: (item: unknown, index: number) => string;
       },
-      _ref: unknown,
+      ref: React.ForwardedRef<{ scrollToOffset: jest.Mock }>,
     ) {
+      React.useImperativeHandle(ref, () => ({
+        scrollToOffset: mockFlashScrollToOffset,
+      }));
       return (
         <View testID="flash-list">
           {ListHeaderComponent}
@@ -327,12 +321,15 @@ const MOCK_QUEUE: Child[] = [
 beforeEach(() => {
   mockRouterBack.mockClear();
   mockRouterPush.mockClear();
+  mockFlashScrollToOffset.mockClear();
   fetchLyrics.mockClear();
   appStateStore.setState({ isActive: true });
   playerStore.setState({
     currentTrack: MOCK_TRACK,
     currentTrackIndex: 0,
     queue: MOCK_QUEUE,
+    userQueueKeys: [],
+    userQueueTrackIds: [],
     queueLoading: false,
     playbackState: 'playing',
     position: 30,
@@ -668,5 +665,39 @@ describe('PlayerPhonePortrait', () => {
     // Should open the multi-artist sheet
     expect(await findByText('Artie 5ive')).toBeTruthy();
     expect(await findByText('Kid Yugi')).toBeTruthy();
+  });
+
+  it('bounds the horizontal cover carousel to at most 3 items for a 1000-track queue', () => {
+    const { FlatList } = require('react-native');
+    const largeQueue: Child[] = Array.from({ length: 1000 }, (_, i) => ({
+      ...MOCK_TRACK,
+      id: `t-${i}`,
+      title: `Track ${i}`,
+      coverArt: `cover-${i}`,
+    }));
+    playerStore.setState({
+      queue: largeQueue,
+      currentTrack: largeQueue[500],
+      currentTrackIndex: 500,
+    });
+
+    const { UNSAFE_getAllByType } = render(<PlayerPhonePortrait />);
+    const carousels = UNSAFE_getAllByType(FlatList);
+    expect(carousels).toHaveLength(1);
+    const windowData = carousels[0].props.data as Child[];
+    expect(windowData.length).toBeLessThanOrEqual(3);
+    expect(windowData.map((t) => t.id)).toEqual(['t-499', 't-500', 't-501']);
+  });
+
+  it('does not reset queue scroll offset when switching to Lyrics or Album Info after Queue', () => {
+    const { getByLabelText } = render(<PlayerPhonePortrait />);
+
+    fireEvent.press(getByLabelText('Queue'));
+    mockFlashScrollToOffset.mockClear();
+
+    fireEvent.press(getByLabelText('Lyrics'));
+    fireEvent.press(getByLabelText('Album Info'));
+
+    expect(mockFlashScrollToOffset).not.toHaveBeenCalled();
   });
 });

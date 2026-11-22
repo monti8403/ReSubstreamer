@@ -3,6 +3,9 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from "@react-native-vector-icons/ionicons/static";
 import { useTranslation } from 'react-i18next';
 import type { ThemeColors } from '../../constants/theme';
+import { QUEUE_SECTION_HEADER_HEIGHT } from './queueDragMath';
+
+export { QUEUE_SECTION_HEADER_HEIGHT };
 
 export interface QueueSectionHeaderProps {
   title: string;
@@ -53,7 +56,7 @@ export const QueueSectionHeader = memo(function QueueSectionHeader({
 
 const styles = StyleSheet.create({
   container: {
-    height: 42,
+    height: QUEUE_SECTION_HEADER_HEIGHT,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',

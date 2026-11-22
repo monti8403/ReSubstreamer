@@ -1,5 +1,6 @@
-import { partitionQueue, calculateReorderPlan } from '../usePartitionedQueue';
+import { partitionQueue, calculateReorderPlan, type QueueListItem } from '../usePartitionedQueue';
 import type { Child } from '../../services/subsonicService';
+import { cloneWithFreshQueueKey, ensureQueueKey } from '../../utils/queueKeys';
 
 function makeTrack(id: string, title: string): Child {
   return {
@@ -245,6 +246,74 @@ describe('usePartitionedQueue / partitionQueue', () => {
       expect(u2ItemAfter?.id).toBe(u2IdBefore);
       expect(u2ItemAfter?.type === 'track' && u2ItemAfter.isUserQueue).toBe(true);
       expect(n1ItemAfter?.id).toBe(n1ItemBefore?.id);
+    });
+
+    it('partitions and reorders duplicate song IDs independently via per-entry keys', () => {
+      const t0 = makeTrack('0', 'Now Playing');
+      const dupNextUp = cloneWithFreshQueueKey(makeTrack('dup', 'Dup Song'));
+      const dupUser = cloneWithFreshQueueKey(makeTrack('dup', 'Dup Song'));
+      const n2 = makeTrack('n2', 'Other Next');
+
+      const dupUserKey = ensureQueueKey(dupUser);
+      const dupNextUpKey = ensureQueueKey(dupNextUp);
+      expect(dupUserKey).not.toBe(dupNextUpKey);
+
+      const queue = [t0, dupUser, dupNextUp, n2];
+      const partitioned = partitionQueue(queue, 0, [dupUserKey]);
+
+      expect(partitioned.userQueue).toEqual([dupUser]);
+      expect(partitioned.nextUp).toEqual([dupNextUp, n2]);
+
+      // Dragging the NextUp copy of 'dup' down after 'n2' must move only the NextUp copy
+      // List items in reorderableListItems:
+      // 0: Header(userQueue)
+      // 1: dupUser (abs 1)
+      // 2: Header(contextQueue)
+      // 3: dupNextUp (abs 2)
+      // 4: n2 (abs 3)
+      const plan = calculateReorderPlan(partitioned.reorderableListItems, 3, 4, 0);
+      expect(plan).not.toBeNull();
+      expect(plan?.fromAbsoluteIndex).toBe(2);
+      expect(plan?.toAbsoluteIndex).toBe(3);
+      expect(plan?.newUserQueueKeys).toEqual([dupUserKey]);
+      expect(plan?.newUserQueueTrackIds).toEqual(['dup']);
+    });
+
+    it('clamps drops targeting a nowPlaying section header into the first upcoming position', () => {
+      const n1 = cloneWithFreshQueueKey(makeTrack('n1', 'Next 1'));
+      const n2 = cloneWithFreshQueueKey(makeTrack('n2', 'Next 2'));
+      const listWithNowPlayingHeader: QueueListItem[] = [
+        {
+          type: 'header',
+          id: 'hdr-np',
+          section: 'nowPlaying',
+          titleKey: 'nowPlayingHeader',
+          count: 1,
+        },
+        {
+          type: 'track',
+          id: ensureQueueKey(n1),
+          track: n1,
+          absoluteIndex: 1,
+          relativeTrackIndex: 0,
+          isNowPlaying: false,
+          isUserQueue: false,
+        },
+        {
+          type: 'track',
+          id: ensureQueueKey(n2),
+          track: n2,
+          absoluteIndex: 2,
+          relativeTrackIndex: 1,
+          isNowPlaying: false,
+          isUserQueue: false,
+        },
+      ];
+
+      const plan = calculateReorderPlan(listWithNowPlayingHeader, 2, 0, 0);
+      expect(plan).not.toBeNull();
+      expect(plan?.fromAbsoluteIndex).toBe(2);
+      expect(plan?.toAbsoluteIndex).toBe(1);
     });
   });
 });

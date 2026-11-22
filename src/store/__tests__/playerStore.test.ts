@@ -1,4 +1,4 @@
-import { playerStore } from '../playerStore';
+import { playerStore, ensureQueueKey } from '../playerStore';
 
 import { type Child } from '../../services/subsonicService';
 
@@ -10,6 +10,8 @@ beforeEach(() => {
     currentTrackIndex: null,
     playbackState: 'idle',
     queue: [],
+    userQueueTrackIds: [],
+    userQueueKeys: [],
     position: 0,
     duration: 0,
     bufferedPosition: 0,
@@ -124,6 +126,60 @@ describe('playerStore', () => {
       playerStore.getState().setQueueFormats({ s1: fmt, s2: fmt2 });
       playerStore.getState().clearQueueFormats();
       expect(playerStore.getState().queueFormats).toEqual({});
+    });
+
+    it('mergeQueueFormats merges multiple formats in one update', () => {
+      playerStore.getState().setQueueFormats({ s1: fmt });
+      playerStore.getState().mergeQueueFormats({ s2: fmt2, s3: fmt });
+      expect(playerStore.getState().queueFormats).toEqual({
+        s1: fmt,
+        s2: fmt2,
+        s3: fmt,
+      });
+    });
+  });
+
+  describe('userQueueKeys & duplicate queue entries', () => {
+    it('sets and clears userQueueKeys', () => {
+      playerStore.getState().setUserQueueKeys(['s1_1', 's2_2']);
+      expect(playerStore.getState().userQueueKeys).toEqual(['s1_1', 's2_2']);
+      playerStore.getState().clearUserQueueKeys();
+      expect(playerStore.getState().userQueueKeys).toEqual([]);
+    });
+
+    it('clones duplicate entries in setQueue so every item has a unique queue key', () => {
+      const a = { id: 'dup', title: 'Dup' } as Child;
+      playerStore.getState().setQueue([a, a]);
+      const stored = playerStore.getState().queue;
+      expect(stored).toHaveLength(2);
+      expect(stored[0]).toBe(a);
+      expect(stored[1]).not.toBe(a);
+      expect(ensureQueueKey(stored[0])).not.toBe(ensureQueueKey(stored[1]));
+    });
+  });
+
+  describe('userQueueTrackIds & trackSource', () => {
+    it('sets, adds with deduplication, removes, and clears userQueueTrackIds', () => {
+      playerStore.getState().setUserQueueTrackIds(['t1', 't2']);
+      expect(playerStore.getState().userQueueTrackIds).toEqual(['t1', 't2']);
+
+      playerStore.getState().addUserQueueTrackIds(['t2', 't3']);
+      expect(playerStore.getState().userQueueTrackIds).toEqual(['t1', 't2', 't3']);
+
+      playerStore.getState().removeUserQueueTrackIds(['t2']);
+      expect(playerStore.getState().userQueueTrackIds).toEqual(['t1', 't3']);
+
+      playerStore.getState().clearUserQueueTrackIds();
+      expect(playerStore.getState().userQueueTrackIds).toEqual([]);
+    });
+
+    it('updates trackSource via setTrackSource', () => {
+      playerStore.getState().setTrackSource('cached');
+      expect(playerStore.getState().trackSource).toBe('cached');
+      playerStore.getState().setTrackSource('local');
+      expect(playerStore.getState().trackSource).toBe('local');
+      playerStore.getState().setTrackSource(null);
+      expect(playerStore.getState().trackSource).toBeNull();
     });
   });
 });

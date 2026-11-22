@@ -2,7 +2,6 @@ import { memo, useCallback, useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import Ionicons from '@react-native-vector-icons/ionicons/static';
-import { useReorderableDrag } from 'react-native-reorderable-list';
 
 import { CachedImage } from './CachedImage';
 import { NowPlayingIndicator } from './NowPlayingIndicator';
@@ -16,10 +15,14 @@ import { moveQueueItemToUserQueue, removeItemFromQueue } from '../services/moreO
 import { type Child } from '../services/subsonicService';
 import { playerStore } from '../store/playerStore';
 import { formatTrackDuration } from '../utils/formatters';
+import { ensureQueueKey } from '../utils/queueKeys';
 
 import type { ThemeColors } from '../constants/theme';
 
 import { absoluteFill } from '../utils/styles';
+import { QUEUE_ROW_HEIGHT } from './player/queueDragMath';
+
+export { QUEUE_ROW_HEIGHT };
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
@@ -35,6 +38,9 @@ export interface QueueItemRowProps {
   index: number;
   isActive: boolean;
   isInUserQueue?: boolean;
+  queueKey?: string;
+  isDragging?: boolean;
+  showDragHandle?: boolean;
   colors: Pick<ThemeColors, 'textPrimary' | 'textSecondary' | 'primary' | 'border' | 'red' | 'green'>;
   onPress: (index: number) => void;
   onLongPress?: (track: Child) => void;
@@ -42,31 +48,24 @@ export interface QueueItemRowProps {
   onReleaseHandle?: () => void;
 }
 
-function useSafeReorderableDrag() {
-  try {
-    return useReorderableDrag();
-  } catch {
-    return undefined;
-  }
-}
-
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
-export const QueueItemRow = memo(function QueueItemRow({
+const QueueItemRowInner = memo(function QueueItemRowInner({
   track,
   index,
   isActive,
-  isInUserQueue: isInUserQueueProp,
+  isInUserQueue,
+  queueKey,
+  isDragging = false,
+  showDragHandle,
   colors,
   onPress,
   onLongPress,
   onGrabHandle,
   onReleaseHandle,
-}: QueueItemRowProps) {
-  const drag = useSafeReorderableDrag();
-
+}: Omit<QueueItemRowProps, 'isInUserQueue'> & { isInUserQueue: boolean }) {
   const handlePress = useCallback(() => {
     onPress(index);
   }, [index, onPress]);
@@ -80,11 +79,6 @@ export const QueueItemRow = memo(function QueueItemRow({
   const starred = useIsStarred('song', track.id);
   const downloadStatus = useDownloadStatus('song', track.id);
   const rating = useRating(track.id, track.userRating);
-  const isInUserQueue = playerStore((s) =>
-    isInUserQueueProp !== undefined
-      ? isInUserQueueProp
-      : s.userQueueTrackIds.includes(track.id),
-  );
 
   const handleRemove = useCallback(() => {
     removeItemFromQueue(index);
@@ -133,6 +127,8 @@ export const QueueItemRow = memo(function QueueItemRow({
     [isActive, colors.red, handleRemove, t],
   );
 
+  const shouldShowDragHandle = showDragHandle ?? !isActive;
+
   return (
     <SwipeableRow
       rightActions={rightActions}
@@ -141,10 +137,17 @@ export const QueueItemRow = memo(function QueueItemRow({
       enableFullSwipeLeft={!isActive}
       actionSize="queue"
       restingBackgroundColor="transparent"
+      recyclingKey={queueKey ?? track.id}
       onPress={handlePress}
       onLongPress={onLongPress ? handleLongPress : undefined}
     >
-      <View style={[styles.row, { borderBottomColor: colors.border }]}>
+      <View
+        style={[
+          styles.row,
+          { borderBottomColor: colors.border },
+          isDragging && styles.draggingRow,
+        ]}
+      >
         {/* Cover art with now-playing overlay */}
         <View style={styles.coverWrap}>
           <CachedImage
@@ -201,27 +204,52 @@ export const QueueItemRow = memo(function QueueItemRow({
         </View>
 
         {/* Drag handle */}
-        {!isActive && (
-          <Pressable
-            testID="queue-item-drag-handle"
-            onPressIn={() => {
-              onGrabHandle?.();
-              drag?.();
-            }}
-            onPressOut={onReleaseHandle}
-            hitSlop={8}
-            style={styles.dragHandle}
-          >
-            <Ionicons
-              name="reorder-three-outline"
-              size={24}
-              color={colors.textSecondary}
-            />
-          </Pressable>
-        )}
+        {shouldShowDragHandle &&
+          (onGrabHandle || onReleaseHandle ? (
+            <Pressable
+              testID="queue-item-drag-handle"
+              onPressIn={onGrabHandle}
+              onPressOut={onReleaseHandle}
+              hitSlop={8}
+              style={styles.dragHandle}
+            >
+              <Ionicons
+                name="reorder-three-outline"
+                size={24}
+                color={colors.textSecondary}
+              />
+            </Pressable>
+          ) : (
+            <View testID="queue-item-drag-handle" style={styles.dragHandle}>
+              <Ionicons
+                name="reorder-three-outline"
+                size={24}
+                color={colors.textSecondary}
+              />
+            </View>
+          ))}
       </View>
     </SwipeableRow>
   );
+});
+
+const QueueItemRowStoreFallback = memo(function QueueItemRowStoreFallback(
+  props: Omit<QueueItemRowProps, 'isInUserQueue'>,
+) {
+  const entryKey = ensureQueueKey(props.track);
+  const isInUserQueue = playerStore((s) =>
+    s.userQueueKeys.length > 0
+      ? s.userQueueKeys.includes(entryKey)
+      : s.userQueueTrackIds.includes(props.track.id),
+  );
+  return <QueueItemRowInner {...props} isInUserQueue={isInUserQueue} />;
+});
+
+export const QueueItemRow = memo(function QueueItemRow(props: QueueItemRowProps) {
+  if (props.isInUserQueue !== undefined) {
+    return <QueueItemRowInner {...props} isInUserQueue={props.isInUserQueue} />;
+  }
+  return <QueueItemRowStoreFallback {...props} />;
 });
 
 /* ------------------------------------------------------------------ */
@@ -230,11 +258,14 @@ export const QueueItemRow = memo(function QueueItemRow({
 
 const styles = StyleSheet.create({
   row: {
-    height: 64,
+    height: QUEUE_ROW_HEIGHT,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  draggingRow: {
+    opacity: 0.25,
   },
   dragHandle: {
     marginLeft: 8,

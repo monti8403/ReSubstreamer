@@ -11,6 +11,9 @@ import type { TrackSource } from 'react-native-queue-player';
 
 import { type EffectiveFormat } from '../types/audio';
 import type { Child } from '../services/subsonicService';
+import { ensureQueueKey, withUniqueQueueKeys } from '../utils/queueKeys';
+
+export { ensureQueueKey, withUniqueQueueKeys };
 
 export type PlaybackStatus =
   | 'idle'
@@ -47,6 +50,8 @@ export interface PlayerState {
   trackSource: TrackSource | null;
   /** Track IDs explicitly added to the queue by the user. */
   userQueueTrackIds: string[];
+  /** Per-entry queue keys (`ensureQueueKey`) explicitly added to the User Queue. */
+  userQueueKeys: string[];
 
   /* ---- Setters (called by playerService) ---- */
   setCurrentTrack: (track: Child | null, index?: number | null) => void;
@@ -56,69 +61,17 @@ export interface PlayerState {
   addUserQueueTrackIds: (ids: string[]) => void;
   removeUserQueueTrackIds: (ids: string[]) => void;
   clearUserQueueTrackIds: () => void;
+  setUserQueueKeys: (keys: string[]) => void;
+  clearUserQueueKeys: () => void;
   setProgress: (position: number, duration: number, buffered: number) => void;
   setError: (error: string | null) => void;
   setRetrying: (retrying: boolean) => void;
   setQueueLoading: (loading: boolean) => void;
   setQueueFormats: (formats: Record<string, EffectiveFormat>) => void;
   addQueueFormat: (songId: string, fmt: EffectiveFormat) => void;
+  mergeQueueFormats: (formats: Record<string, EffectiveFormat>) => void;
   clearQueueFormats: () => void;
   setTrackSource: (source: TrackSource | null) => void;
-}
-
-let _queueKeySeq = 0;
-const _fallbackQueueKeys = new WeakMap<object, string>();
-
-export function ensureQueueKey(item: any): string {
-  if (!item) return '';
-  if (typeof item === 'object') {
-    if (typeof item._queueKey === 'string' && item._queueKey.length > 0) {
-      return item._queueKey;
-    }
-    const existing = _fallbackQueueKeys.get(item);
-    if (existing) return existing;
-    const key = `${item.id ?? 'track'}_${++_queueKeySeq}`;
-    _fallbackQueueKeys.set(item, key);
-    return key;
-  }
-  return '';
-}
-
-function withUniqueQueueKeys(queue: Child[]): Child[] {
-  if (queue.length === 0) return queue;
-  const seenKeys = new Set<string>();
-  const seenRefs = new WeakSet<object>();
-  let cloned: Child[] | null = null;
-
-  for (let i = 0; i < queue.length; i++) {
-    const item = queue[i] as (Child & { _queueKey?: string }) | null | undefined;
-    if (!item || typeof item !== 'object') continue;
-
-    const ownKey =
-      typeof item._queueKey === 'string' && item._queueKey.length > 0
-        ? item._queueKey
-        : undefined;
-    const candidateKey = ownKey ?? _fallbackQueueKeys.get(item);
-    const isDuplicateRef = seenRefs.has(item);
-    const isDuplicateKey = candidateKey !== undefined && seenKeys.has(candidateKey);
-
-    if (!isDuplicateRef && !isDuplicateKey) {
-      seenRefs.add(item);
-      if (candidateKey) {
-        seenKeys.add(candidateKey);
-      }
-      continue;
-    }
-
-    if (!cloned) {
-      cloned = queue.slice();
-    }
-    const newKey = `${item.id ?? 'track'}_${++_queueKeySeq}`;
-    seenKeys.add(newKey);
-    cloned[i] = { ...item, _queueKey: newKey } as Child;
-  }
-
-  return cloned ?? queue;
 }
 
 export const playerStore = create<PlayerState>()((set) => ({
@@ -127,6 +80,7 @@ export const playerStore = create<PlayerState>()((set) => ({
   playbackState: 'idle',
   queue: [],
   userQueueTrackIds: [],
+  userQueueKeys: [],
   position: 0,
   duration: 0,
   bufferedPosition: 0,
@@ -157,6 +111,8 @@ export const playerStore = create<PlayerState>()((set) => ({
       userQueueTrackIds: state.userQueueTrackIds.filter((id) => !ids.includes(id)),
     })),
   clearUserQueueTrackIds: () => set({ userQueueTrackIds: [] }),
+  setUserQueueKeys: (userQueueKeys) => set({ userQueueKeys }),
+  clearUserQueueKeys: () => set({ userQueueKeys: [] }),
   setProgress: (position, duration, buffered) =>
     set((state) => ({
       position,
@@ -169,6 +125,8 @@ export const playerStore = create<PlayerState>()((set) => ({
   setQueueFormats: (queueFormats) => set({ queueFormats }),
   addQueueFormat: (songId, fmt) =>
     set((state) => ({ queueFormats: { ...state.queueFormats, [songId]: fmt } })),
+  mergeQueueFormats: (formats) =>
+    set((state) => ({ queueFormats: { ...state.queueFormats, ...formats } })),
   clearQueueFormats: () => set({ queueFormats: {} }),
   setTrackSource: (trackSource) => set({ trackSource }),
 }));

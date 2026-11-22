@@ -37,6 +37,7 @@ interface PersistedQueue {
   queue: Child[];
   currentTrackIndex: number;
   userQueueTrackIds?: string[];
+  userQueueKeys?: string[];
 }
 
 interface PersistedPosition {
@@ -53,6 +54,7 @@ let liveIndex = 0;
 let livePosition = 0;
 let livePositionTrackId: string | null = null;
 let liveUserQueueTrackIds: string[] = [];
+let liveUserQueueKeys: string[] = [];
 /** True once memory is authoritative — after the first read or any write. */
 let liveLoaded = false;
 /** True while a queue change is waiting on the debounce, i.e. the song rows are
@@ -71,6 +73,7 @@ function applyLoadedSnapshot(snapshot: Awaited<ReturnType<typeof readSnapshotAsy
   livePosition = snapshot.positionSec ?? 0;
   livePositionTrackId = liveQueue[liveIndex]?.id ?? null;
   liveUserQueueTrackIds = snapshot.userQueueTrackIds ?? [];
+  liveUserQueueKeys = snapshot.userQueueKeys ?? [];
 }
 
 /** Seed memory asynchronously from the stored row once per process — avoids blocking JS at boot. */
@@ -131,7 +134,8 @@ function flushQueueWrite(): void {
   if (!queueDirty) return;
   queueDirty = false;
   const tracks = liveQueue;
-  const userQueueIds = liveUserQueueTrackIds;
+  const userQueueFilter =
+    liveUserQueueKeys.length > 0 ? liveUserQueueKeys : liveUserQueueTrackIds;
   const meta = {
     id: SNAPSHOT_LIVE_ID,
     kind: 'live' as const,
@@ -142,7 +146,7 @@ function flushQueueWrite(): void {
   };
   void (async () => {
     await upsertSnapshot(meta);
-    await replaceSnapshotTracks(SNAPSHOT_LIVE_ID, tracks, userQueueIds);
+    await replaceSnapshotTracks(SNAPSHOT_LIVE_ID, tracks, userQueueFilter);
   })();
 }
 
@@ -156,9 +160,11 @@ export function persistQueue(
   queue: Child[],
   currentTrackIndex: number,
   userQueueTrackIds: readonly string[] = [],
+  userQueueKeys: readonly string[] = [],
 ): void {
   setCursor(queue, currentTrackIndex);
   liveUserQueueTrackIds = userQueueTrackIds.slice();
+  liveUserQueueKeys = userQueueKeys.slice();
   queueDirty = true;
   clearQueueTimer();
   queueTimer = setTimeout(flushQueueWrite, QUEUE_DEBOUNCE_MS);
@@ -234,6 +240,7 @@ export function clearPersistedQueue(): void {
   livePosition = 0;
   livePositionTrackId = null;
   liveUserQueueTrackIds = [];
+  liveUserQueueKeys = [];
   lastPositionPersistTime = 0;
   void deleteSnapshot(SNAPSHOT_LIVE_ID);
 }
@@ -248,6 +255,7 @@ function buildPersistedQueueResult(): PersistedQueue | null {
     queue: liveQueue,
     currentTrackIndex: liveIndex,
     ...(liveUserQueueTrackIds.length > 0 ? { userQueueTrackIds: liveUserQueueTrackIds } : {}),
+    ...(liveUserQueueKeys.length > 0 ? { userQueueKeys: liveUserQueueKeys } : {}),
   };
 }
 

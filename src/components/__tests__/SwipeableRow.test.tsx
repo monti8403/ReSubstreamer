@@ -31,31 +31,48 @@ jest.mock('@/utils/haptics', () => ({
 // Captures the last props ReanimatedSwipeable received, so tests can assert
 // what SwipeableRow forwards (e.g. the edge-reserving hitSlop).
 const mockSwipeableProps: { hitSlop?: unknown } = {};
+const mockSwipeableReset = jest.fn();
+const mockSwipeableClose = jest.fn();
 
 // ReanimatedSwipeable is the gesture-handling wrapper. The SwipeableRow
 // passes `enabled={!disabled}` which the gesture handler honours at
 // runtime. The mock forwards the `enabled` flag as a testID so tests can
 // assert it; no actual swipe gesture is simulated here.
 jest.mock('react-native-gesture-handler/ReanimatedSwipeable', () => {
+  const React = require('react');
   const RN = require('react-native');
   return {
     __esModule: true,
-    default: ({
-      children,
-      enabled,
-      hitSlop,
-    }: {
-      children: React.ReactNode;
-      enabled?: boolean;
-      hitSlop?: unknown;
-    }) => {
+    default: React.forwardRef(function MockReanimatedSwipeable(
+      {
+        children,
+        enabled,
+        hitSlop,
+        onSwipeableOpen,
+      }: {
+        children: React.ReactNode;
+        enabled?: boolean;
+        hitSlop?: unknown;
+        onSwipeableOpen?: () => void;
+      },
+      ref: any,
+    ) {
       mockSwipeableProps.hitSlop = hitSlop;
+      React.useImperativeHandle(ref, () => ({
+        close: mockSwipeableClose,
+        openLeft: jest.fn(),
+        openRight: jest.fn(),
+        reset: mockSwipeableReset,
+      }));
       return (
-        <RN.View testID={`swipeable-${enabled === false ? 'gesture-disabled' : 'gesture-enabled'}`}>
+        <RN.View
+          testID={`swipeable-${enabled === false ? 'gesture-disabled' : 'gesture-enabled'}`}
+          onTouchStart={onSwipeableOpen}
+        >
           {children}
         </RN.View>
       );
-    },
+    }),
   };
 });
 
@@ -79,6 +96,8 @@ import { SwipeableRow } from '../SwipeableRow';
 beforeEach(() => {
   mockHapticsSelection.mockClear();
   mockHapticsImpact.mockClear();
+  mockSwipeableReset.mockClear();
+  mockSwipeableClose.mockClear();
 });
 
 describe('SwipeableRow — disabled prop', () => {
@@ -160,5 +179,28 @@ describe('SwipeableRow — edge-back gesture', () => {
     );
     // Negative-left hitSlop insets the pan begin-region off the screen edge.
     expect(mockSwipeableProps.hitSlop).toEqual({ left: -25 });
+  });
+});
+
+describe('SwipeableRow — recyclingKey reset', () => {
+  it('resets an open row when recyclingKey changes on cell reuse', () => {
+    const { getByTestId, rerender } = render(
+      <SwipeableRow recyclingKey="row-1">
+        <View testID="content" />
+      </SwipeableRow>,
+    );
+
+    // Simulate the row becoming open
+    fireEvent(getByTestId('swipeable-gesture-enabled'), 'touchStart');
+    expect(mockSwipeableReset).not.toHaveBeenCalled();
+
+    // Cell recycled for a different queue entry
+    rerender(
+      <SwipeableRow recyclingKey="row-2">
+        <View testID="content" />
+      </SwipeableRow>,
+    );
+
+    expect(mockSwipeableReset).toHaveBeenCalledTimes(1);
   });
 });

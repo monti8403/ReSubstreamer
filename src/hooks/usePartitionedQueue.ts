@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { Child } from '../services/subsonicService';
-import { ensureQueueKey } from '../store/playerStore';
+import { ensureQueueKey } from '../utils/queueKeys';
 
 export type HeaderSection = 'nowPlaying' | 'userQueue' | 'contextQueue';
 
@@ -45,6 +45,7 @@ export interface ReorderPlan {
   fromAbsoluteIndex: number;
   toAbsoluteIndex: number;
   newUserQueueTrackIds: string[];
+  newUserQueueKeys: string[];
 }
 
 export function partitionQueue(
@@ -83,7 +84,8 @@ export function partitionQueue(
 
   for (let absIdx = activeIndex + 1; absIdx < queue.length; absIdx++) {
     const item = queue[absIdx];
-    if (userQueueSet.has(item.id)) {
+    const entryKey = ensureQueueKey(item);
+    if (userQueueSet.has(entryKey) || userQueueSet.has(item.id)) {
       userQueue.push(item);
       userQueueAbsIndices.push(absIdx);
     } else {
@@ -270,15 +272,16 @@ export function calculateReorderPlan(
   );
 
   // All tracks before Next Up header and after Now Playing are in user queue
-  const newUserQueueTrackIds = nextList
+  const userQueueItems = nextList
     .slice(0, updatedNextUpHeaderIdx >= 0 ? updatedNextUpHeaderIdx : undefined)
     .filter(
       (item): item is TrackQueueListItem =>
         item.type === 'track' && !item.isNowPlaying,
-    )
-    .map((item) => item.track.id);
+    );
+  const newUserQueueTrackIds = userQueueItems.map((item) => item.track.id);
+  const newUserQueueKeys = userQueueItems.map((item) => item.id);
 
-  const movedTrackIdx = trackItems.findIndex((i) => i.track.id === removed.track.id);
+  const movedTrackIdx = trackItems.findIndex((i) => i.id === removed.id);
   if (hasNowPlaying && movedTrackIdx <= 0) {
     // Cannot displace active track
     return null;
@@ -293,6 +296,7 @@ export function calculateReorderPlan(
     fromAbsoluteIndex,
     toAbsoluteIndex,
     newUserQueueTrackIds,
+    newUserQueueKeys,
   };
 }
 

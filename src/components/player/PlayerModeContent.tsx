@@ -1,26 +1,18 @@
 import Ionicons from "@react-native-vector-icons/ionicons/static";
-import { FlashList } from '@shopify/flash-list';
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AlbumInfoContent } from '@/components/AlbumInfoContent';
 import { LyricsContent } from '@/components/LyricsContent';
-import { QueueItemRow } from '@/components/QueueItemRow';
-import { QueueSectionHeader } from './QueueSectionHeader';
-import { closeOpenRow } from '@/components/SwipeableRow';
 import { type ThemeColors } from '@/constants/theme';
 import { usePlayerAlbumInfo } from '@/hooks/usePlayerAlbumInfo';
 import { usePlayerLyrics } from '@/hooks/usePlayerLyrics';
-import { clearUserQueue } from '@/services/playerService';
 import { type Child } from '@/services/subsonicService';
-import {
-  usePartitionedQueue,
-  type QueueListItem,
-} from '@/hooks/usePartitionedQueue';
-import { playerStore } from '@/store/playerStore';
 import { sanitizeBiographyText } from '@/utils/formatters';
+
+import { ReorderableQueueList } from './ReorderableQueueList';
 
 export type PlayerMode = 'queue' | 'info' | 'lyrics';
 
@@ -94,64 +86,6 @@ export const PlayerModeContent = memo(function PlayerModeContent({
     handleRetry: handleRetryLyrics,
   } = usePlayerLyrics(trackId, currentTrack.artist, currentTrack.title, true);
 
-  const userQueueTrackIds = playerStore((s) => s.userQueueTrackIds);
-
-  const {
-    visibleQueue,
-    queueListItems,
-  } = usePartitionedQueue(queue, currentTrackIndex, userQueueTrackIds);
-
-  const handleClearUserQueue = useCallback(() => {
-    void clearUserQueue();
-  }, []);
-
-  const renderQueueItem = useCallback(
-    ({ item }: { item: QueueListItem }) => {
-      if (item.type === 'header') {
-        const title =
-          item.section === 'nowPlaying'
-            ? t('nowPlayingHeader')
-            : item.section === 'userQueue'
-              ? t('userQueue')
-              : t('nextUp');
-
-        return (
-          <QueueSectionHeader
-            title={title}
-            count={item.count}
-            onClear={item.section === 'userQueue' ? handleClearUserQueue : undefined}
-            colors={colors}
-          />
-        );
-      }
-
-      return (
-        <QueueItemRow
-          track={item.track}
-          index={item.absoluteIndex}
-          isActive={item.isNowPlaying}
-          isInUserQueue={item.isUserQueue}
-          colors={queueColors}
-          onPress={onQueueItemPress}
-          onLongPress={onQueueItemLongPress}
-        />
-      );
-    },
-    [
-      colors,
-      queueColors,
-      onQueueItemPress,
-      onQueueItemLongPress,
-      handleClearUserQueue,
-      t,
-    ],
-  );
-
-  const keyExtractor = useCallback(
-    (item: QueueListItem) => item.id,
-    [],
-  );
-
   const listContentStyle = useMemo(
     () => ({ paddingBottom: insets.bottom + 16 }),
     [insets.bottom],
@@ -190,14 +124,13 @@ export const PlayerModeContent = memo(function PlayerModeContent({
               </View>
             </View>
           )}
-          <FlashList
-            data={queueListItems}
-            renderItem={renderQueueItem}
-            keyExtractor={keyExtractor}
-            getItemType={(item) => item.type}
-            onScrollBeginDrag={closeOpenRow}
-            drawDistance={300}
-            showsVerticalScrollIndicator={false}
+          <ReorderableQueueList
+            queue={queue}
+            currentTrackIndex={currentTrackIndex}
+            colors={colors}
+            queueColors={queueColors}
+            onItemPress={onQueueItemPress}
+            onItemLongPress={onQueueItemLongPress}
             contentContainerStyle={listContentStyle}
           />
         </>

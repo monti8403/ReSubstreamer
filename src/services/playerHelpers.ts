@@ -14,6 +14,8 @@ import { imageCacheDiagnosticsStore } from '../store/imageCacheDiagnosticsStore'
 import { getStreamingMaxBitRate, playbackSettingsStore, type RepeatModeSetting } from '../store/playbackSettingsStore';
 import { type PlaybackStatus } from '../store/playerStore';
 import { resolveEffectiveFormat } from '../utils/effectiveFormat';
+import { runPool } from '../utils/promisePool';
+import { ensureQueueKey } from '../utils/queueKeys';
 import { resolveSongCoverArt } from '../hooks/useSongCoverArt';
 import { resolveCachedImageUri } from './imageCacheService';
 import { logImageCache } from './imageCacheLogger';
@@ -149,7 +151,16 @@ export async function buildPlayableQueue(queue: readonly Child[]): Promise<{
   rnTracks: TrackItem[];
   filteredQueue: Child[];
 }> {
-  const songs = queue.map(completeSongFromCache);
+  const songs = queue.map((orig) => {
+    const completed = completeSongFromCache(orig);
+    if (completed !== orig) {
+      const key = ensureQueueKey(orig);
+      if (key) {
+        (completed as Child & { _queueKey?: string })._queueKey = key;
+      }
+    }
+    return completed;
+  });
 
   // Resolve local cover artwork up front (async, DB-authoritative — off the JS
   // thread), deduped by album coverArtId so a 500-track album resolves one URI,
@@ -157,10 +168,15 @@ export async function buildPlayableQueue(queue: readonly Child[]): Promise<{
   const ids = Array.from(
     new Set(songs.map((c) => resolveSongCoverArt(c)).filter((v): v is string => !!v)),
   );
-  const artEntries = await Promise.all(
-    ids.map(async (id) => [id, await resolveCachedImageUri(id, 600)] as const),
+  const { fulfilled } = await runPool(
+    ids,
+    (id) => resolveCachedImageUri(id, 600),
+    { concurrency: 16 },
   );
-  const artMap = new Map<string, string | null>(artEntries);
+  const artMap = new Map<string, string | null>();
+  for (const { item, value } of fulfilled) {
+    artMap.set(item, value);
+  }
 
   const rnTracks: TrackItem[] = [];
   const filteredQueue: Child[] = [];

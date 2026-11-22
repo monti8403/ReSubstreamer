@@ -8,6 +8,7 @@
  */
 import type { Child } from 'subsonic-api';
 
+import { ensureQueueKey } from '../../../utils/queueKeys';
 import { __setDbForTests, getDb, type InternalDb } from '../db';
 import {
   deleteSnapshot,
@@ -263,6 +264,22 @@ describe('replaceSnapshotTracks + readSnapshotSync', () => {
     const snapshot = readSnapshotSync(SNAPSHOT_LIVE_ID);
     expect(snapshot?.tracks.map((t) => t.id)).toEqual(['keep-1', 'keep-2']);
     expect(snapshot?.trackCount).toBe(2);
+  });
+
+  it('persists and restores per-entry is_user_queue flags independently for duplicate song ids', async () => {
+    await upsertSnapshot(liveMeta);
+    const first = song('dup');
+    const second = song('dup');
+    const firstKey = ensureQueueKey(first);
+    ensureQueueKey(second);
+
+    await replaceSnapshotTracks(SNAPSHOT_LIVE_ID, [first, second], [firstKey]);
+
+    const snapshot = readSnapshotSync(SNAPSHOT_LIVE_ID);
+    expect(snapshot?.tracks.map((t) => t.id)).toEqual(['dup', 'dup']);
+    expect(snapshot?.userQueueKeys).toHaveLength(1);
+    expect(snapshot?.userQueueKeys).toEqual([ensureQueueKey(snapshot!.tracks[0])]);
+    expect(ensureQueueKey(snapshot!.tracks[1])).not.toBe(snapshot?.userQueueKeys?.[0]);
   });
 });
 

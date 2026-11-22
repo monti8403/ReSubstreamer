@@ -16,6 +16,7 @@ const mockSetRetrying = jest.fn();
 const mockSetQueueLoading = jest.fn();
 const mockSetQueueFormats = jest.fn();
 const mockAddQueueFormat = jest.fn();
+const mockMergeQueueFormats = jest.fn();
 const mockClearQueueFormats = jest.fn();
 const mockSetTrackSource = jest.fn();
 const mockPlayerStoreSetState = jest.fn();
@@ -23,6 +24,8 @@ const mockSetUserQueueTrackIds = jest.fn();
 const mockAddUserQueueTrackIds = jest.fn();
 const mockRemoveUserQueueTrackIds = jest.fn();
 const mockClearUserQueueTrackIds = jest.fn();
+const mockSetUserQueueKeys = jest.fn();
+const mockClearUserQueueKeys = jest.fn();
 
 jest.mock('../../store/playerStore', () => ({
   playerStore: {
@@ -37,6 +40,7 @@ jest.mock('../../store/playerStore', () => ({
       retrying: false,
       playbackState: 'idle',
       userQueueTrackIds: [],
+      userQueueKeys: [],
       setCurrentTrack: mockSetCurrentTrack,
       setPlaybackState: mockSetPlaybackState,
       setQueue: mockSetQueue,
@@ -46,12 +50,15 @@ jest.mock('../../store/playerStore', () => ({
       setQueueLoading: mockSetQueueLoading,
       setQueueFormats: mockSetQueueFormats,
       addQueueFormat: mockAddQueueFormat,
+      mergeQueueFormats: mockMergeQueueFormats,
       clearQueueFormats: mockClearQueueFormats,
       setTrackSource: mockSetTrackSource,
       setUserQueueTrackIds: mockSetUserQueueTrackIds,
       addUserQueueTrackIds: mockAddUserQueueTrackIds,
       removeUserQueueTrackIds: mockRemoveUserQueueTrackIds,
       clearUserQueueTrackIds: mockClearUserQueueTrackIds,
+      setUserQueueKeys: mockSetUserQueueKeys,
+      clearUserQueueKeys: mockClearUserQueueKeys,
     })),
     setState: (...args: unknown[]) => mockPlayerStoreSetState(...args),
   },
@@ -112,6 +119,8 @@ jest.mock('../queuePersistenceService', () => ({
 }));
 
 import { playbackSettingsStore } from '../../store/playbackSettingsStore';
+import { ensureQueueKey } from '../../utils/queueKeys';
+import { getLocalTrackUri } from '../musicCacheService';
 import { addCompletedScrobble, sendNowPlaying } from '../scrobbleService';
 import { getCoverArtUrl, getStreamUrl, type Child } from '../subsonicService';
 import {
@@ -130,10 +139,12 @@ import {
   addTracksToUserQueue,
   clearUserQueue,
   getUserQueueInsertIndex,
+  getUserQueueKeys,
   getUserQueueTrackIds,
   moveQueueItemToPlayNext,
   moveQueueItemToUserQueue,
   removeFromQueue,
+  removeNonDownloadedTracks,
   reorderQueue,
   cycleRepeatMode,
   applyPlaybackRate,
@@ -185,6 +196,7 @@ const defaultPlayerState = () => ({
   playbackState: 'idle',
   playbackHistory: [],
   userQueueTrackIds: [],
+  userQueueKeys: [],
   setCurrentTrack: mockSetCurrentTrack,
   setPlaybackState: mockSetPlaybackState,
   setQueue: mockSetQueue,
@@ -194,12 +206,15 @@ const defaultPlayerState = () => ({
   setQueueLoading: mockSetQueueLoading,
   setQueueFormats: mockSetQueueFormats,
   addQueueFormat: mockAddQueueFormat,
+  mergeQueueFormats: mockMergeQueueFormats,
   clearQueueFormats: mockClearQueueFormats,
   setTrackSource: mockSetTrackSource,
   setUserQueueTrackIds: mockSetUserQueueTrackIds,
   addUserQueueTrackIds: mockAddUserQueueTrackIds,
   removeUserQueueTrackIds: mockRemoveUserQueueTrackIds,
   clearUserQueueTrackIds: mockClearUserQueueTrackIds,
+  setUserQueueKeys: mockSetUserQueueKeys,
+  clearUserQueueKeys: mockClearUserQueueKeys,
 });
 
 beforeAll(async () => {
@@ -1236,6 +1251,103 @@ describe('User Queue & Next Up separation', () => {
       expect(getUserQueueTrackIds()).toEqual([]);
       expect(mockTP.removeFromQueue).toHaveBeenCalledWith([2]);
       expect(mockTP.addToQueue).toHaveBeenCalledWith(expect.any(Array), 1);
+    });
+
+    it('keeps duplicate song IDs independent in userQueueKeys across add, playNext, and trackChange', async () => {
+      const s0 = makeChild('s0');
+      const dupInNextUp = makeChild('dup');
+      const s1 = makeChild('s1');
+      await playTrack(s0, [s0, dupInNextUp, s1]);
+      expect(getUserQueueKeys()).toEqual([]);
+
+      await addSongToUserQueue(makeChild('dup'));
+      const qAfterAdd = mockSetQueue.mock.calls.at(-1)?.[0] as Child[];
+      const uq1Key = ensureQueueKey(qAfterAdd[1]);
+      const nextUpDupKey = ensureQueueKey(qAfterAdd[2]);
+      expect(uq1Key).not.toBe(nextUpDupKey);
+      expect(getUserQueueKeys()).toEqual([uq1Key]);
+
+      await playSongNext(makeChild('dup'));
+      const qAfterNext = mockSetQueue.mock.calls.at(-1)?.[0] as Child[];
+      const uq0Key = ensureQueueKey(qAfterNext[1]);
+      expect(getUserQueueKeys()).toEqual([uq0Key, uq1Key]);
+      expect(getUserQueueTrackIds()).toEqual(['dup']);
+
+      // Playing the first user-queued duplicate clears only its instance key;
+      // the second user-queued copy and the trackId membership stay intact.
+      emit('trackChange', { id: 'dup' }, 1, 'auto-advance');
+      expect(getUserQueueKeys()).toEqual([uq1Key]);
+      expect(getUserQueueTrackIds()).toEqual(['dup']);
+    });
+
+    it('reorders a duplicate track using explicit per-entry userQueueKeys without touching the other copy', async () => {
+      const s0 = makeChild('s0');
+      await playTrack(s0, [s0, makeChild('dup'), makeChild('dup')]);
+      await addSongToUserQueue(makeChild('dup'));
+
+      const beforeQueue = mockSetQueue.mock.calls.at(-1)?.[0] as Child[];
+      // [s0, dup(uq@1), dup(nextUp@2), dup(nextUp@3)]
+      const uqKey = ensureQueueKey(beforeQueue[1]);
+      const promotedKey = ensureQueueKey(beforeQueue[3]);
+      expect(getUserQueueKeys()).toEqual([uqKey]);
+
+      await reorderQueue(3, 1, [promotedKey, uqKey]);
+
+      expect(getUserQueueKeys()).toEqual([promotedKey, uqKey]);
+      const afterQueue = mockSetQueue.mock.calls.at(-1)?.[0] as Child[];
+      expect(ensureQueueKey(afterQueue[1])).toBe(promotedKey);
+      expect(ensureQueueKey(afterQueue[2])).toBe(uqKey);
+      expect(getUserQueueKeys()).not.toContain(ensureQueueKey(afterQueue[3]));
+    });
+
+    it('batches queue format updates through mergeQueueFormats in addToQueue and addTracksToUserQueue', async () => {
+      const s0 = makeChild('s0');
+      await playTrack(s0, [s0]);
+
+      mockMergeQueueFormats.mockClear();
+      mockAddQueueFormat.mockClear();
+      await addToQueue([makeChild('a'), makeChild('b'), makeChild('c')]);
+      expect(mockMergeQueueFormats).toHaveBeenCalledTimes(1);
+      expect(Object.keys(mockMergeQueueFormats.mock.calls[0][0])).toEqual(['a', 'b', 'c']);
+      expect(mockAddQueueFormat).not.toHaveBeenCalled();
+
+      mockMergeQueueFormats.mockClear();
+      mockAddQueueFormat.mockClear();
+      await addTracksToUserQueue([makeChild('d'), makeChild('e')]);
+      expect(mockMergeQueueFormats).toHaveBeenCalledTimes(1);
+      expect(Object.keys(mockMergeQueueFormats.mock.calls[0][0])).toEqual(['d', 'e']);
+      expect(mockAddQueueFormat).not.toHaveBeenCalled();
+    });
+
+    it('removeNonDownloadedTracks batch-removes uncached items and prunes userQueueKeys', async () => {
+      const localIds = new Set(['s0', 'dl-uq', 'dl-next']);
+      (getLocalTrackUri as jest.Mock).mockImplementation((id: string) =>
+        localIds.has(id) ? `file:///cache/${id}.flac` : null,
+      );
+      try {
+        const s0 = makeChild('s0');
+        const dlNext = makeChild('dl-next');
+        const remoteNext = makeChild('remote-next');
+        await playTrack(s0, [s0, dlNext, remoteNext]);
+
+        await addSongToUserQueue(makeChild('dl-uq'));
+        await addSongToUserQueue(makeChild('remote-uq'));
+        // Queue is [s0, dl-uq, remote-uq, dl-next, remote-next]
+        const beforeQueue = mockSetQueue.mock.calls.at(-1)?.[0] as Child[];
+        const dlUqKey = ensureQueueKey(beforeQueue[1]);
+        expect(getUserQueueKeys()).toHaveLength(2);
+
+        mockTP.getCurrentTrackIndex.mockReturnValue(0);
+        await removeNonDownloadedTracks();
+
+        expect(mockTP.removeFromQueue).toHaveBeenCalledWith([4, 2]);
+        const afterQueue = mockSetQueue.mock.calls.at(-1)?.[0] as Child[];
+        expect(afterQueue.map((c) => c.id)).toEqual(['s0', 'dl-uq', 'dl-next']);
+        expect(getUserQueueKeys()).toEqual([dlUqKey]);
+        expect(getUserQueueTrackIds()).toEqual(['dl-uq']);
+      } finally {
+        (getLocalTrackUri as jest.Mock).mockReturnValue(null);
+      }
     });
   });
 });

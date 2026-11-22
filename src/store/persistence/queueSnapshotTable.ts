@@ -16,6 +16,7 @@
  * don't need to handle exceptions.
  */
 import { getDb, type BatchCommand } from './db';
+import { ensureQueueKey } from '../../utils/queueKeys';
 import {
   childFromSnapshotRow,
   childSnapshotArrayCommands,
@@ -53,6 +54,8 @@ export interface QueueSnapshot extends QueueSnapshotMeta {
   tracks: Child[];
   /** Track IDs belonging to the manual User Queue partition (when present). */
   userQueueTrackIds?: string[];
+  /** Per-entry queue keys belonging to the manual User Queue partition (when present). */
+  userQueueKeys?: string[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -111,21 +114,23 @@ export async function upsertSnapshot(meta: Omit<QueueSnapshotMeta, 'trackCount'>
 function snapshotTrackCommands(
   snapshotId: string,
   tracks: readonly Child[],
-  userQueueTrackIds: readonly string[] = [],
+  userQueueKeysOrIds: readonly string[] = [],
 ): BatchCommand[] {
   const usable = tracks.filter((c) => !!c?.id);
-  const userSet = userQueueTrackIds.length > 0 ? new Set(userQueueTrackIds) : null;
+  const userSet = userQueueKeysOrIds.length > 0 ? new Set(userQueueKeysOrIds) : null;
   const commands: BatchCommand[] = [
     ['DELETE FROM queue_snapshot_songs WHERE snapshot_id = ?;', [snapshotId]],
   ];
   usable.forEach((child, pos) => {
+    const isUserQueue =
+      userSet !== null && (userSet.has(ensureQueueKey(child)) || userSet.has(child.id)) ? 1 : 0;
     commands.push(
       childSnapshotInsertCommand({
         table: 'queue_snapshot_songs',
         key: {
           snapshot_id: snapshotId,
           pos,
-          is_user_queue: userSet?.has(child.id) ? 1 : 0,
+          is_user_queue: isUserQueue,
         },
         child,
       }),
@@ -152,12 +157,12 @@ function snapshotTrackCommands(
 export async function replaceSnapshotTracks(
   snapshotId: string,
   tracks: readonly Child[],
-  userQueueTrackIds: readonly string[] = [],
+  userQueueKeysOrIds: readonly string[] = [],
 ): Promise<void> {
   const db = getDb();
   if (db === null) return;
   try {
-    await db.runAtomicBatchAsync(snapshotTrackCommands(snapshotId, tracks, userQueueTrackIds));
+    await db.runAtomicBatchAsync(snapshotTrackCommands(snapshotId, tracks, userQueueKeysOrIds));
   } catch {
     /* dropped */
   }
@@ -287,6 +292,7 @@ function buildSnapshot(
   arrays: Map<string, ChildSnapshotArrays>,
 ): QueueSnapshot {
   const userQueueSet = new Set<string>();
+  const userQueueKeys: string[] = [];
   const tracks = rows.map((raw) => {
     const child = childFromSnapshotRow(
       childSnapshotRowFromRaw(raw),
@@ -294,6 +300,7 @@ function buildSnapshot(
     );
     if (Number(raw.is_user_queue) === 1 && child.id) {
       userQueueSet.add(child.id);
+      userQueueKeys.push(ensureQueueKey(child));
     }
     return child;
   });
@@ -302,6 +309,7 @@ function buildSnapshot(
     ...metaFromRow(meta),
     tracks,
     ...(userQueueTrackIds.length > 0 ? { userQueueTrackIds } : {}),
+    ...(userQueueKeys.length > 0 ? { userQueueKeys } : {}),
   };
 }
 

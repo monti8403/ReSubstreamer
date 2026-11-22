@@ -1,6 +1,5 @@
 import Ionicons from "@react-native-vector-icons/ionicons/static";
-import { FlashList } from '@shopify/flash-list';
-import ReorderableList, { type ReorderableListReorderEvent } from 'react-native-reorderable-list';
+import { type FlashListRef } from '@shopify/flash-list';
 import { Stack, useNavigation, useRouter } from 'expo-router';
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -20,9 +19,9 @@ import {
 } from 'react-native';
 import Animated, {
   Easing,
+  cancelAnimation,
   interpolate,
   runOnJS,
-  useAnimatedScrollHandler,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -52,9 +51,7 @@ import { SkipIntervalButton } from '@/components/SkipIntervalButton';
 import { SleepTimerButton } from '@/components/SleepTimerButton';
 import { SleepTimerCapsule } from '@/components/SleepTimerCapsule';
 import { PlaybackSourceBadge } from '@/components/PlaybackSourceBadge';
-import { QueueItemRow } from '@/components/QueueItemRow';
-import { QueueSectionHeader } from '@/components/player/QueueSectionHeader';
-import { closeOpenRow } from '@/components/SwipeableRow';
+import { ReorderableQueueList } from '@/components/player/ReorderableQueueList';
 import { ArtistSelectSheet } from '@/components/player/ArtistSelectSheet';
 import {
   parseTrackArtists,
@@ -73,7 +70,6 @@ import { useTheme } from '@/hooks/useTheme';
 import { offlineModeStore } from '@/store/offlineModeStore';
 import {
   clearQueue,
-  clearUserQueue,
   retryPlayback,
   skipToNext,
   skipToPrevious,
@@ -87,12 +83,8 @@ import { playbackSettingsStore } from '@/store/playbackSettingsStore';
 import { moreOptionsStore } from '@/store/moreOptionsStore';
 import { playerStore } from '@/store/playerStore';
 import { mixHexColors } from '@/utils/colors';
-import { reorderQueue } from '@/services/moreOptionsService';
-import {
-  usePartitionedQueue,
-  calculateReorderPlan,
-  type QueueListItem,
-} from '@/hooks/usePartitionedQueue';
+import { ensureQueueKey } from '@/utils/queueKeys';
+import { type QueueListItem } from '@/hooks/usePartitionedQueue';
 
 
 import { absoluteFill } from '@/utils/styles';
@@ -153,16 +145,18 @@ export function PlayerPhonePortrait() {
   /* ---- Tab state ---- */
   const [activeTab, setActiveTab] = useState<PlayerTab>('player');
   const [mountedTabs, setMountedTabs] = useState<Set<PlayerTab>>(() => new Set(['player']));
-  const listRef = useRef<any>(null);
+  const listRef = useRef<FlashListRef<QueueListItem> | null>(null);
+  const prevActiveTabRef = useRef<PlayerTab>(activeTab);
 
-  // Ensure tab is mounted when selected
+  // Ensure tab is mounted when selected; reset queue scroll only on tab transition into 'queue'.
   useEffect(() => {
     if (!mountedTabs.has(activeTab)) {
       setMountedTabs((prev) => new Set(prev).add(activeTab));
     }
-    if (activeTab === 'queue') {
+    if (activeTab === 'queue' && prevActiveTabRef.current !== 'queue') {
       listRef.current?.scrollToOffset?.({ offset: 0, animated: false });
     }
+    prevActiveTabRef.current = activeTab;
   }, [activeTab, mountedTabs]);
 
   const ensureQueueMounted = useCallback(() => {
@@ -172,7 +166,6 @@ export function PlayerPhonePortrait() {
 
   /* ---- Tab crossfade & drawer animations ---- */
   const playerOpacity = useSharedValue(1);
-  const queueOpacity = useSharedValue(0);
   const queueTranslateY = useSharedValue(windowHeight);
   const infoOpacity = useSharedValue(0);
   const lyricsOpacity = useSharedValue(0);
@@ -200,11 +193,6 @@ export function PlayerPhonePortrait() {
         if (event.translationY < 0) {
           runOnJS(ensureQueueMounted)();
           queueTranslateY.value = Math.max(0, windowHeight + event.translationY);
-          queueOpacity.value = interpolate(
-            queueTranslateY.value,
-            [0, windowHeight],
-            [1, 0.4],
-          );
         }
       })
       .onEnd((event) => {
@@ -216,13 +204,12 @@ export function PlayerPhonePortrait() {
             0,
             { damping: 28, stiffness: 220, mass: 0.8 },
             (finished) => {
+              isTransitioningQueue.value = false;
               if (finished) {
                 runOnJS(setActiveTab)('queue');
-                isTransitioningQueue.value = false;
               }
             },
           );
-          queueOpacity.value = withTiming(1, { duration: 180 });
         } else if (event.translationY > 40 || event.velocityY > 240) {
           runOnJS(onClose)();
         } else {
@@ -230,28 +217,19 @@ export function PlayerPhonePortrait() {
             duration: 220,
             easing: Easing.out(Easing.cubic),
           });
-          queueOpacity.value = withTiming(0, { duration: 180 });
         }
       });
-  }, [windowHeight, ensureQueueMounted, queueTranslateY, queueOpacity, onClose, isTransitioningQueue]);
+  }, [windowHeight, ensureQueueMounted, queueTranslateY, onClose, isTransitioningQueue]);
 
   const isDraggingQueueItem = useSharedValue(false);
   const isTrackingSheetDismiss = useSharedValue(false);
-  const [handleHeld, setHandleHeld] = useState(false);
 
-  const grabHandle = useCallback(() => setHandleHeld(true), []);
-  const releaseHandle = useCallback(() => setHandleHeld(false), []);
-
-  const handleDragStart = useCallback(() => {
-    'worklet';
-    isDraggingQueueItem.value = true;
-  }, [isDraggingQueueItem]);
-
-  const handleDragEnd = useCallback(() => {
-    'worklet';
-    isDraggingQueueItem.value = false;
-    runOnJS(setHandleHeld)(false);
-  }, [isDraggingQueueItem]);
+  const handleQueueDragStateChange = useCallback(
+    (dragging: boolean) => {
+      isDraggingQueueItem.value = dragging;
+    },
+    [isDraggingQueueItem],
+  );
 
   const handleGestureRelease = useCallback(
     (velocityY: number) => {
@@ -272,13 +250,12 @@ export function PlayerPhonePortrait() {
             overshootClamping: true,
           },
           (finished) => {
+            isTransitioningQueue.value = false;
             if (finished) {
               runOnJS(setActiveTab)('player');
-              isTransitioningQueue.value = false;
             }
           },
         );
-        queueOpacity.value = withTiming(0, { duration: 200 });
       } else {
         queueTranslateY.value = withSpring(0, {
           velocity: velocityY,
@@ -286,10 +263,9 @@ export function PlayerPhonePortrait() {
           stiffness: 220,
           mass: 0.8,
         });
-        queueOpacity.value = withTiming(1, { duration: 180 });
       }
     },
-    [isTransitioningQueue, isTrackingSheetDismiss, queueTranslateY, windowHeight, queueOpacity],
+    [isTransitioningQueue, isTrackingSheetDismiss, queueTranslateY, windowHeight],
   );
 
   // Header Pan Gesture: touches in the non-scrollable header area directly translate the queue sheet
@@ -313,11 +289,6 @@ export function PlayerPhonePortrait() {
           const delta = queueTranslateY.value === 0 ? Math.max(0, event.translationY) : event.changeY;
           const next = Math.max(0, queueTranslateY.value + delta);
           queueTranslateY.value = next;
-          queueOpacity.value = interpolate(
-            next,
-            [0, windowHeight],
-            [1, 0.35],
-          );
         }
       })
       .onEnd((event) => {
@@ -325,7 +296,7 @@ export function PlayerPhonePortrait() {
         if (isDraggingQueueItem.value || isTransitioningQueue.value) return;
         handleGestureRelease(event.velocityY);
       });
-  }, [isDraggingQueueItem, isTransitioningQueue, ensurePlayerMounted, queueTranslateY, queueOpacity, windowHeight, isTrackingSheetDismiss, handleGestureRelease]);
+  }, [isDraggingQueueItem, isTransitioningQueue, ensurePlayerMounted, queueTranslateY, isTrackingSheetDismiss, handleGestureRelease]);
 
   // Android hardware back button handler: if queue is open, close queue and return to player
   useEffect(() => {
@@ -348,25 +319,23 @@ export function PlayerPhonePortrait() {
     infoOpacity.value = withTiming(activeTab === 'info' ? 1 : 0, config);
     lyricsOpacity.value = withTiming(activeTab === 'lyrics' ? 1 : 0, config);
 
+    cancelAnimation(queueTranslateY);
     isDraggingQueueItem.value = false;
+    isTransitioningQueue.value = false;
+    isTrackingSheetDismiss.value = false;
     if (activeTab === 'queue') {
-      isTransitioningQueue.value = false;
-      isTrackingSheetDismiss.value = false;
       queueTranslateY.value = withSpring(0, {
         damping: 28,
         stiffness: 220,
         mass: 0.8,
       });
-      queueOpacity.value = withTiming(1, { duration: 200 });
     } else {
-      isTransitioningQueue.value = false;
       queueTranslateY.value = withTiming(windowHeight, {
         duration: 250,
         easing: Easing.out(Easing.cubic),
       });
-      queueOpacity.value = withTiming(0, { duration: 200 });
     }
-  }, [activeTab, windowHeight, playerOpacity, infoOpacity, lyricsOpacity, queueTranslateY, queueOpacity, isTransitioningQueue, isDraggingQueueItem, isTrackingSheetDismiss]);
+  }, [activeTab, windowHeight, playerOpacity, infoOpacity, lyricsOpacity, queueTranslateY, isTransitioningQueue, isDraggingQueueItem, isTrackingSheetDismiss]);
 
   // Track which tabs should be visible in the compositor.
   const [visibleTabs, setVisibleTabs] = useState<Set<PlayerTab>>(
@@ -391,7 +360,6 @@ export function PlayerPhonePortrait() {
     transform: [{ translateY: interpolate(playerOpacity.value, [0, 1], [TAB_SLIDE_DISTANCE, 0]) }],
   }));
   const queueAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: queueOpacity.value,
     transform: [{ translateY: queueTranslateY.value }],
   }));
   const infoAnimatedStyle = useAnimatedStyle(() => ({
@@ -456,17 +424,12 @@ export function PlayerPhonePortrait() {
     primary: mixHexColors(colors.primary, colors.textPrimary, 0.45),
   }), [colors]);
 
-  const userQueueTrackIds = playerStore((s) => s.userQueueTrackIds);
-
-  const {
-    nowPlaying,
-    visibleQueue,
-    reorderableListItems,
-  } = usePartitionedQueue(queue, currentTrackIndex, userQueueTrackIds);
-
-  const handleClearUserQueue = useCallback(() => {
-    void clearUserQueue();
-  }, []);
+  const upcomingQueueLength = useMemo(() => {
+    if (queue.length === 0) return 0;
+    const idx = currentTrackIndex ?? 0;
+    if (idx >= 0 && idx < queue.length) return queue.length - idx;
+    return Math.max(0, queue.length - (idx + 1));
+  }, [queue.length, currentTrackIndex]);
 
   const pendingScrollToTopOnSelectRef = useRef(false);
 
@@ -487,122 +450,6 @@ export function PlayerPhonePortrait() {
       handleQueueItemPress(targetAbsoluteIndex);
     },
     [handleQueueItemPress],
-  );
-
-  const renderQueueItem = useCallback(
-    ({ item }: { item: QueueListItem }) => {
-      if (item.type === 'header') {
-        const title =
-          item.section === 'nowPlaying'
-            ? t('nowPlayingHeader')
-            : item.section === 'userQueue'
-              ? t('userQueue')
-              : t('nextUp');
-
-        return (
-          <QueueSectionHeader
-            title={title}
-            count={item.count}
-            onClear={item.section === 'userQueue' ? handleClearUserQueue : undefined}
-            colors={colors}
-          />
-        );
-      }
-
-      return (
-        <QueueItemRow
-          track={item.track}
-          index={item.absoluteIndex}
-          isActive={item.isNowPlaying}
-          isInUserQueue={item.isUserQueue}
-          colors={queueColors}
-          onPress={onQueueItemPressWithScroll}
-          onLongPress={handleQueueItemLongPress}
-          onGrabHandle={item.isNowPlaying ? undefined : grabHandle}
-          onReleaseHandle={item.isNowPlaying ? undefined : releaseHandle}
-        />
-      );
-    },
-    [
-      colors,
-      queueColors,
-      handleClearUserQueue,
-      onQueueItemPressWithScroll,
-      handleQueueItemLongPress,
-      grabHandle,
-      releaseHandle,
-      t,
-    ],
-  );
-
-  const keyExtractor = useCallback(
-    (item: QueueListItem) => item.id,
-    [],
-  );
-
-  const [reorderEpoch, setReorderEpoch] = useState(0);
-
-  const handleReorderQueue = useCallback(
-    ({ from, to }: ReorderableListReorderEvent) => {
-      const plan = calculateReorderPlan(
-        reorderableListItems,
-        from,
-        to,
-        currentTrackIndex ?? 0,
-      );
-      if (!plan) {
-        setReorderEpoch((n) => n + 1);
-        return;
-      }
-
-      const currentUserQueue = playerStore.getState().userQueueTrackIds;
-      const userQueueUnchanged =
-        plan.newUserQueueTrackIds.length === currentUserQueue.length &&
-        plan.newUserQueueTrackIds.every((id, idx) => id === currentUserQueue[idx]);
-
-      if (plan.fromAbsoluteIndex === plan.toAbsoluteIndex && userQueueUnchanged) {
-        setReorderEpoch((n) => n + 1);
-        return;
-      }
-
-      void reorderQueue(
-        plan.fromAbsoluteIndex,
-        plan.toAbsoluteIndex,
-        plan.newUserQueueTrackIds,
-      );
-    },
-    [currentTrackIndex, reorderableListItems],
-  );
-
-  const nowPlayingHeader = useMemo(
-    () =>
-      nowPlaying ? (
-        <View>
-          <QueueSectionHeader
-            title={t('nowPlayingHeader')}
-            count={1}
-            colors={colors}
-          />
-          <QueueItemRow
-            track={nowPlaying}
-            index={currentTrackIndex ?? 0}
-            isActive={true}
-            isInUserQueue={false}
-            colors={queueColors}
-            onPress={onQueueItemPressWithScroll}
-            onLongPress={handleQueueItemLongPress}
-          />
-        </View>
-      ) : null,
-    [
-      nowPlaying,
-      t,
-      colors,
-      currentTrackIndex,
-      queueColors,
-      onQueueItemPressWithScroll,
-      handleQueueItemLongPress,
-    ],
   );
 
   const headerTopPadding = Platform.OS === 'ios'
@@ -683,12 +530,8 @@ export function PlayerPhonePortrait() {
                 backgroundColor: colors.background,
                 borderTopLeftRadius: 24,
                 borderTopRightRadius: 24,
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: -6 },
-                shadowOpacity: 0.25,
-                shadowRadius: 16,
-                elevation: 16,
-                overflow: 'hidden',
+                borderTopWidth: StyleSheet.hairlineWidth,
+                borderColor: colors.border,
               },
               queueAnimatedStyle,
             ]}
@@ -702,32 +545,19 @@ export function PlayerPhonePortrait() {
                   handleShuffle={handleShuffle}
                   handleShareQueue={handleShareQueue}
                   shuffling={shuffling}
-                  queueLength={visibleQueue.length}
+                  queueLength={upcomingQueueLength}
                   swipeDownGesture={headerPanGesture}
                 />
-                <ReorderableList
-                  key={`queue-list-${reorderEpoch}`}
-                  ref={listRef}
-                  data={reorderableListItems}
-                  renderItem={renderQueueItem}
-                  keyExtractor={keyExtractor}
-                  onReorder={handleReorderQueue}
-                  onDragStart={handleDragStart}
-                  onDragEnd={handleDragEnd}
-                  scrollEnabled={!handleHeld}
-                  animationDuration={150}
-                  autoscrollThreshold={0.08}
-                  autoscrollDelay={Platform.OS === 'android' ? 50 : 100}
-                  ListHeaderComponent={nowPlayingHeader}
-                  onScrollBeginDrag={closeOpenRow}
-                  showsVerticalScrollIndicator={false}
+                <ReorderableQueueList
+                  queue={queue}
+                  currentTrackIndex={currentTrackIndex}
+                  colors={colors}
+                  queueColors={queueColors}
+                  onItemPress={onQueueItemPressWithScroll}
+                  onItemLongPress={handleQueueItemLongPress}
                   contentContainerStyle={QUEUE_CONTENT_CONTAINER_STYLE}
-                  windowSize={11}
-                  maxToRenderPerBatch={10}
-                  initialNumToRender={12}
-                  updateCellsBatchingPeriod={50}
-                  bounces={false}
-                  overScrollMode="never"
+                  listRef={listRef}
+                  onDragStateChange={handleQueueDragStateChange}
                 />
               </View>
             )}
@@ -975,15 +805,21 @@ const PlayerContent = memo(function PlayerContent({
     [router],
   );
 
-  const carouselTracks = useMemo(() => {
-    if (!currentTrack) return [];
-    return queue;
-  }, [queue, currentTrack]);
+  const { carouselTracks, localCurrentIndex } = useMemo(() => {
+    if (!currentTrack || queue.length === 0) {
+      return { carouselTracks: [] as Child[], localCurrentIndex: 0 };
+    }
+    const clamped = Math.max(0, Math.min(currentTrackIndex ?? 0, queue.length - 1));
+    const start = Math.max(0, clamped - 1);
+    const end = Math.min(queue.length, clamped + 2);
+    return {
+      carouselTracks: queue.slice(start, end),
+      localCurrentIndex: clamped - start,
+    };
+  }, [queue, currentTrack, currentTrackIndex]);
 
-  const currentIndex = currentTrackIndex ?? 0;
   const flatListRef = useRef<FlatList<Child>>(null);
   const isUserScrollingRef = useRef(false);
-  const lastScrolledIndexRef = useRef(-1);
   const isSkippingRef = useRef(false);
 
   const error = playerStore((s) => s.error);
@@ -1023,19 +859,17 @@ const PlayerContent = memo(function PlayerContent({
   const sidePadding = Math.max(0, (windowWidth - heroSize) / 2 - CAROUSEL_GAP / 2);
 
   const triggerCarouselSkip = useCallback(
-    (targetIndex: number) => {
+    (targetLocalIndex: number) => {
       if (isSkippingRef.current) return;
-      if (targetIndex > currentIndex) {
+      if (targetLocalIndex > localCurrentIndex) {
         isSkippingRef.current = true;
-        lastScrolledIndexRef.current = targetIndex;
         void skipToNext();
-      } else if (targetIndex < currentIndex) {
+      } else if (targetLocalIndex < localCurrentIndex) {
         isSkippingRef.current = true;
-        lastScrolledIndexRef.current = targetIndex;
         void skipToPrevious();
       }
     },
-    [currentIndex],
+    [localCurrentIndex],
   );
 
   const handleMomentumScrollEnd = useCallback(
@@ -1066,24 +900,19 @@ const PlayerContent = memo(function PlayerContent({
   useEffect(() => {
     isSkippingRef.current = false;
     if (flatListRef.current && !isUserScrollingRef.current && carouselTracks.length > 0) {
-      if (lastScrolledIndexRef.current === currentIndex) {
-        lastScrolledIndexRef.current = -1;
-        return;
-      }
-      lastScrolledIndexRef.current = -1;
       flatListRef.current.scrollToOffset({
-        offset: currentIndex * stepDistance,
-        animated: true,
+        offset: localCurrentIndex * stepDistance,
+        animated: false,
       });
     }
-  }, [currentIndex, stepDistance, carouselTracks.length]);
+  }, [localCurrentIndex, currentTrackIndex, stepDistance, carouselTracks.length]);
 
   const onListLayout = useCallback(() => {
     flatListRef.current?.scrollToOffset({
-      offset: currentIndex * stepDistance,
+      offset: localCurrentIndex * stepDistance,
       animated: false,
     });
-  }, [currentIndex, stepDistance]);
+  }, [localCurrentIndex, stepDistance]);
 
   const onScrollToIndexFailed = useCallback(
     (info: { index: number }) => {
@@ -1107,7 +936,7 @@ const PlayerContent = memo(function PlayerContent({
   );
 
   const carouselKeyExtractor = useCallback(
-    (item: Child, index: number) => (item as any)._queueKey || `${item.id}-${index}`,
+    (item: Child, index: number) => ensureQueueKey(item) || `${item.id}-${index}`,
     [],
   );
 
@@ -1115,11 +944,11 @@ const PlayerContent = memo(function PlayerContent({
     ({ item, index }: { item: Child; index: number }) => (
       <CarouselCoverItem
         item={item}
-        isCurrent={index === currentIndex}
+        isCurrent={index === localCurrentIndex}
         heroSize={heroSize}
       />
     ),
-    [currentIndex, heroSize],
+    [localCurrentIndex, heroSize],
   );
 
   // Synergistic cover art, info, and controls movement as queue rises/falls
@@ -1204,7 +1033,7 @@ const PlayerContent = memo(function PlayerContent({
             disableIntervalMomentum={true}
             contentContainerStyle={{ paddingHorizontal: sidePadding }}
             getItemLayout={getItemLayout}
-            initialScrollIndex={currentIndex > 0 && currentIndex < carouselTracks.length ? currentIndex : undefined}
+            initialScrollIndex={localCurrentIndex > 0 && localCurrentIndex < carouselTracks.length ? localCurrentIndex : undefined}
             onScrollBeginDrag={() => {
               isUserScrollingRef.current = true;
               isSkippingRef.current = false;

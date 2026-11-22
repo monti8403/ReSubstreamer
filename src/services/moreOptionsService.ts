@@ -202,9 +202,9 @@ export async function moveQueueItemToUserQueue(index: number): Promise<void> {
 export async function reorderQueue(
   fromIndex: number,
   toIndex: number,
-  explicitUserQueueTrackIds?: string[],
+  explicitUserQueueKeysOrIds?: string[],
 ): Promise<void> {
-  await _reorderQueue(fromIndex, toIndex, explicitUserQueueTrackIds);
+  await _reorderQueue(fromIndex, toIndex, explicitUserQueueKeysOrIds);
 }
 
 /* ------------------------------------------------------------------ */

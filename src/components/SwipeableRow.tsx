@@ -94,6 +94,8 @@ export interface SwipeableRowProps {
   actionSize?: 'default' | 'queue' | 'compact';
   /** Horizontal drag distance (in points) required to activate the swipe. Defaults to 20. */
   dragOffset?: number;
+  /** Stable item key used in recycled lists so open/swiping state resets on cell reuse. */
+  recyclingKey?: string;
   children: React.ReactNode;
 }
 
@@ -140,6 +142,7 @@ export const SwipeableRow = memo(function SwipeableRow({
   compact = false,
   actionSize,
   dragOffset,
+  recyclingKey,
   children,
 }: SwipeableRowProps) {
   const resolvedActionSize = actionSize ?? (compact ? 'compact' : 'default');
@@ -150,6 +153,7 @@ export const SwipeableRow = memo(function SwipeableRow({
   const pendingFullSwipeCloseRef = useRef(false);
   const pendingFullSwipeActionRef = useRef<SwipeAction | null>(null);
   const pendingFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevRecyclingKeyRef = useRef(recyclingKey);
 
   const hasRight = rightActions.length > 0;
   const hasLeft = leftActions.length > 0;
@@ -263,6 +267,32 @@ export const SwipeableRow = memo(function SwipeableRow({
       triggerPendingAction,
     ],
   );
+
+  useEffect(() => {
+    if (recyclingKey === prevRecyclingKeyRef.current) return;
+    prevRecyclingKeyRef.current = recyclingKey;
+    clearFallbackTimer();
+    pendingFullSwipeCloseRef.current = false;
+    pendingFullSwipeActionRef.current = null;
+    fullSwipeRightRef.current = false;
+    fullSwipeLeftRef.current = false;
+    fullSwipeRightTriggered.value = false;
+    fullSwipeLeftTriggered.value = false;
+    swipeProgress.value = 0;
+    if (isOpenRef.current) {
+      isOpenRef.current = false;
+      swipeableRef.current?.reset();
+    }
+    if (_activeRef === swipeableRef.current) {
+      _activeRef = null;
+    }
+  }, [
+    recyclingKey,
+    clearFallbackTimer,
+    fullSwipeRightTriggered,
+    fullSwipeLeftTriggered,
+    swipeProgress,
+  ]);
 
   useEffect(() => {
     return () => {

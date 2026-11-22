@@ -14,6 +14,7 @@
  */
 import type { Child } from 'subsonic-api';
 
+import { ensureQueueKey } from '../../utils/queueKeys';
 import { settleDbWrites } from '../../test-utils/settleDbWrites';
 import { __setDbForTests, getDb, type InternalDb } from '../../store/persistence/db';
 import {
@@ -446,6 +447,59 @@ describe('restore', () => {
     await flushDebounce();
 
     expect(getPersistedQueue()).toEqual({ queue, currentTrackIndex: 2 });
+  });
+
+  it('persists per-entry userQueueKeys so duplicate song ids stay independent across cold start', async () => {
+    const base = queueOf(1)[0];
+    const nowPlaying = { ...base, id: 's-0' };
+    const dupInUserQueue = { ...base, id: 'dup-id', title: 'Dup UQ' };
+    const dupInNextUp = { ...base, id: 'dup-id', title: 'Dup NextUp' };
+    const queue = [nowPlaying, dupInUserQueue, dupInNextUp];
+    const uqKey = ensureQueueKey(dupInUserQueue);
+    ensureQueueKey(dupInNextUp);
+
+    persistQueue(queue, 0, ['dup-id'], [uqKey]);
+    await flushDebounce();
+
+    expect(
+      realDb.getAllSync(
+        'SELECT pos, is_user_queue FROM queue_snapshot_songs WHERE snapshot_id = ? ORDER BY pos;',
+        ['live'],
+      ),
+    ).toEqual([
+      { pos: 0, is_user_queue: 0 },
+      { pos: 1, is_user_queue: 1 },
+      { pos: 2, is_user_queue: 0 },
+    ]);
+
+    const restored = coldStart().getPersistedQueue();
+    expect(restored).not.toBeNull();
+    expect(restored?.queue.map((t) => t.id)).toEqual(['s-0', 'dup-id', 'dup-id']);
+    expect(restored?.userQueueTrackIds).toEqual(['dup-id']);
+    expect(restored?.userQueueKeys).toHaveLength(1);
+  });
+
+  it('supports concurrent async queue/position restore via getPersistedQueueAsync and getPersistedPositionAsync', async () => {
+    const queue = queueOf(3);
+    persistQueue(queue, 1);
+    await flushDebounce();
+    flushPosition(42, queue[1].id, 180);
+    await drain();
+
+    const cold = coldStart();
+    const [qA, qB, pos] = await Promise.all([
+      cold.getPersistedQueueAsync(),
+      cold.getPersistedQueueAsync(),
+      cold.getPersistedPositionAsync(),
+    ]);
+    expect(qA?.queue.map((t) => t.id)).toEqual(queue.map((t) => t.id));
+    expect(qA?.currentTrackIndex).toBe(1);
+    expect(qB).toEqual(qA);
+    expect(pos).toEqual({ position: 42, trackId: queue[1].id });
+
+    await cold.clearPersistedQueue();
+    await drain();
+    expect(await cold.getPersistedPositionAsync()).toBeNull();
   });
 });
 

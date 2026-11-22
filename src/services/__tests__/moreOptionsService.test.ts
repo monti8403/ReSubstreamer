@@ -10,6 +10,7 @@ jest.mock('../playerService', () => ({
     return Promise.resolve();
   }),
   removeFromQueue: jest.fn().mockResolvedValue(undefined),
+  reorderQueue: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../subsonicService');
@@ -115,7 +116,16 @@ jest.mock('../../store/processingOverlayStore', () => ({
   },
 }));
 
-import { addSongToUserQueue, addTracksToUserQueue, addToQueue, playTrack, removeFromQueue } from '../playerService';
+import {
+  addSongToUserQueue,
+  addTracksToUserQueue,
+  addToQueue,
+  moveQueueItemToPlayNext as mockPlayerMoveQueueItemToPlayNext,
+  moveQueueItemToUserQueue as mockPlayerMoveQueueItemToUserQueue,
+  playTrack,
+  removeFromQueue,
+  reorderQueue as mockPlayerReorderQueue,
+} from '../playerService';
 import {
   enqueueSongDownload as mockEnqueueSongDownload,
   deleteCachedItem as mockDeleteCachedItem,
@@ -145,7 +155,10 @@ import {
   addSongToQueue,
   addAlbumToQueue,
   addPlaylistToQueue,
+  moveQueueItemToPlayNext,
+  moveQueueItemToUserQueue,
   removeItemFromQueue,
+  reorderQueue,
   playMoreLikeThis,
   playSimilarArtistsMix,
   saveArtistTopSongsPlaylist,
@@ -366,6 +379,17 @@ describe('removeItemFromQueue', () => {
   it('delegates to removeFromQueue', async () => {
     await removeItemFromQueue(3);
     expect(removeFromQueue).toHaveBeenCalledWith(3);
+  });
+
+  it('delegates moveQueueItemToPlayNext, moveQueueItemToUserQueue, and reorderQueue', async () => {
+    await moveQueueItemToPlayNext(2);
+    expect(mockPlayerMoveQueueItemToPlayNext).toHaveBeenCalledWith(2);
+
+    await moveQueueItemToUserQueue(4);
+    expect(mockPlayerMoveQueueItemToUserQueue).toHaveBeenCalledWith(4);
+
+    await reorderQueue(3, 1, ['k1', 'k2']);
+    expect(mockPlayerReorderQueue).toHaveBeenCalledWith(3, 1, ['k1', 'k2']);
   });
 });
 

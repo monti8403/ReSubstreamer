@@ -1,5 +1,4 @@
 import Ionicons from "@react-native-vector-icons/ionicons/static";
-import { FlashList } from '@shopify/flash-list';
 import { memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -18,33 +17,26 @@ import { MarqueeText } from '@/components/MarqueeText';
 import { MoreOptionsButton } from '@/components/MoreOptionsButton';
 import { PlaybackRateButton } from '@/components/PlaybackRateButton';
 import { PlayerProgressBar } from '@/components/PlayerProgressBar';
-import { QueueItemRow } from '@/components/QueueItemRow';
-import { QueueSectionHeader } from './QueueSectionHeader';
 import { RepeatButton } from '@/components/RepeatButton';
 import { ShuffleButton } from '@/components/ShuffleButton';
 import { ShuffleOverlay } from '@/components/ShuffleOverlay';
 import { SleepTimerCapsule } from '@/components/SleepTimerCapsule';
 import { CastButton } from '@/components/RoutePicker/CastButton';
-import { closeOpenRow } from '@/components/SwipeableRow';
 import { type ThemeColors } from '@/constants/theme';
 import { useCanSkip } from '@/hooks/useCanSkip';
 import { useSongCoverArt } from '@/hooks/useSongCoverArt';
 import { mixHexColors } from '@/utils/colors';
-import {
-  usePartitionedQueue,
-  type QueueListItem,
-} from '@/hooks/usePartitionedQueue';
 import { usePlayerActions } from '@/hooks/usePlayerActions';
 import { usePlaybackState } from '@/hooks/usePlaybackState';
 import { useShuffleOverlay } from '@/hooks/useShuffleOverlay';
 import { useTheme } from '@/hooks/useTheme';
 import {
-  clearUserQueue,
   retryPlayback,
   skipToNext,
   skipToPrevious,
   togglePlayPause,
 } from '@/services/playerService';
+import { ReorderableQueueList } from './ReorderableQueueList';
 import { type Child } from '@/services/subsonicService';
 import { moreOptionsStore } from '@/store/moreOptionsStore';
 import { playerStore } from '@/store/playerStore';
@@ -90,64 +82,6 @@ export function PlayerTabletSplitview() {
     ...colors,
     primary: mixHexColors(colors.primary, colors.textPrimary, 0.45),
   }), [colors]);
-
-  const userQueueTrackIds = playerStore((s) => s.userQueueTrackIds);
-
-  const {
-    visibleQueue,
-    queueListItems,
-  } = usePartitionedQueue(queue, currentTrackIndex, userQueueTrackIds);
-
-  const handleClearUserQueue = useCallback(() => {
-    void clearUserQueue();
-  }, []);
-
-  const renderQueueItem = useCallback(
-    ({ item }: { item: QueueListItem }) => {
-      if (item.type === 'header') {
-        const title =
-          item.section === 'nowPlaying'
-            ? t('nowPlayingHeader')
-            : item.section === 'userQueue'
-              ? t('userQueue')
-              : t('nextUp');
-
-        return (
-          <QueueSectionHeader
-            title={title}
-            count={item.count}
-            onClear={item.section === 'userQueue' ? handleClearUserQueue : undefined}
-            colors={colors}
-          />
-        );
-      }
-
-      return (
-        <QueueItemRow
-          track={item.track}
-          index={item.absoluteIndex}
-          isActive={item.isNowPlaying}
-          isInUserQueue={item.isUserQueue}
-          colors={queueColors}
-          onPress={handleQueueItemPress}
-          onLongPress={handleQueueItemLongPress}
-        />
-      );
-    },
-    [
-      colors,
-      queueColors,
-      handleQueueItemPress,
-      handleQueueItemLongPress,
-      handleClearUserQueue,
-      t,
-    ],
-  );
-
-  const keyExtractor = useCallback(
-    (item: QueueListItem) => item.id,
-    [],
-  );
 
   if (!currentTrack) {
     // During queue replacement queueLoading is true while currentTrack is
@@ -223,14 +157,13 @@ export function PlayerTabletSplitview() {
 
       {/* Scrollable queue list */}
       <View style={styles.queueList}>
-        <FlashList
-          data={queueListItems}
-          renderItem={renderQueueItem}
-          keyExtractor={keyExtractor}
-          getItemType={(item) => item.type}
-          onScrollBeginDrag={closeOpenRow}
-          drawDistance={200}
-          showsVerticalScrollIndicator={false}
+        <ReorderableQueueList
+          queue={queue}
+          currentTrackIndex={currentTrackIndex}
+          colors={colors}
+          queueColors={queueColors}
+          onItemPress={handleQueueItemPress}
+          onItemLongPress={handleQueueItemLongPress}
           contentContainerStyle={queueContentContainerStyle}
         />
       </View>

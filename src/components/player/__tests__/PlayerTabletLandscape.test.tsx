@@ -136,9 +136,46 @@ jest.mock('@/components/PlayerProgressBar', () => {
   return { PlayerProgressBar: () => <View testID="progress-bar" /> };
 });
 
+jest.mock('react-native-gesture-handler', () => {
+  const { Pressable } = require('react-native');
+  const makeChainable = () => {
+    const g: Record<string, () => unknown> = {};
+    const methods = [
+      'enabled', 'manualActivation', 'shouldCancelWhenOutside',
+      'activeOffsetY', 'failOffsetY', 'activeOffsetX', 'failOffsetX',
+      'cancelsTouchesInView',
+      'onTouchesDown', 'onTouchesMove',
+      'onBegin', 'onStart', 'onUpdate', 'onChange', 'onEnd', 'onFinalize',
+      'simultaneousWithExternalGesture', 'requireExternalGestureToFail',
+    ];
+    for (const m of methods) g[m] = () => g;
+    return g;
+  };
+  return {
+    Pressable,
+    GestureDetector: ({ children }: { children: React.ReactNode }) => children,
+    Gesture: {
+      Pan: makeChainable,
+      Native: makeChainable,
+      Tap: makeChainable,
+      Simultaneous: (..._args: unknown[]) => makeChainable(),
+    },
+    State: { UNDETERMINED: 0, FAILED: 1, BEGAN: 2, CANCELLED: 3, ACTIVE: 4, END: 5 },
+  };
+});
+
+jest.mock('@/utils/haptics', () => ({
+  hapticLight: jest.fn(),
+  hapticMedium: jest.fn(),
+  hapticSelection: jest.fn(),
+}));
+
 jest.mock('@/components/QueueItemRow', () => {
   const { Text } = require('react-native');
-  return { QueueItemRow: ({ track }: { track: { title: string } }) => <Text>{track.title}</Text> };
+  return {
+    QUEUE_ROW_HEIGHT: 64,
+    QueueItemRow: ({ track }: { track: { title: string } }) => <Text>{track.title}</Text>,
+  };
 });
 
 jest.mock('@/components/RepeatButton', () => {
@@ -200,11 +237,18 @@ jest.mock('@/store/lyricsStore', () => {
   return { lyricsStore: store };
 });
 
+const mockFlashScrollToOffset = jest.fn();
+
 jest.mock('@/services/playerService', () => ({
+  clearUserQueue: jest.fn(),
   retryPlayback: jest.fn(),
   skipToNext: jest.fn(),
   skipToPrevious: jest.fn(),
   togglePlayPause: jest.fn(),
+}));
+
+jest.mock('@/services/moreOptionsService', () => ({
+  reorderQueue: jest.fn(),
 }));
 
 jest.mock('@shopify/flash-list', () => {
@@ -217,8 +261,11 @@ jest.mock('@shopify/flash-list', () => {
         renderItem: (info: { item: unknown; index: number }) => React.ReactNode;
         keyExtractor?: (item: unknown, index: number) => string;
       },
-      _ref: unknown,
+      ref: React.ForwardedRef<{ scrollToOffset: jest.Mock }>,
     ) {
+      React.useImperativeHandle(ref, () => ({
+        scrollToOffset: mockFlashScrollToOffset,
+      }));
       return (
         <View testID="flash-list">
           {data?.map((item: unknown, index: number) => (
@@ -262,12 +309,15 @@ const fetchLyrics = lyricsStore.getState().fetchLyrics as jest.Mock;
 
 beforeEach(() => {
   fetchLyrics.mockClear();
+  mockFlashScrollToOffset.mockClear();
   appStateStore.setState({ isActive: true });
   tabletLayoutStore.setState({ playerExpanded: false });
   playerStore.setState({
     currentTrack: MOCK_TRACK,
     currentTrackIndex: 0,
     queue: [MOCK_TRACK],
+    userQueueKeys: [],
+    userQueueTrackIds: [],
     queueLoading: false,
     playbackState: 'playing',
     position: 30,

@@ -32,6 +32,11 @@ import { appStateStore } from '../store/appStateStore';
 import { equalizerSettingsStore, EQ_CUSTOM_PRESET_LABEL } from '../store/equalizerSettingsStore';
 import { sleepTimerStore } from '../store/sleepTimerStore';
 import { shuffleArray } from '../utils/arrayHelpers';
+import {
+  cloneWithFreshQueueKey,
+  ensureQueueKey,
+  withUniqueQueueKeys,
+} from '../utils/queueKeys';
 import { addCompletedScrobble, sendNowPlaying } from './scrobbleService';
 import { registerPlayerPlayStatListener } from './playStatsService';
 import {
@@ -95,6 +100,61 @@ let initPromise: Promise<void> | null = null;
 let currentChildQueue: Child[] = [];
 /** Tracks added manually by the user (User Queue), ordered by addition. */
 let userQueueTrackIds: string[] = [];
+/** Authoritative per-entry queue keys (`ensureQueueKey`) in the User Queue. */
+let userQueueKeys: string[] = [];
+
+function syncUserQueueToStore(
+  keys: readonly string[],
+  queue: readonly Child[] = currentChildQueue,
+): void {
+  userQueueKeys = keys.slice();
+  if (userQueueKeys.length === 0) {
+    userQueueTrackIds = [];
+  } else {
+    const idByKey = new Map<string, string>();
+    for (let i = 0; i < queue.length; i++) {
+      const c = queue[i];
+      idByKey.set(ensureQueueKey(c), c.id);
+    }
+    const seenIds = new Set<string>();
+    const ids: string[] = [];
+    for (const k of userQueueKeys) {
+      const id = idByKey.get(k);
+      if (id && !seenIds.has(id)) {
+        seenIds.add(id);
+        ids.push(id);
+      }
+    }
+    userQueueTrackIds = ids;
+  }
+  const store = playerStore.getState();
+  store.setUserQueueKeys?.(userQueueKeys);
+  store.setUserQueueTrackIds?.(userQueueTrackIds);
+}
+
+function batchMergeQueueFormats(tracks: readonly Child[]): void {
+  if (tracks.length === 0) return;
+  const formats: Record<string, EffectiveFormat> = {};
+  for (const child of tracks) {
+    formats[child.id] = stampQueueFormat(child);
+  }
+  const store = playerStore.getState();
+  if (typeof store.mergeQueueFormats === 'function') {
+    store.mergeQueueFormats(formats);
+  } else {
+    for (const [id, fmt] of Object.entries(formats)) {
+      store.addQueueFormat(id, fmt);
+    }
+  }
+}
+
+function resolveChildAtIndex(trackId: string, index: number | null | undefined): Child | null {
+  if (index != null && index >= 0 && index < currentChildQueue.length) {
+    const candidate = currentChildQueue[index];
+    if (candidate?.id === trackId) return candidate;
+  }
+  return currentChildQueue.find((c) => c.id === trackId) ?? null;
+}
 /** Maps trackId → playlistId for tracks that originated from a playlist. */
 const trackPlaylistMap = new Map<string, string>();
 /** FIFO mutex serializing queue mutations across JS awaits and the native bridge. */
@@ -238,12 +298,12 @@ export async function initPlayer(): Promise<void> {
       }
 
       if (track?.id) {
-        const child = currentChildQueue.find((c) => c.id === track.id) ?? null;
+        const child = resolveChildAtIndex(track.id, index);
         playerStore.getState().setCurrentTrack(child, index ?? null);
         if (child) sendNowPlaying(child, trackPlaylistMap.get(child.id));
-        if (userQueueTrackIds.includes(track.id)) {
-          userQueueTrackIds = userQueueTrackIds.filter((id) => id !== track.id);
-          playerStore.getState().removeUserQueueTrackIds?.([track.id]);
+        const entryKey = child ? ensureQueueKey(child) : '';
+        if (entryKey && userQueueKeys.includes(entryKey)) {
+          syncUserQueueToStore(userQueueKeys.filter((k) => k !== entryKey));
         }
         // The queue is unchanged here — only the cursor moved, so this is one UPDATE.
         if (index != null && index >= 0) persistCurrentIndex(index);
@@ -402,7 +462,9 @@ function adoptLiveEngineSession(): void {
   const liveIndex = tp.getCurrentTrackIndex();
   const store = playerStore.getState();
   if (currentChildQueue.length > 0) {
+    currentChildQueue = withUniqueQueueKeys(currentChildQueue);
     store.setQueue(currentChildQueue);
+    syncUserQueueToStore(userQueueKeys, currentChildQueue);
     const formats: Record<string, EffectiveFormat> = {};
     for (const child of currentChildQueue) formats[child.id] = stampQueueFormat(child);
     store.setQueueFormats(formats);
@@ -451,32 +513,49 @@ async function restorePersistedQueue(): Promise<boolean> {
         : getPersistedQueue();
     if (!persisted) return false;
 
-    const { queue, currentTrackIndex, userQueueTrackIds: savedUserIds } = persisted;
+    const {
+      queue,
+      currentTrackIndex,
+      userQueueTrackIds: savedUserIds,
+      userQueueKeys: savedUserKeys,
+    } = persisted;
     if (queue.length === 0) return false;
     const clampedIndex = Math.min(currentTrackIndex, queue.length - 1);
 
-    currentChildQueue = queue;
-    playerStore.getState().setQueue(queue);
+    const uniqueQueue = withUniqueQueueKeys(queue);
+    currentChildQueue = uniqueQueue;
+    playerStore.getState().setQueue(uniqueQueue);
 
-    if (savedUserIds && savedUserIds.length > 0) {
-      const upcomingIds = new Set(queue.slice(clampedIndex + 1).map((c) => c.id));
+    if (savedUserKeys && savedUserKeys.length > 0) {
+      const upcomingKeys = new Set(uniqueQueue.slice(clampedIndex + 1).map((c) => ensureQueueKey(c)));
       const seen = new Set<string>();
-      userQueueTrackIds = savedUserIds.filter((id) => {
-        if (!upcomingIds.has(id) || seen.has(id)) return false;
-        seen.add(id);
+      const restoredKeys = savedUserKeys.filter((k) => {
+        if (!upcomingKeys.has(k) || seen.has(k)) return false;
+        seen.add(k);
         return true;
       });
-      playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
+      syncUserQueueToStore(restoredKeys, uniqueQueue);
+    } else if (savedUserIds && savedUserIds.length > 0) {
+      const savedIdSet = new Set(savedUserIds);
+      const seenIds = new Set<string>();
+      const restoredKeys: string[] = [];
+      for (let i = clampedIndex + 1; i < uniqueQueue.length; i++) {
+        const c = uniqueQueue[i];
+        if (savedIdSet.has(c.id) && !seenIds.has(c.id)) {
+          seenIds.add(c.id);
+          restoredKeys.push(ensureQueueKey(c));
+        }
+      }
+      syncUserQueueToStore(restoredKeys, uniqueQueue);
     } else {
-      userQueueTrackIds = [];
-      playerStore.getState().clearUserQueueTrackIds?.();
+      syncUserQueueToStore([], uniqueQueue);
     }
 
     const formats: Record<string, EffectiveFormat> = {};
-    for (const child of queue) formats[child.id] = stampQueueFormat(child);
+    for (const child of uniqueQueue) formats[child.id] = stampQueueFormat(child);
     playerStore.getState().setQueueFormats(formats);
 
-    const currentChild = queue[clampedIndex] ?? null;
+    const currentChild = uniqueQueue[clampedIndex] ?? null;
     playerStore.getState().setCurrentTrack(currentChild, clampedIndex);
 
     const persistedPosition =
@@ -539,34 +618,45 @@ async function hydrateRestoredQueue(): Promise<void> {
     }
 
     const pruned = filteredQueue.length !== currentChildQueue.length;
+    const normalizedFiltered = withUniqueQueueKeys(filteredQueue);
     if (pruned) {
-      currentChildQueue = filteredQueue;
-      playerStore.getState().setQueue(filteredQueue);
+      currentChildQueue = normalizedFiltered;
+      playerStore.getState().setQueue(normalizedFiltered);
     }
 
     // Translate the restored current track onto the filtered queue.
     let startIndex = 0;
     if (originalChild) {
-      const idx = filteredQueue.findIndex((c) => c.id === originalChild.id);
+      const targetKey = ensureQueueKey(originalChild);
+      let idx = targetKey
+        ? normalizedFiltered.findIndex((c) => ensureQueueKey(c) === targetKey)
+        : -1;
+      if (idx === -1) {
+        idx = normalizedFiltered.findIndex((c) => c.id === originalChild.id);
+      }
       if (idx !== -1) startIndex = idx;
     }
 
-    if (pruned && userQueueTrackIds.length > 0) {
-      const upcomingIds = new Set(filteredQueue.slice(startIndex + 1).map((c) => c.id));
-      userQueueTrackIds = userQueueTrackIds.filter((id) => upcomingIds.has(id));
-      playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
+    if (pruned && userQueueKeys.length > 0) {
+      const upcomingKeys = new Set(
+        normalizedFiltered.slice(startIndex + 1).map((c) => ensureQueueKey(c)),
+      );
+      syncUserQueueToStore(
+        userQueueKeys.filter((k) => upcomingKeys.has(k)),
+        normalizedFiltered,
+      );
     }
 
     await tp.setQueue(rnTracks, startIndex);
     if (
       resume &&
-      filteredQueue[startIndex]?.id === resume.trackId &&
+      normalizedFiltered[startIndex]?.id === resume.trackId &&
       resume.position > 0
     ) {
       await tp.seekTo(resume.position);
     }
 
-    if (pruned) persistQueue(filteredQueue, startIndex, userQueueTrackIds);
+    if (pruned) persistQueue(normalizedFiltered, startIndex, userQueueTrackIds, userQueueKeys);
   } catch (e) {
     console.warn('[Player] Queue hydration failed:', e);
     throw e;
@@ -622,8 +712,7 @@ async function playTrackInternal(
   await awaitHydration();
   maybePromptFireBackgroundPlayback();
   pendingResumePosition = null;
-  userQueueTrackIds = [];
-  playerStore.getState().clearUserQueueTrackIds?.();
+  syncUserQueueToStore([], []);
   playerStore.getState().setQueueLoading(true);
 
   try {
@@ -639,31 +728,36 @@ async function playTrackInternal(
       return;
     }
 
-    currentChildQueue = filteredQueue;
+    const uniqueQueue = withUniqueQueueKeys(filteredQueue);
+    currentChildQueue = uniqueQueue;
     trackPlaylistMap.clear();
     if (sourcePlaylistId) {
-      for (const child of filteredQueue) trackPlaylistMap.set(child.id, sourcePlaylistId);
+      for (const child of uniqueQueue) trackPlaylistMap.set(child.id, sourcePlaylistId);
     }
-    playerStore.getState().setQueue(filteredQueue);
-    onManualQueueStart(track, filteredQueue);
+    playerStore.getState().setQueue(uniqueQueue);
+    onManualQueueStart(track, uniqueQueue);
 
     const formats: Record<string, EffectiveFormat> = {};
-    for (const child of filteredQueue) formats[child.id] = stampQueueFormat(child);
+    for (const child of uniqueQueue) formats[child.id] = stampQueueFormat(child);
     playerStore.getState().setQueueFormats(formats);
 
     // Translate the tapped track onto the filtered queue; fall back to 0.
-    let startIndex = filteredQueue.findIndex((c) => c.id === track.id);
+    const targetKey = ensureQueueKey(track);
+    let startIndex = targetKey
+      ? uniqueQueue.findIndex((c) => ensureQueueKey(c) === targetKey)
+      : -1;
+    if (startIndex === -1) startIndex = uniqueQueue.findIndex((c) => c.id === track.id);
     if (startIndex === -1) startIndex = 0;
 
     await tp.setQueue(rnTracks, startIndex);
     if (castController.isDlnaSessionActive()) {
-      const selectedChild = filteredQueue[startIndex] ?? null;
+      const selectedChild = uniqueQueue[startIndex] ?? null;
       playerStore.getState().setCurrentTrack(selectedChild, startIndex);
-      persistQueue(filteredQueue, startIndex, userQueueTrackIds);
+      persistQueue(uniqueQueue, startIndex, userQueueTrackIds, userQueueKeys);
       await castController.playTrackFromStore(startIndex, 0, false);
     } else {
       await tp.play();
-      persistQueue(filteredQueue, startIndex, userQueueTrackIds);
+      persistQueue(uniqueQueue, startIndex, userQueueTrackIds, userQueueKeys);
     }
 
     if (track.album || track.parent || sourcePlaylistId || track.id) {
@@ -965,6 +1059,7 @@ async function clearPlayerStateInternal(): Promise<void> {
   pendingResumePosition = null;
   currentChildQueue = [];
   userQueueTrackIds = [];
+  userQueueKeys = [];
   trackPlaylistMap.clear();
   resetAutoplaySession();
 
@@ -977,6 +1072,7 @@ async function clearPlayerStateInternal(): Promise<void> {
   const store = playerStore.getState();
   store.setCurrentTrack(null);
   store.setQueue([]);
+  store.clearUserQueueKeys?.();
   store.clearUserQueueTrackIds?.();
   store.setPlaybackState('idle');
   store.setProgress(0, 0, 0);
@@ -1026,9 +1122,10 @@ export async function rebuildQueueForServerSwitch(): Promise<void> {
       if (position > 0) await tp.seekTo(position);
       if (wasPlaying) await tp.play();
 
-      currentChildQueue = filteredQueue;
-      playerStore.getState().setQueue(filteredQueue);
-      persistQueue(filteredQueue, safeIdx, userQueueTrackIds);
+      const uniqueQueue = withUniqueQueueKeys(filteredQueue);
+      currentChildQueue = uniqueQueue;
+      playerStore.getState().setQueue(uniqueQueue);
+      persistQueue(uniqueQueue, safeIdx, userQueueTrackIds, userQueueKeys);
     } catch {
       // Best-effort — a failed switch leaves the prior queue loaded.
     }
@@ -1066,13 +1163,16 @@ export async function addToQueue(
     if (sourcePlaylistId) {
       for (const child of playable) trackPlaylistMap.set(child.id, sourcePlaylistId);
     }
-    for (const child of playable) {
-      playerStore.getState().addQueueFormat(child.id, stampQueueFormat(child));
-    }
+    batchMergeQueueFormats(playable);
 
-    currentChildQueue = [...currentChildQueue, ...playable];
+    currentChildQueue = withUniqueQueueKeys([...currentChildQueue, ...playable]);
     playerStore.getState().setQueue(currentChildQueue);
-    persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+    persistQueue(
+      currentChildQueue,
+      playerStore.getState().currentTrackIndex ?? 0,
+      userQueueTrackIds,
+      userQueueKeys,
+    );
     if (castController.isDlnaSessionActive()) {
       void castController.syncNextTrack();
     }
@@ -1089,9 +1189,10 @@ export function getUserQueueInsertIndex(): number {
   const currentIndex = playerStore.getState().currentTrackIndex ?? 0;
   if (currentChildQueue.length === 0) return 0;
 
+  const userSet = new Set(userQueueKeys);
   let lastIndex = currentIndex;
   for (let i = currentIndex + 1; i < currentChildQueue.length; i++) {
-    if (userQueueTrackIds.includes(currentChildQueue[i].id)) {
+    if (userSet.has(ensureQueueKey(currentChildQueue[i]))) {
       lastIndex = i;
     }
   }
@@ -1101,6 +1202,11 @@ export function getUserQueueInsertIndex(): number {
 /** Exposed for testing user-queue ordering. */
 export function getUserQueueTrackIds(): readonly string[] {
   return userQueueTrackIds;
+}
+
+/** Exposed for testing per-entry user-queue keys. */
+export function getUserQueueKeys(): readonly string[] {
+  return userQueueKeys;
 }
 
 /**
@@ -1121,7 +1227,8 @@ export async function addTracksToUserQueue(tracks: Child[]): Promise<void> {
     await waitForTrackMapsReady();
     await ensureCoverArtAuth();
 
-    const { rnTracks, filteredQueue: playable } = await buildPlayableQueue(tracks);
+    const incoming = tracks.map((t) => cloneWithFreshQueueKey(t));
+    const { rnTracks, filteredQueue: playable } = await buildPlayableQueue(incoming);
     if (rnTracks.length === 0) {
       playbackToastStore.getState().fail();
       return;
@@ -1132,20 +1239,22 @@ export async function addTracksToUserQueue(tracks: Child[]): Promise<void> {
     // addToQueue(tracks, insertBefore) inserts BEFORE the given index.
     await tp.addToQueue(rnTracks, insertBefore);
 
-    for (const child of playable) {
-      playerStore.getState().addQueueFormat(child.id, stampQueueFormat(child));
-    }
+    batchMergeQueueFormats(playable);
 
     const newQueue = [...currentChildQueue];
     newQueue.splice(insertBefore, 0, ...playable);
-    currentChildQueue = newQueue;
+    currentChildQueue = withUniqueQueueKeys(newQueue);
 
-    const newIds = playable.map((c) => c.id);
-    userQueueTrackIds = [...userQueueTrackIds.filter((id) => !newIds.includes(id)), ...newIds];
-    playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
+    const newKeys = playable.map((c) => ensureQueueKey(c));
+    syncUserQueueToStore([...userQueueKeys, ...newKeys], currentChildQueue);
 
     playerStore.getState().setQueue(currentChildQueue);
-    persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+    persistQueue(
+      currentChildQueue,
+      playerStore.getState().currentTrackIndex ?? 0,
+      userQueueTrackIds,
+      userQueueKeys,
+    );
     if (castController.isDlnaSessionActive()) {
       void castController.syncNextTrack();
     }
@@ -1180,7 +1289,8 @@ export async function playSongNext(song: Child): Promise<void> {
     await waitForTrackMapsReady();
     await ensureCoverArtAuth();
 
-    const { rnTracks, filteredQueue: playable } = await buildPlayableQueue([song]);
+    const incoming = cloneWithFreshQueueKey(song);
+    const { rnTracks, filteredQueue: playable } = await buildPlayableQueue([incoming]);
     if (rnTracks.length === 0) {
       playbackToastStore.getState().fail();
       return;
@@ -1192,21 +1302,24 @@ export async function playSongNext(song: Child): Promise<void> {
     // addToQueue(tracks, insertBefore) inserts BEFORE the given index.
     await tp.addToQueue(rnTracks, insertBefore);
 
-    for (const child of playable) {
-      playerStore.getState().addQueueFormat(child.id, stampQueueFormat(child));
-    }
+    batchMergeQueueFormats(playable);
 
     const newQueue = [...currentChildQueue];
     newQueue.splice(insertBefore, 0, ...playable);
-    currentChildQueue = newQueue;
+    currentChildQueue = withUniqueQueueKeys(newQueue);
 
     // Place at head of user queue
-    userQueueTrackIds = [song.id, ...userQueueTrackIds.filter((id) => id !== song.id)];
-    playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
+    const newKeys = playable.map((c) => ensureQueueKey(c));
+    syncUserQueueToStore([...newKeys, ...userQueueKeys], currentChildQueue);
 
     playerStore.getState().setQueue(currentChildQueue);
     // Re-read the index AFTER the awaited add in case an auto-advance moved it.
-    persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+    persistQueue(
+      currentChildQueue,
+      playerStore.getState().currentTrackIndex ?? 0,
+      userQueueTrackIds,
+      userQueueKeys,
+    );
     if (castController.isDlnaSessionActive()) {
       void castController.syncNextTrack();
     }
@@ -1221,19 +1334,19 @@ export async function clearUserQueue(): Promise<void> {
   return withQueueMutationLock(async () => {
     await awaitHydration();
     const currentIndex = playerStore.getState().currentTrackIndex ?? 0;
-    if (currentChildQueue.length === 0 || userQueueTrackIds.length === 0) return;
+    if (currentChildQueue.length === 0 || userQueueKeys.length === 0) return;
 
+    const userSet = new Set(userQueueKeys);
     const indicesToRemove: number[] = [];
     for (let i = currentChildQueue.length - 1; i > currentIndex; i--) {
-      if (userQueueTrackIds.includes(currentChildQueue[i].id)) {
+      if (userSet.has(ensureQueueKey(currentChildQueue[i]))) {
         indicesToRemove.push(i);
       }
     }
 
     if (indicesToRemove.length === 0) {
-      userQueueTrackIds = [];
-      playerStore.getState().clearUserQueueTrackIds?.();
-      persistQueue(currentChildQueue, currentIndex, userQueueTrackIds);
+      syncUserQueueToStore([], currentChildQueue);
+      persistQueue(currentChildQueue, currentIndex, userQueueTrackIds, userQueueKeys);
       return;
     }
 
@@ -1241,8 +1354,7 @@ export async function clearUserQueue(): Promise<void> {
 
     const removedSet = new Set(indicesToRemove);
     currentChildQueue = currentChildQueue.filter((_, i) => !removedSet.has(i));
-    userQueueTrackIds = [];
-    playerStore.getState().clearUserQueueTrackIds?.();
+    syncUserQueueToStore([], currentChildQueue);
     playerStore.getState().setQueue(currentChildQueue);
 
     const resolvedIndex = castController.isDlnaSessionActive()
@@ -1252,7 +1364,12 @@ export async function clearUserQueue(): Promise<void> {
       playerStore.getState().currentTrack,
       resolvedIndex >= 0 ? resolvedIndex : currentIndex,
     );
-    persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+    persistQueue(
+      currentChildQueue,
+      playerStore.getState().currentTrackIndex ?? 0,
+      userQueueTrackIds,
+      userQueueKeys,
+    );
     if (castController.isDlnaSessionActive()) {
       void castController.syncNextTrack();
     }
@@ -1275,14 +1392,19 @@ export async function removeFromQueue(index: number): Promise<void> {
     }
 
     const removedChild = currentChildQueue[index];
-    if (removedChild) {
-      userQueueTrackIds = userQueueTrackIds.filter((id) => id !== removedChild.id);
-      playerStore.getState().removeUserQueueTrackIds?.([removedChild.id]);
-    }
+    const removedKey = removedChild ? ensureQueueKey(removedChild) : '';
     await tp.removeFromQueue([index]);
 
-    trackPlaylistMap.delete(removedChild.id);
     currentChildQueue = currentChildQueue.filter((_, i) => i !== index);
+    if (removedChild && !currentChildQueue.some((c) => c.id === removedChild.id)) {
+      trackPlaylistMap.delete(removedChild.id);
+    }
+    if (removedKey && userQueueKeys.includes(removedKey)) {
+      syncUserQueueToStore(
+        userQueueKeys.filter((k) => k !== removedKey),
+        currentChildQueue,
+      );
+    }
     playerStore.getState().setQueue(currentChildQueue);
 
     // Re-sync the active index from native (recomputed on removal), or from store when casting DLNA.
@@ -1298,7 +1420,7 @@ export async function removeFromQueue(index: number): Promise<void> {
           ? currentChildQueue[nextIdx] ?? null
           : playerStore.getState().currentTrack;
       playerStore.getState().setCurrentTrack(activeTrack, nextIdx);
-      persistQueue(currentChildQueue, nextIdx, userQueueTrackIds);
+      persistQueue(currentChildQueue, nextIdx, userQueueTrackIds, userQueueKeys);
       if (index === activeBeforeRemoval) {
         await castController.playTrackFromStore(nextIdx, 0, false);
       } else {
@@ -1310,7 +1432,12 @@ export async function removeFromQueue(index: number): Promise<void> {
         playerStore.getState().currentTrack,
         nativeIndex >= 0 ? nativeIndex : null,
       );
-      persistQueue(currentChildQueue, playerStore.getState().currentTrackIndex ?? 0, userQueueTrackIds);
+      persistQueue(
+        currentChildQueue,
+        playerStore.getState().currentTrackIndex ?? 0,
+        userQueueTrackIds,
+        userQueueKeys,
+      );
     }
   });
 }
@@ -1326,18 +1453,19 @@ export async function moveQueueItemToUserQueue(fromIndex: number): Promise<void>
     if (currentChildQueue.length <= 1) return;
 
     const child = currentChildQueue[fromIndex];
-    if (userQueueTrackIds.includes(child.id)) return;
+    const childKey = ensureQueueKey(child);
+    if (userQueueKeys.includes(childKey)) return;
 
     const targetPosition = getUserQueueInsertIndex();
 
     // If already at target position (e.g. first item of nextUp), simply promote to user queue
     if (fromIndex === targetPosition) {
-      userQueueTrackIds = [...userQueueTrackIds, child.id];
-      playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
+      syncUserQueueToStore([...userQueueKeys, childKey], currentChildQueue);
       persistQueue(
         currentChildQueue,
         playerStore.getState().currentTrackIndex ?? 0,
         userQueueTrackIds,
+        userQueueKeys,
       );
       return;
     }
@@ -1351,9 +1479,8 @@ export async function moveQueueItemToUserQueue(fromIndex: number): Promise<void>
     );
     newQueue.splice(newInsertBefore, 0, moved);
     currentChildQueue = newQueue;
-    userQueueTrackIds = [...userQueueTrackIds, child.id];
+    syncUserQueueToStore([...userQueueKeys, childKey], currentChildQueue);
     playerStore.getState().setQueue(currentChildQueue);
-    playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
 
     // Sync with native player in background
     await tp.removeFromQueue([fromIndex]);
@@ -1362,15 +1489,18 @@ export async function moveQueueItemToUserQueue(fromIndex: number): Promise<void>
     const { rnTracks, filteredQueue: playable } = await buildPlayableQueue([child]);
     if (rnTracks.length > 0) {
       await tp.addToQueue(rnTracks, newInsertBefore);
-      for (const c of playable) {
-        playerStore.getState().addQueueFormat(c.id, stampQueueFormat(c));
-      }
+      batchMergeQueueFormats(playable);
     }
 
     const finalIndex = castController.isDlnaSessionActive()
       ? (playerStore.getState().currentTrackIndex ?? 0)
       : tp.getCurrentTrackIndex();
-    persistQueue(currentChildQueue, finalIndex >= 0 ? finalIndex : 0, userQueueTrackIds);
+    persistQueue(
+      currentChildQueue,
+      finalIndex >= 0 ? finalIndex : 0,
+      userQueueTrackIds,
+      userQueueKeys,
+    );
     if (castController.isDlnaSessionActive()) {
       void castController.syncNextTrack();
     }
@@ -1390,7 +1520,7 @@ export async function moveQueueItemToPlayNext(fromIndex: number): Promise<void> 
 export async function reorderQueue(
   fromIndex: number,
   toIndex: number,
-  explicitUserQueueTrackIds?: string[],
+  explicitUserQueueKeysOrIds?: string[],
 ): Promise<void> {
   const currentIndex = playerStore.getState().currentTrackIndex ?? 0;
   const minValidIndex = Math.min(currentIndex + 1, currentChildQueue.length);
@@ -1402,18 +1532,21 @@ export async function reorderQueue(
   const clampedTo = Math.max(minValidIndex, Math.min(toIndex, currentChildQueue.length - 1));
   const isIndexSame = fromIndex === clampedTo;
 
-  if (isIndexSame && !explicitUserQueueTrackIds) {
+  if (isIndexSame && !explicitUserQueueKeysOrIds) {
     return;
   }
 
   const child = currentChildQueue[fromIndex];
-  const wasInUserQueue = userQueueTrackIds.includes(child.id);
+  const childKey = ensureQueueKey(child);
+  const prevUserSet = new Set(userQueueKeys);
+  const wasInUserQueue = prevUserSet.has(childKey);
 
-  // User queue tracks in the upcoming section before reordering
-  const userQueueBefore = userQueueTrackIds.filter((id) =>
-    currentChildQueue.slice(minValidIndex).some((t) => t.id === id),
-  );
-  const userQueueCount = userQueueBefore.length;
+  let userQueueCount = 0;
+  for (let i = minValidIndex; i < currentChildQueue.length; i++) {
+    if (prevUserSet.has(ensureQueueKey(currentChildQueue[i]))) {
+      userQueueCount++;
+    }
+  }
 
   if (!isIndexSame) {
     const newQueue = [...currentChildQueue];
@@ -1422,28 +1555,35 @@ export async function reorderQueue(
     currentChildQueue = newQueue;
   }
 
-  if (explicitUserQueueTrackIds != null) {
-    userQueueTrackIds = explicitUserQueueTrackIds;
-  } else if (userQueueCount > 0) {
-    const userQueueEndIndex = minValidIndex + userQueueCount - 1;
-    if (!wasInUserQueue && clampedTo <= userQueueEndIndex + 1) {
-      // Promoted to user queue
-      userQueueTrackIds = [...userQueueTrackIds, child.id];
-    } else if (wasInUserQueue && clampedTo > userQueueEndIndex) {
-      // Demoted from user queue
-      userQueueTrackIds = userQueueTrackIds.filter((id) => id !== child.id);
+  let nextKeys: string[];
+  if (explicitUserQueueKeysOrIds != null) {
+    const explicitSet = new Set(explicitUserQueueKeysOrIds);
+    const upcoming = currentChildQueue.slice(minValidIndex);
+    const matchesByKey = upcoming.some((t) => explicitSet.has(ensureQueueKey(t)));
+    nextKeys = upcoming
+      .filter((t) => (matchesByKey ? explicitSet.has(ensureQueueKey(t)) : explicitSet.has(t.id)))
+      .map((t) => ensureQueueKey(t));
+  } else {
+    let candidateSet = prevUserSet;
+    if (userQueueCount > 0) {
+      const userQueueEndIndex = minValidIndex + userQueueCount - 1;
+      if (!wasInUserQueue && clampedTo <= userQueueEndIndex + 1) {
+        candidateSet = new Set([...userQueueKeys, childKey]);
+      } else if (wasInUserQueue && clampedTo > userQueueEndIndex) {
+        candidateSet = new Set(userQueueKeys.filter((k) => k !== childKey));
+      }
+    }
+    nextKeys = [];
+    for (let i = minValidIndex; i < currentChildQueue.length; i++) {
+      const k = ensureQueueKey(currentChildQueue[i]);
+      if (candidateSet.has(k)) {
+        nextKeys.push(k);
+      }
     }
   }
 
-  // Keep userQueueTrackIds strictly in the relative order of the updated upcoming queue
-  const userSet = new Set(userQueueTrackIds);
-  userQueueTrackIds = currentChildQueue
-    .slice(minValidIndex)
-    .filter((t) => userSet.has(t.id))
-    .map((t) => t.id);
-
   // Synchronous optimistic update so UI re-renders in the same tick as onReorder
-  playerStore.getState().setUserQueueTrackIds?.(userQueueTrackIds);
+  syncUserQueueToStore(nextKeys, currentChildQueue);
   playerStore.getState().setQueue([...currentChildQueue]);
 
   return withQueueMutationLock(async () => {
@@ -1467,7 +1607,12 @@ export async function reorderQueue(
       playerStore.getState().currentTrack,
       activeIndex >= 0 ? activeIndex : null,
     );
-    persistQueue(currentChildQueue, activeIndex >= 0 ? activeIndex : 0, userQueueTrackIds);
+    persistQueue(
+      currentChildQueue,
+      activeIndex >= 0 ? activeIndex : 0,
+      userQueueTrackIds,
+      userQueueKeys,
+    );
     if (castController.isDlnaSessionActive()) {
       void castController.syncNextTrack();
     }
@@ -1507,18 +1652,25 @@ export async function removeNonDownloadedTracks(): Promise<void> {
 
     const removedSet = new Set(batchIndices);
     const removedIds = new Set<string>();
+    const remainingKeys = new Set<string>();
     currentChildQueue = currentChildQueue.filter((child, i) => {
       if (removedSet.has(i)) {
         removedIds.add(child.id);
-        trackPlaylistMap.delete(child.id);
         return false;
       }
+      remainingKeys.add(ensureQueueKey(child));
       return true;
     });
+    const remainingIds = new Set(currentChildQueue.map((c) => c.id));
+    for (const id of removedIds) {
+      if (!remainingIds.has(id)) trackPlaylistMap.delete(id);
+    }
 
-    if (removedIds.size > 0 && userQueueTrackIds.length > 0) {
-      userQueueTrackIds = userQueueTrackIds.filter((id) => !removedIds.has(id));
-      playerStore.getState().removeUserQueueTrackIds?.([...removedIds]);
+    if (userQueueKeys.length > 0) {
+      syncUserQueueToStore(
+        userQueueKeys.filter((k) => remainingKeys.has(k)),
+        currentChildQueue,
+      );
     }
 
     playerStore.getState().setQueue(currentChildQueue);
@@ -1531,6 +1683,7 @@ export async function removeNonDownloadedTracks(): Promise<void> {
       currentChildQueue,
       playerStore.getState().currentTrackIndex ?? 0,
       userQueueTrackIds,
+      userQueueKeys,
     );
   });
 }
@@ -1583,9 +1736,10 @@ export function applyLocalPlayToPlayer(songId: string, now: string): void {
     if (t.id === songId) {
       currentChildQueue[i] = {
         ...t,
+        _queueKey: ensureQueueKey(t),
         playCount: (t.playCount ?? 0) + 1,
         played: now,
-      };
+      } as Child;
     }
   }
 
@@ -1625,9 +1779,9 @@ castController.registerLocalPlayerBridge({
     }
     playerStore.getState().setCurrentTrack(incomingChild, incomingIndex);
     sendNowPlaying(incomingChild, trackPlaylistMap.get(incomingChild.id));
-    if (userQueueTrackIds.includes(incomingChild.id)) {
-      userQueueTrackIds = userQueueTrackIds.filter((id) => id !== incomingChild.id);
-      playerStore.getState().removeUserQueueTrackIds?.([incomingChild.id]);
+    const entryKey = ensureQueueKey(incomingChild);
+    if (entryKey && userQueueKeys.includes(entryKey)) {
+      syncUserQueueToStore(userQueueKeys.filter((k) => k !== entryKey));
     }
     persistCurrentIndex(incomingIndex);
     activeScrobbleIndex = incomingIndex;
@@ -1656,17 +1810,21 @@ export async function shuffleQueue(): Promise<void> {
         return;
       }
 
-      currentChildQueue = filteredQueue;
-      playerStore.getState().setQueue(filteredQueue);
+      const uniqueQueue = withUniqueQueueKeys(filteredQueue);
+      currentChildQueue = uniqueQueue;
+      const upcomingKeys = new Set(uniqueQueue.slice(1).map((c) => ensureQueueKey(c)));
+      const nextUserKeys = userQueueKeys.filter((k) => upcomingKeys.has(k));
+      syncUserQueueToStore(nextUserKeys, uniqueQueue);
+      playerStore.getState().setQueue(uniqueQueue);
 
       await tp.setQueue(rnTracks, 0);
       if (castController.isDlnaSessionActive()) {
-        playerStore.getState().setCurrentTrack(filteredQueue[0] ?? null, 0);
-        persistQueue(filteredQueue, 0, userQueueTrackIds);
+        playerStore.getState().setCurrentTrack(uniqueQueue[0] ?? null, 0);
+        persistQueue(uniqueQueue, 0, userQueueTrackIds, userQueueKeys);
         await castController.playTrackFromStore(0, 0, false);
       } else {
         await tp.play();
-        persistQueue(filteredQueue, 0, userQueueTrackIds);
+        persistQueue(uniqueQueue, 0, userQueueTrackIds, userQueueKeys);
       }
     } catch {
       playbackToastStore.getState().fail();
