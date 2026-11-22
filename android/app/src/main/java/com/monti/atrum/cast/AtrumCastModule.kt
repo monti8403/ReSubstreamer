@@ -7,6 +7,7 @@ import android.media.MediaRoute2Info
 import android.media.MediaRouter2
 import android.media.RouteDiscoveryPreference
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -327,36 +328,48 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
     }
 
     private data class WifiBindTarget(
+        val network: Network?,
         val networkInterface: NetworkInterface?,
         val ipv4Address: Inet4Address?,
     )
+
+    private fun extractBindTarget(cm: ConnectivityManager, network: Network): WifiBindTarget? {
+        val caps = cm.getNetworkCapabilities(network) ?: return null
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+            return null
+        }
+        if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+            !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+        ) {
+            return null
+        }
+        val lp = cm.getLinkProperties(network) ?: return null
+        val ipv4 = lp.linkAddresses
+            .map { it.address }
+            .firstOrNull { it is Inet4Address && !it.isLoopbackAddress } as? Inet4Address
+        val ifName = lp.interfaceName
+        val netIf = when {
+            !ifName.isNullOrBlank() -> NetworkInterface.getByName(ifName)
+            ipv4 != null -> NetworkInterface.getByInetAddress(ipv4)
+            else -> null
+        }
+        if (ipv4 != null || netIf != null) {
+            return WifiBindTarget(network, netIf, ipv4)
+        }
+        return null
+    }
 
     private fun resolveWifiBindTarget(): WifiBindTarget {
         try {
             val cm = reactApplicationContext.applicationContext
                 .getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             if (cm != null) {
+                cm.activeNetwork?.let { active ->
+                    extractBindTarget(cm, active)?.let { return it }
+                }
                 val networks = cm.allNetworks
                 for (network in networks) {
-                    val caps = cm.getNetworkCapabilities(network) ?: continue
-                    if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
-                        !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-                    ) {
-                        continue
-                    }
-                    val lp = cm.getLinkProperties(network) ?: continue
-                    val ipv4 = lp.linkAddresses
-                        .map { it.address }
-                        .firstOrNull { it is Inet4Address && !it.isLoopbackAddress } as? Inet4Address
-                    val ifName = lp.interfaceName
-                    val netIf = when {
-                        !ifName.isNullOrBlank() -> NetworkInterface.getByName(ifName)
-                        ipv4 != null -> NetworkInterface.getByInetAddress(ipv4)
-                        else -> null
-                    }
-                    if (ipv4 != null || netIf != null) {
-                        return WifiBindTarget(netIf, ipv4)
-                    }
+                    extractBindTarget(cm, network)?.let { return it }
                 }
             }
         } catch (t: Throwable) {
@@ -381,7 +394,7 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
                     .firstOrNull { it is Inet4Address && !it.isLoopbackAddress } as? Inet4Address
                     ?: continue
                 if (name.startsWith("wlan") || name.startsWith("wifi") || name.startsWith("eth")) {
-                    return WifiBindTarget(netIf, ipv4)
+                    return WifiBindTarget(null, netIf, ipv4)
                 }
                 if (fallbackNetIf == null) {
                     fallbackNetIf = netIf
@@ -389,12 +402,12 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
                 }
             }
             if (fallbackNetIf != null) {
-                return WifiBindTarget(fallbackNetIf, fallbackAddr)
+                return WifiBindTarget(null, fallbackNetIf, fallbackAddr)
             }
         } catch (_: Throwable) {
             // ignore
         }
-        return WifiBindTarget(null, null)
+        return WifiBindTarget(null, null, null)
     }
 
     private fun runSsdpScan(generation: Long, timeoutMs: Int) {
@@ -416,17 +429,24 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
                 timeToLive = 4
                 soTimeout = 350
             }
+            bindTarget.network?.let { network ->
+                try {
+                    network.bindSocket(socket)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Network.bindSocket failed: ${t.message}")
+                }
+            }
             bindTarget.networkInterface?.let { netIf ->
                 try {
                     socket.networkInterface = netIf
                 } catch (t: Throwable) {
-                    Log.d(TAG, "Could not set multicast networkInterface ${netIf.name}: ${t.message}")
+                    Log.w(TAG, "Could not set multicast networkInterface ${netIf.name}: ${t.message}")
                 }
             }
 
-            Log.d(
+            Log.i(
                 TAG,
-                "SSDP scan started (iface=${bindTarget.networkInterface?.name ?: "default"}, ip=${bindTarget.ipv4Address?.hostAddress ?: "0.0.0.0"})",
+                "SSDP scan started (iface=${bindTarget.networkInterface?.name ?: "default"}, ip=${bindTarget.ipv4Address?.hostAddress ?: "0.0.0.0"}, boundNet=${bindTarget.network != null})",
             )
 
             synchronized(lockMonitor) {
@@ -470,7 +490,7 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
                     val headers = parseSsdpHeaders(raw)
                     val location = headers["location"]?.trim()
                     if (!location.isNullOrEmpty() && seenLocations.add(location)) {
-                        Log.d(TAG, "SSDP location found: $location (st=${headers["st"]})")
+                        Log.i(TAG, "SSDP location found: $location (st=${headers["st"]})")
                         emitDeviceFound(
                             location = location,
                             usn = headers["usn"] ?: "",
@@ -514,7 +534,7 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
                     shouldEmitFinish = true
                 }
             }
-            Log.d(TAG, "SSDP scan finished ($finishReason): packets=$packetsReceived locations=${seenLocations.size}")
+            Log.i(TAG, "SSDP scan finished ($finishReason): packets=$packetsReceived locations=${seenLocations.size}")
             if (shouldEmitFinish) {
                 emitScanFinished(finishReason, packetsReceived, seenLocations.size)
             }

@@ -23,6 +23,12 @@ jest.mock('../../services/cast/castController', () => ({
   castController: {
     startDiscovery: jest.fn().mockResolvedValue(undefined),
     stopDiscovery: jest.fn().mockResolvedValue(undefined),
+    addManualDlnaDevice: jest.fn().mockResolvedValue({
+      id: 'dlna:manual-kodi',
+      name: 'Kodi',
+      protocol: 'dlna',
+      locationUrl: 'http://192.168.0.56:1225/',
+    }),
     connectToDevice: jest.fn().mockResolvedValue(undefined),
     disconnect: jest.fn().mockResolvedValue(undefined),
     setVolume: jest.fn().mockResolvedValue(undefined),
@@ -157,12 +163,36 @@ describe('DevicePickerSheet', () => {
 
     expect(screen.getAllByText('Bluetooth audio').length).toBeGreaterThanOrEqual(1);
 
+    fireEvent(screen.getByTestId('local-volume-slider'), 'valueChange', 55);
+    expect(setSystemMediaVolume).toHaveBeenCalledWith(55);
+
     fireEvent(screen.getByTestId('local-volume-slider'), 'slidingComplete', 65);
     expect(setSystemMediaVolume).toHaveBeenCalledWith(65);
 
     fireEvent.press(screen.getByTestId('system-route-speaker'));
     await waitFor(() => {
       expect(selectSystemAudioRoute).toHaveBeenCalledWith('speaker');
+    });
+
+    await flush();
+  });
+
+  it('hides manual UPnP IP box by default and connects via + toggle', async () => {
+    (getSystemAudioState as jest.Mock).mockResolvedValue(null);
+
+    act(() => useRoutePickerStore.getState().open());
+    render(<DevicePickerSheet />);
+
+    expect(screen.queryByTestId('manual-dlna-box')).toBeNull();
+
+    fireEvent.press(screen.getByTestId('device-picker-toggle-manual'));
+    expect(screen.getByTestId('manual-dlna-box')).toBeTruthy();
+
+    fireEvent.changeText(screen.getByTestId('manual-dlna-input'), '192.168.0.56:1225');
+    fireEvent.press(screen.getByTestId('manual-dlna-submit'));
+
+    await waitFor(() => {
+      expect(castController.addManualDlnaDevice).toHaveBeenCalledWith('192.168.0.56:1225');
     });
 
     await flush();

@@ -191,6 +191,15 @@ export class CastController {
     await Promise.allSettled(stopTasks);
   }
 
+  async addManualDlnaDevice(rawUrl: string): Promise<CastDevice> {
+    castStore.getState().setLastError(null);
+    const device = await this.dlnaAdapter.probeManualDevice(rawUrl);
+    castStore.getState().setLastManualUrl(device.locationUrl);
+    castStore.getState().upsertDiscoveredDevice(device);
+    await this.connectToDevice(device);
+    return device;
+  }
+
   async connectToDevice(
     device: CastDevice,
     options?: { password?: string },

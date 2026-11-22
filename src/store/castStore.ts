@@ -14,6 +14,7 @@ export interface CastState {
   isScanning: boolean;
   playbackState: CastPlaybackState;
   lastError: string | null;
+  lastManualUrl: string;
   dlnaFormatPreference: DlnaStreamFormatPreference;
 
   setConnectedDevice: (device: CastDevice | null) => void;
@@ -25,6 +26,7 @@ export interface CastState {
   setPlaybackState: (state: CastPlaybackState) => void;
   setVolume: (volume: number) => void;
   setLastError: (error: string | null) => void;
+  setLastManualUrl: (url: string) => void;
   setDlnaFormatPreference: (pref: DlnaStreamFormatPreference) => void;
   reset: () => void;
 }
@@ -51,6 +53,7 @@ export const castStore = create<CastState>()((set) => ({
   isScanning: false,
   playbackState: { ...INITIAL_PLAYBACK_STATE },
   lastError: null,
+  lastManualUrl: '',
   dlnaFormatPreference: readInitialDlnaPreference(),
 
   setConnectedDevice: (connectedDevice) =>
@@ -97,6 +100,8 @@ export const castStore = create<CastState>()((set) => ({
 
   setLastError: (lastError) => set({ lastError }),
 
+  setLastManualUrl: (lastManualUrl) => set({ lastManualUrl }),
+
   setDlnaFormatPreference: (dlnaFormatPreference) => {
     try {
       playbackSettingsStore.getState?.()?.setDlnaFormatPreference?.(dlnaFormatPreference);
@@ -114,6 +119,7 @@ export const castStore = create<CastState>()((set) => ({
       isScanning: false,
       playbackState: { ...INITIAL_PLAYBACK_STATE },
       lastError: null,
+      lastManualUrl: '',
       dlnaFormatPreference: readInitialDlnaPreference(),
     }),
 }));

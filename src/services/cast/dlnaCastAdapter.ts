@@ -23,6 +23,22 @@ const SOAP_TIMEOUT_MS = 4000;
 const POLL_SOAP_TIMEOUT_MS = 2500;
 const DISCONNECT_STOP_TIMEOUT_MS = 1500;
 
+export function normalizeManualUpnpUrl(rawInput: string): string {
+  const trimmed = rawInput.trim();
+  if (!trimmed) {
+    throw new Error('Enter a UPnP/DLNA IP:port or URL');
+  }
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  const match = /^(https?:\/\/)([^/?#]+)(\/[^#]*)?$/i.exec(withScheme);
+  if (!match || !match[2] || /\s/.test(withScheme)) {
+    throw new Error(`Invalid UPnP/DLNA address: "${trimmed}"`);
+  }
+  const scheme = match[1].toLowerCase();
+  const authority = match[2];
+  const path = match[3] && match[3].length > 0 ? match[3] : '/';
+  return `${scheme}${authority}${path}`;
+}
+
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
@@ -60,6 +76,24 @@ export class DlnaCastAdapter implements CastAdapter {
 
   getConnectedDevice(): CastDevice | null {
     return this.connectedDevice;
+  }
+
+  async probeManualDevice(rawUrl: string): Promise<CastDevice> {
+    const normalizedUrl = normalizeManualUpnpUrl(rawUrl);
+    const response = await fetchWithTimeout(
+      normalizedUrl,
+      { method: 'GET' },
+      DESCRIPTION_FETCH_TIMEOUT_MS,
+    );
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} from ${normalizedUrl}`);
+    }
+    const xml = await response.text();
+    const device = parseDeviceDescriptionXml(xml, normalizedUrl);
+    if (!device || !device.avTransportControlUrl) {
+      throw new Error(`No UPnP/DLNA MediaRenderer found at ${normalizedUrl}`);
+    }
+    return device;
   }
 
   async startDiscovery(onDeviceFound: (device: CastDevice) => void): Promise<void> {

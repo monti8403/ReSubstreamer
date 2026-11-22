@@ -40,6 +40,8 @@ const OLED_TEXT_SECONDARY = '#8E95A5';
 const OLED_ERROR = '#FF453A';
 
 const CLOSE_HOLD_MS = 450;
+const LIVE_LOCAL_VOLUME_THROTTLE_MS = 45;
+const LIVE_REMOTE_VOLUME_THROTTLE_MS = 150;
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 
@@ -185,6 +187,7 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
   const isScanning = castStore((s) => s.isScanning);
   const playbackState = castStore((s) => s.playbackState);
   const lastError = castStore((s) => s.lastError);
+  const lastManualUrl = castStore((s) => s.lastManualUrl);
 
   const audioRoute = useAudioRoute();
 
@@ -194,12 +197,17 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
   const [systemState, setSystemState] = useState<SystemAudioState | null>(null);
   const [systemVolume, setSystemVolume] = useState<number>(50);
   const [selectingRouteId, setSelectingRouteId] = useState<string | null>(null);
+  const [isManualOpen, setIsManualOpen] = useState(false);
+  const [manualInput, setManualInput] = useState('');
+  const [isConnectingManual, setIsConnectingManual] = useState(false);
   const [pinTargetDeviceId, setPinTargetDeviceId] = useState<string | null>(null);
   const [pinValue, setPinValue] = useState('');
 
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(true);
   const isDraggingSystemVolumeRef = useRef(false);
+  const lastLocalVolSentRef = useRef<{ at: number; val: number | null }>({ at: 0, val: null });
+  const lastRemoteVolSentRef = useRef<{ at: number; val: number | null }>({ at: 0, val: null });
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -290,31 +298,88 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
 
   const handleVolumeChange = useCallback((value: number) => {
     setIsDraggingVolume(true);
-    setSliderVolume(Math.round(value));
+    const rounded = Math.round(value);
+    setSliderVolume(rounded);
+    const now = Date.now();
+    const prev = lastRemoteVolSentRef.current;
+    if (prev.val !== rounded && now - prev.at >= LIVE_REMOTE_VOLUME_THROTTLE_MS) {
+      lastRemoteVolSentRef.current = { at: now, val: rounded };
+      void castController.setVolume(rounded);
+    }
   }, []);
 
   const handleVolumeCommit = useCallback((value: number) => {
     const rounded = Math.round(value);
     setSliderVolume(rounded);
     setIsDraggingVolume(false);
+    lastRemoteVolSentRef.current = { at: Date.now(), val: rounded };
     void castController.setVolume(rounded);
   }, []);
 
   const handleSystemVolumeChange = useCallback((value: number) => {
     isDraggingSystemVolumeRef.current = true;
-    setSystemVolume(Math.round(value));
+    const rounded = Math.round(value);
+    setSystemVolume(rounded);
+    const now = Date.now();
+    const prev = lastLocalVolSentRef.current;
+    if (prev.val !== rounded && now - prev.at >= LIVE_LOCAL_VOLUME_THROTTLE_MS) {
+      lastLocalVolSentRef.current = { at: now, val: rounded };
+      void setSystemMediaVolume(rounded);
+    }
   }, []);
 
   const handleSystemVolumeCommit = useCallback((value: number) => {
     const rounded = Math.round(value);
     setSystemVolume(rounded);
     isDraggingSystemVolumeRef.current = false;
+    lastLocalVolSentRef.current = { at: Date.now(), val: rounded };
     void setSystemMediaVolume(rounded).then((actual) => {
       if (isMountedRef.current && actual != null && !isDraggingSystemVolumeRef.current) {
         setSystemVolume(actual);
       }
     });
   }, []);
+
+  const openManualBox = useCallback(() => {
+    setLocalError(null);
+    if (!manualInput && lastManualUrl) {
+      setManualInput(lastManualUrl.replace(/^https?:\/\//i, '').replace(/\/$/, ''));
+    }
+    setIsManualOpen(true);
+  }, [lastManualUrl, manualInput]);
+
+  const handleToggleManual = useCallback(() => {
+    if (isManualOpen) {
+      setIsManualOpen(false);
+    } else {
+      openManualBox();
+    }
+  }, [isManualOpen, openManualBox]);
+
+  const handleConnectManual = useCallback(async () => {
+    const trimmed = manualInput.trim();
+    if (!trimmed) {
+      setLocalError(t('castManualInvalidUrl'));
+      return;
+    }
+    setLocalError(null);
+    setIsConnectingManual(true);
+    try {
+      await castController.addManualDlnaDevice(trimmed);
+      if (!isMountedRef.current) return;
+      setIsManualOpen(false);
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = setTimeout(onClose, CLOSE_HOLD_MS);
+    } catch (err: unknown) {
+      if (!isMountedRef.current) return;
+      const msg = err instanceof Error ? err.message : t('castManualInvalidUrl');
+      setLocalError(msg);
+    } finally {
+      if (isMountedRef.current) {
+        setIsConnectingManual(false);
+      }
+    }
+  }, [manualInput, onClose, t]);
 
   const handleSelectSystemRoute = useCallback(
     async (route: SystemAudioRoute) => {
@@ -585,10 +650,72 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
         {/* Discovered Network Devices */}
         <View style={styles.networkHeaderRow}>
           <Text style={styles.sectionLabel}>{t('castNetworkDevices')}</Text>
-          {isScanning && (
-            <Text style={styles.scanningText}>{t('castScanning')}</Text>
-          )}
+          <View style={styles.networkHeaderActions}>
+            {isScanning && (
+              <Text style={styles.scanningText}>{t('castScanning')}</Text>
+            )}
+            <Pressable
+              onPress={handleToggleManual}
+              hitSlop={8}
+              testID="device-picker-toggle-manual"
+              accessibilityRole="button"
+              accessibilityLabel={t('castManualToggle')}
+              style={({ pressed }) => [
+                styles.manualToggleButton,
+                isManualOpen && { borderColor: accent },
+                pressed && styles.pressed,
+              ]}
+            >
+              <MaterialCommunityIcons
+                name={isManualOpen ? 'close' : 'plus'}
+                size={15}
+                color={isManualOpen ? accent : OLED_TEXT_SECONDARY}
+              />
+            </Pressable>
+          </View>
         </View>
+
+        {isManualOpen && (
+          <View style={styles.card} testID="manual-dlna-box">
+            <Text style={styles.deviceSubtitle}>{t('castManualInputLabel')}</Text>
+            <View style={[styles.pinRow, styles.manualInputRow]}>
+              <TextInput
+                testID="manual-dlna-input"
+                value={manualInput}
+                onChangeText={setManualInput}
+                placeholder={t('castManualInputPlaceholder')}
+                placeholderTextColor={OLED_TEXT_SECONDARY}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                returnKeyType="done"
+                onSubmitEditing={() => void handleConnectManual()}
+                style={[styles.pinInput, { borderColor: OLED_BORDER }]}
+              />
+              <Pressable
+                testID="manual-dlna-submit"
+                onPress={() => void handleConnectManual()}
+                disabled={isConnectingManual || manualInput.trim().length === 0}
+                style={({ pressed }) => [
+                  styles.pinSubmit,
+                  {
+                    backgroundColor:
+                      manualInput.trim().length > 0 && !isConnectingManual
+                        ? accent
+                        : OLED_BORDER,
+                  },
+                  pressed && styles.pressed,
+                ]}
+              >
+                {isConnectingManual ? (
+                  <ActivityIndicator size="small" color={OLED_BG} />
+                ) : (
+                  <Text style={styles.pinSubmitText}>{t('castConnectAction')}</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        )}
 
         {availableDevices.length === 0 ? (
           <View style={styles.emptyCard}>
@@ -606,6 +733,22 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
                 />
                 <Text style={styles.emptyTitle}>{t('castNoDevicesFound')}</Text>
                 <Text style={styles.emptyHint}>{t('castNoDevicesHint')}</Text>
+                {!isManualOpen && (
+                  <Pressable
+                    onPress={openManualBox}
+                    testID="empty-manual-link"
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    style={({ pressed }) => [
+                      styles.emptyManualLink,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <Text style={[styles.emptyManualLinkText, { color: accent }]}>
+                      {t('castManualOpenLink')}
+                    </Text>
+                  </Pressable>
+                )}
               </>
             )}
           </View>
@@ -747,6 +890,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: 6,
+  },
+  networkHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  manualToggleButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    backgroundColor: OLED_SURFACE,
+    borderWidth: 1,
+    borderColor: OLED_BORDER,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  manualInputRow: {
+    marginTop: 8,
+    paddingTop: 0,
+    borderTopWidth: 0,
+  },
+  emptyManualLink: {
+    marginTop: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  emptyManualLinkText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   scanningText: {
     color: OLED_TEXT_SECONDARY,
