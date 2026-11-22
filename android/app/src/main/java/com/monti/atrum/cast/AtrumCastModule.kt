@@ -2,6 +2,7 @@ package com.monti.atrum.cast
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.media.MediaRoute2Info
 import android.media.MediaRouter2
@@ -16,6 +17,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -48,6 +50,7 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
         private const val EVENT_DEVICE_FOUND = "AtrumSsdpDeviceFound"
         private const val EVENT_SCAN_FINISHED = "AtrumSsdpScanFinished"
         private const val EVENT_SYSTEM_ROUTES_CHANGED = "AtrumSystemRoutesChanged"
+        private const val PERMISSION_ACCESS_LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK"
         private const val MIN_TIMEOUT_MS = 1000
         private const val MAX_TIMEOUT_MS = 15000
     }
@@ -94,6 +97,27 @@ class AtrumCastModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun removeListeners(count: Int) {
         // Required for React Native NativeEventEmitter compatibility.
+    }
+
+    @ReactMethod
+    fun checkLocalNetworkPermission(promise: Promise) {
+        try {
+            val pm = reactApplicationContext.packageManager
+            try {
+                pm.getPermissionInfo(PERMISSION_ACCESS_LOCAL_NETWORK, 0)
+            } catch (_: PackageManager.NameNotFoundException) {
+                promise.resolve("not_required")
+                return
+            }
+            val granted = ContextCompat.checkSelfPermission(
+                reactApplicationContext,
+                PERMISSION_ACCESS_LOCAL_NETWORK,
+            ) == PackageManager.PERMISSION_GRANTED
+            promise.resolve(if (granted) "granted" else "denied")
+        } catch (t: Throwable) {
+            Log.w(TAG, "checkLocalNetworkPermission failed: ${t.message}")
+            promise.resolve("not_required")
+        }
     }
 
     @ReactMethod

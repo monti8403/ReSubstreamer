@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ActivityIndicator,
+  AppState,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -19,11 +21,14 @@ import { useRoutePickerStore } from './RoutePicker/useRoutePickerStore';
 import { useTheme } from '../hooks/useTheme';
 import { castController } from '../services/cast/castController';
 import {
+  checkLocalNetworkPermission,
   getSystemAudioState,
   openSystemOutputSwitcher,
+  requestLocalNetworkPermission,
   selectSystemAudioRoute,
   setSystemMediaVolume,
   subscribeSystemRoutesChanged,
+  type LocalNetworkPermissionStatus,
   type SystemAudioRoute,
   type SystemAudioState,
   type SystemRouteKind,
@@ -197,6 +202,8 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
   const [systemState, setSystemState] = useState<SystemAudioState | null>(null);
   const [systemVolume, setSystemVolume] = useState<number>(50);
   const [selectingRouteId, setSelectingRouteId] = useState<string | null>(null);
+  const [localNetworkPerm, setLocalNetworkPerm] =
+    useState<LocalNetworkPermissionStatus>('not_required');
   const [isManualOpen, setIsManualOpen] = useState(false);
   const [manualInput, setManualInput] = useState('');
   const [isConnectingManual, setIsConnectingManual] = useState(false);
@@ -225,6 +232,17 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
     }
   }, []);
 
+  const ensurePermissionAndDiscover = useCallback(async () => {
+    const status = await requestLocalNetworkPermission();
+    if (!isMountedRef.current) return false;
+    setLocalNetworkPerm(status);
+    if (status === 'granted' || status === 'not_required') {
+      void castController.startDiscovery().catch(() => {});
+      return true;
+    }
+    return false;
+  }, []);
+
   useEffect(() => {
     if (!isDraggingVolume) {
       setSliderVolume(playbackState.volume);
@@ -232,7 +250,7 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
   }, [playbackState.volume, isDraggingVolume]);
 
   useEffect(() => {
-    void castController.startDiscovery().catch(() => {});
+    void ensurePermissionAndDiscover();
     void refreshSystemState();
     const unsubscribeRoutes = subscribeSystemRoutesChanged(() => {
       void refreshSystemState();
@@ -242,7 +260,25 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
       if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
       void castController.stopDiscovery();
     };
-  }, [refreshSystemState]);
+  }, [ensurePermissionAndDiscover, refreshSystemState]);
+
+  useEffect(() => {
+    if (localNetworkPerm !== 'denied' && localNetworkPerm !== 'never_ask_again') {
+      return;
+    }
+    if (typeof AppState?.addEventListener !== 'function') return;
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState !== 'active') return;
+      void checkLocalNetworkPermission().then((status) => {
+        if (!isMountedRef.current) return;
+        setLocalNetworkPerm(status);
+        if (status === 'granted' || status === 'not_required') {
+          void castController.startDiscovery().catch(() => {});
+        }
+      });
+    });
+    return () => sub.remove();
+  }, [localNetworkPerm]);
 
   useEffect(() => {
     void refreshSystemState();
@@ -251,8 +287,17 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
   const handleRefresh = useCallback(() => {
     setLocalError(null);
     void refreshSystemState();
-    void castController.startDiscovery().catch(() => {});
-  }, [refreshSystemState]);
+    void ensurePermissionAndDiscover();
+  }, [ensurePermissionAndDiscover, refreshSystemState]);
+
+  const handleRequestPermissionAction = useCallback(() => {
+    setLocalError(null);
+    if (localNetworkPerm === 'never_ask_again') {
+      void Linking.openSettings();
+      return;
+    }
+    void ensurePermissionAndDiscover();
+  }, [ensurePermissionAndDiscover, localNetworkPerm]);
 
   const handleOpenSystemSwitcher = useCallback(() => {
     setLocalError(null);
@@ -365,6 +410,12 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
     setLocalError(null);
     setIsConnectingManual(true);
     try {
+      const status = await requestLocalNetworkPermission();
+      if (!isMountedRef.current) return;
+      setLocalNetworkPerm(status);
+      if (status !== 'granted' && status !== 'not_required') {
+        return;
+      }
       await castController.addManualDlnaDevice(trimmed);
       if (!isMountedRef.current) return;
       setIsManualOpen(false);
@@ -718,40 +769,73 @@ function DevicePickerContent({ onClose }: { onClose: () => void }) {
         )}
 
         {availableDevices.length === 0 ? (
-          <View style={styles.emptyCard}>
-            {isScanning ? (
-              <View style={styles.emptyScanningRow}>
-                <ActivityIndicator size="small" color={accent} />
-                <Text style={styles.emptyTitle}>{t('castScanning')}</Text>
-              </View>
-            ) : (
-              <>
-                <MaterialCommunityIcons
-                  name="cast-off"
-                  size={28}
-                  color={OLED_TEXT_SECONDARY}
-                />
-                <Text style={styles.emptyTitle}>{t('castNoDevicesFound')}</Text>
-                <Text style={styles.emptyHint}>{t('castNoDevicesHint')}</Text>
-                {!isManualOpen && (
-                  <Pressable
-                    onPress={openManualBox}
-                    testID="empty-manual-link"
-                    hitSlop={8}
-                    accessibilityRole="button"
-                    style={({ pressed }) => [
-                      styles.emptyManualLink,
-                      pressed && styles.pressed,
-                    ]}
-                  >
-                    <Text style={[styles.emptyManualLinkText, { color: accent }]}>
-                      {t('castManualOpenLink')}
-                    </Text>
-                  </Pressable>
-                )}
-              </>
-            )}
-          </View>
+          localNetworkPerm === 'denied' || localNetworkPerm === 'never_ask_again' ? (
+            <View style={styles.emptyCard} testID="local-network-permission-card">
+              <MaterialCommunityIcons
+                name="shield-lock-outline"
+                size={28}
+                color={accent}
+              />
+              <Text style={styles.emptyTitle}>
+                {t('castLocalNetworkPermissionTitle')}
+              </Text>
+              <Text style={styles.emptyHint}>
+                {t('castLocalNetworkPermissionHint')}
+              </Text>
+              <Pressable
+                onPress={handleRequestPermissionAction}
+                testID="local-network-permission-button"
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  styles.pinSubmit,
+                  styles.permissionButton,
+                  { backgroundColor: accent },
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.pinSubmitText}>
+                  {localNetworkPerm === 'never_ask_again'
+                    ? t('castLocalNetworkPermissionSettings')
+                    : t('castLocalNetworkPermissionGrant')}
+                </Text>
+              </Pressable>
+            </View>
+          ) : (
+            <View style={styles.emptyCard}>
+              {isScanning ? (
+                <View style={styles.emptyScanningRow}>
+                  <ActivityIndicator size="small" color={accent} />
+                  <Text style={styles.emptyTitle}>{t('castScanning')}</Text>
+                </View>
+              ) : (
+                <>
+                  <MaterialCommunityIcons
+                    name="cast-off"
+                    size={28}
+                    color={OLED_TEXT_SECONDARY}
+                  />
+                  <Text style={styles.emptyTitle}>{t('castNoDevicesFound')}</Text>
+                  <Text style={styles.emptyHint}>{t('castNoDevicesHint')}</Text>
+                  {!isManualOpen && (
+                    <Pressable
+                      onPress={openManualBox}
+                      testID="empty-manual-link"
+                      hitSlop={8}
+                      accessibilityRole="button"
+                      style={({ pressed }) => [
+                        styles.emptyManualLink,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Text style={[styles.emptyManualLinkText, { color: accent }]}>
+                        {t('castManualOpenLink')}
+                      </Text>
+                    </Pressable>
+                  )}
+                </>
+              )}
+            </View>
+          )
         ) : (
           <View style={styles.deviceList}>
             {availableDevices.map((device) => {
@@ -1091,6 +1175,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 14,
     paddingVertical: 9,
+  },
+  permissionButton: {
+    marginTop: 6,
   },
   pinSubmitText: {
     color: OLED_BG,

@@ -36,8 +36,10 @@ jest.mock('../../services/cast/castController', () => ({
 }));
 
 jest.mock('../../services/cast/nativeCastBridge', () => ({
+  checkLocalNetworkPermission: jest.fn().mockResolvedValue('not_required'),
   getSystemAudioState: jest.fn().mockResolvedValue(null),
   openSystemOutputSwitcher: jest.fn().mockResolvedValue('mediarouter2'),
+  requestLocalNetworkPermission: jest.fn().mockResolvedValue('not_required'),
   selectSystemAudioRoute: jest.fn().mockResolvedValue(true),
   setSystemMediaVolume: jest.fn().mockResolvedValue(50),
   subscribeSystemRoutesChanged: jest.fn().mockReturnValue(jest.fn()),
@@ -47,8 +49,10 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-
 
 import { castController } from '../../services/cast/castController';
 import {
+  checkLocalNetworkPermission,
   getSystemAudioState,
   openSystemOutputSwitcher,
+  requestLocalNetworkPermission,
   selectSystemAudioRoute,
   setSystemMediaVolume,
 } from '../../services/cast/nativeCastBridge';
@@ -61,6 +65,8 @@ const flush = () => act(async () => {});
 describe('DevicePickerSheet', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    (checkLocalNetworkPermission as jest.Mock).mockResolvedValue('not_required');
+    (requestLocalNetworkPermission as jest.Mock).mockResolvedValue('not_required');
     castStore.getState().reset();
     act(() => useRoutePickerStore.getState().close());
   });
@@ -92,7 +98,9 @@ describe('DevicePickerSheet', () => {
     render(<DevicePickerSheet />);
 
     expect(screen.getByTestId('bottom-sheet')).toBeTruthy();
-    expect(castController.startDiscovery).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(castController.startDiscovery).toHaveBeenCalledTimes(1);
+    });
     expect(screen.getByText('Sonos Living Room')).toBeTruthy();
 
     fireEvent.press(screen.getByTestId('device-picker-system-output'));
@@ -193,6 +201,27 @@ describe('DevicePickerSheet', () => {
 
     await waitFor(() => {
       expect(castController.addManualDlnaDevice).toHaveBeenCalledWith('192.168.0.56:1225');
+    });
+
+    await flush();
+  });
+
+  it('shows local network permission card when denied and retries discovery when granted', async () => {
+    (requestLocalNetworkPermission as jest.Mock).mockResolvedValue('denied');
+
+    act(() => useRoutePickerStore.getState().open());
+    render(<DevicePickerSheet />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('local-network-permission-card')).toBeTruthy();
+    });
+    expect(castController.startDiscovery).not.toHaveBeenCalled();
+
+    (requestLocalNetworkPermission as jest.Mock).mockResolvedValue('granted');
+    fireEvent.press(screen.getByTestId('local-network-permission-button'));
+
+    await waitFor(() => {
+      expect(castController.startDiscovery).toHaveBeenCalledTimes(1);
     });
 
     await flush();

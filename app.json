@@ -50,6 +50,8 @@
       },
       "permissions": [
         "ACCESS_FINE_LOCATION",
+        "ACCESS_LOCAL_NETWORK",
+        "CHANGE_WIFI_MULTICAST_STATE",
         "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
         "POST_NOTIFICATIONS"
       ],
