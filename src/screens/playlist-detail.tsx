@@ -874,6 +874,21 @@ export function PlaylistDetailScreen() {
     );
   }, [searchOpen, editing, searchQuery, colors.textPrimary, colors.textSecondary, t]);
 
+  // paddingTop on both platforms, never contentInset+contentOffset: Fabric recycles
+  // RCTScrollViewComponentView across screen pushes and ignores contentOffset on a
+  // recycled instance, leaving the hero partly scrolled off the top.
+  // See album-detail.tsx.
+  const contentPaddingTop =
+    insets.top +
+    (searchOpen && !editing ? SEARCH_HEADER_HEIGHT + 8 : HEADER_BAR_HEIGHT);
+  const listContentStyle = useMemo(
+    () => ({
+      paddingTop: contentPaddingTop,
+      paddingBottom: 32,
+    }),
+    [contentPaddingTop],
+  );
+
   if (loading || !transitionComplete) {
     return (
       <View style={[styles.centered, { backgroundColor: colors.background }]}>
@@ -893,21 +908,6 @@ export function PlaylistDetailScreen() {
       </View>
     );
   }
-
-  // paddingTop on both platforms, never contentInset+contentOffset: Fabric recycles
-  // RCTScrollViewComponentView across screen pushes and ignores contentOffset on a
-  // recycled instance, leaving the hero partly scrolled off the top.
-  // See album-detail.tsx.
-  const contentPaddingTop =
-    insets.top +
-    (searchOpen && !editing ? SEARCH_HEADER_HEIGHT + 8 : HEADER_BAR_HEIGHT);
-  const listContentStyle = useMemo(
-    () => ({
-      paddingTop: contentPaddingTop,
-      paddingBottom: 32,
-    }),
-    [contentPaddingTop],
-  );
 
   return (
     <>
