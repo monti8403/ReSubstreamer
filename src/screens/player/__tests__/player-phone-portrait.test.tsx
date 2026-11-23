@@ -102,6 +102,7 @@ jest.mock('react-native-gesture-handler', () => {
     const g: Record<string, () => unknown> = {};
     const methods = [
       'enabled', 'manualActivation', 'shouldCancelWhenOutside',
+      'activateAfterLongPress', 'maxPointers',
       'activeOffsetY', 'failOffsetY', 'activeOffsetX', 'failOffsetX',
       'cancelsTouchesInView',
       'onTouchesDown', 'onTouchesMove',

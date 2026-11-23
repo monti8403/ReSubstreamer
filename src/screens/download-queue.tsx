@@ -11,12 +11,7 @@ import {
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import ReorderableList, {
-  useReorderableDrag,
-  type ReorderableListReorderEvent,
-} from 'react-native-reorderable-list';
 import Animated, {
-  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -25,7 +20,9 @@ import Animated, {
 import { CachedImage } from '../components/CachedImage';
 import { EmptyState } from '../components/EmptyState';
 import { GradientBackground } from '../components/GradientBackground';
+import { ReorderableFlashList } from '../components/ReorderableFlashList';
 import { closeOpenRow, SwipeableRow, type SwipeAction } from '../components/SwipeableRow';
+import { LIST_DRAW_DISTANCE } from '../constants/layout';
 import { useAppActive } from '../hooks/useAppActive';
 import { useTheme } from '../hooks/useTheme';
 import { useThemedAlert } from '../hooks/useThemedAlert';
@@ -43,6 +40,12 @@ import { formatSpeed } from '../utils/formatters';
 import { absoluteFill } from '../utils/styles';
 const ANIMATE_MS = 400;
 const SPEED_POLL_MS = 1000;
+const DOWNLOAD_ACTIVE_ROW_HEIGHT = 104;
+const DOWNLOAD_QUEUED_ROW_HEIGHT = 84;
+const DOWNLOAD_ROW_GAP = 10;
+const DOWNLOAD_ACTIVE_ROW_STRIDE = DOWNLOAD_ACTIVE_ROW_HEIGHT + DOWNLOAD_ROW_GAP;
+const DOWNLOAD_QUEUED_ROW_STRIDE = DOWNLOAD_QUEUED_ROW_HEIGHT + DOWNLOAD_ROW_GAP;
+const DOWNLOAD_DRAG_HANDLE_HIT_WIDTH = 80;
 
 /* ------------------------------------------------------------------ */
 /*  Stats Card                                                         */
@@ -123,30 +126,20 @@ const DownloadStatsCard = memo(function DownloadStatsCard({
 /*  Queue Row                                                          */
 /* ------------------------------------------------------------------ */
 
-const QueueRow = memo(function QueueRow({
+const DownloadingProgressSection = memo(function DownloadingProgressSection({
   item,
   colors,
-  onRemove,
-  onRetry,
-  onGrabHandle,
-  onReleaseHandle,
 }: {
   item: DownloadQueueItem;
   colors: ReturnType<typeof useTheme>['colors'];
-  onRemove: (queueId: string) => void;
-  onRetry: (queueId: string) => void;
-  onGrabHandle: () => void;
-  onReleaseHandle: () => void;
 }) {
   const { t } = useTranslation();
-  const drag = useReorderableDrag();
-  const isDownloading = item.status === 'downloading';
-  const isQueued = item.status === 'queued';
-  const isError = item.status === 'error';
-
-  const cachedItems = musicCacheStore((s) => s.cachedItems);
+  const existingCachedItem = musicCacheStore((s) => s.cachedItems[item.itemId]);
   const { completed: displayCompleted, total: displayTotal } =
-    computeQueueItemProgress(item, cachedItems);
+    computeQueueItemProgress(
+      item,
+      existingCachedItem ? { [item.itemId]: existingCachedItem } : {},
+    );
 
   const progress = displayTotal > 0 ? displayCompleted / displayTotal : 0;
 
@@ -161,6 +154,43 @@ const QueueRow = memo(function QueueRow({
   const fillStyle = useAnimatedStyle(() => ({ flex: fillFrac.value }));
   const freeStyle = useAnimatedStyle(() => ({ flex: freeFrac.value }));
 
+  return (
+    <View style={styles.progressSection}>
+      <Text style={[styles.progressText, { color: colors.textSecondary }]} numberOfLines={1}>
+        {t('downloadProgress', { completed: displayCompleted, total: displayTotal })}
+      </Text>
+      <View style={[styles.progressBar, { backgroundColor: colors.border }]}>
+        {progress > 0 && (
+          <Animated.View
+            style={[styles.progressSegment, { backgroundColor: colors.primary }, fillStyle]}
+          />
+        )}
+        <Animated.View
+          style={[styles.progressSegment, { backgroundColor: colors.inputBg }, freeStyle]}
+        />
+      </View>
+    </View>
+  );
+});
+
+const QueueRow = memo(function QueueRow({
+  item,
+  isDragging,
+  colors,
+  onRemove,
+  onRetry,
+}: {
+  item: DownloadQueueItem;
+  isDragging: boolean;
+  colors: ReturnType<typeof useTheme>['colors'];
+  onRemove: (queueId: string) => void;
+  onRetry: (queueId: string) => void;
+}) {
+  const { t } = useTranslation();
+  const isDownloading = item.status === 'downloading';
+  const isQueued = item.status === 'queued';
+  const isError = item.status === 'error';
+
   const handleRemove = useCallback(() => {
     onRemove(item.queueId);
   }, [item.queueId, onRemove]);
@@ -172,8 +202,20 @@ const QueueRow = memo(function QueueRow({
 
   return (
     <View style={styles.rowWrapper}>
-      <SwipeableRow rightActions={rightActions} enableFullSwipeRight borderRadius={12}>
-        <View style={styles.row}>
+      <SwipeableRow
+        rightActions={rightActions}
+        enableFullSwipeRight
+        borderRadius={12}
+        recyclingKey={item.queueId}
+      >
+        <View
+          style={[
+            styles.row,
+            isDownloading && styles.downloadingRow,
+            isQueued && styles.queuedRow,
+            isDragging && styles.draggingRow,
+          ]}
+        >
           <View style={styles.thumbWrap}>
             <CachedImage
               coverArtId={item.coverArtId}
@@ -197,26 +239,10 @@ const QueueRow = memo(function QueueRow({
               </Text>
             )}
 
-            {isDownloading && (
-              <View style={styles.progressSection}>
-                <Text style={[styles.progressText, { color: colors.textSecondary }]}>
-                  {t('downloadProgress', { completed: displayCompleted, total: displayTotal })}
-                </Text>
-                <View style={[styles.progressBar, { backgroundColor: colors.border }]}>
-                  {progress > 0 && (
-                    <Animated.View
-                      style={[styles.progressSegment, { backgroundColor: colors.primary }, fillStyle]}
-                    />
-                  )}
-                  <Animated.View
-                    style={[styles.progressSegment, { backgroundColor: colors.inputBg }, freeStyle]}
-                  />
-                </View>
-              </View>
-            )}
+            {isDownloading && <DownloadingProgressSection item={item} colors={colors} />}
 
             {isQueued && (
-              <Text style={[styles.statusText, { color: colors.textSecondary }]}>
+              <Text style={[styles.statusText, { color: colors.textSecondary }]} numberOfLines={1}>
                 {t('trackWithCount', { count: item.totalSongs })} · {t('queued')}
               </Text>
             )}
@@ -229,17 +255,9 @@ const QueueRow = memo(function QueueRow({
           </View>
 
           {isQueued && (
-            <Pressable
-              onPressIn={() => {
-                onGrabHandle();
-                drag();
-              }}
-              onPressOut={onReleaseHandle}
-              hitSlop={8}
-              style={styles.dragHandle}
-            >
+            <View testID="download-drag-handle" style={styles.dragHandle}>
               <Ionicons name="reorder-three" size={28} color={colors.textSecondary} />
-            </Pressable>
+            </View>
           )}
 
           {isError && (
@@ -253,6 +271,52 @@ const QueueRow = memo(function QueueRow({
           )}
         </View>
       </SwipeableRow>
+    </View>
+  );
+});
+
+const DownloadQueueGhostRow = memo(function DownloadQueueGhostRow({
+  item,
+  colors,
+}: {
+  item: DownloadQueueItem;
+  colors: ReturnType<typeof useTheme>['colors'];
+}) {
+  const { t } = useTranslation();
+  return (
+    <View
+      style={[
+        styles.ghostRowInner,
+        {
+          backgroundColor: colors.card,
+          borderColor: colors.primary,
+        },
+      ]}
+    >
+      <View style={styles.thumbWrap}>
+        <CachedImage
+          coverArtId={item.coverArtId}
+          size={300}
+          style={[styles.thumb, { backgroundColor: colors.border }]}
+          resizeMode="cover"
+        />
+      </View>
+      <View style={styles.rowContent}>
+        <Text style={[styles.rowTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+          {item.name}
+        </Text>
+        {item.artist ? (
+          <Text style={[styles.rowSubtitle, { color: colors.textSecondary }]} numberOfLines={1}>
+            {item.artist}
+          </Text>
+        ) : null}
+        <Text style={[styles.statusText, { color: colors.textSecondary }]} numberOfLines={1}>
+          {t('trackWithCount', { count: item.totalSongs })} · {t('queued')}
+        </Text>
+      </View>
+      <View style={styles.dragHandle}>
+        <Ionicons name="reorder-three" size={28} color={colors.primary} />
+      </View>
     </View>
   );
 });
@@ -272,7 +336,7 @@ export function DownloadQueueScreen() {
 
   /* ---- Sorted display list: downloading → queued → error ---- */
 
-  const sortedQueue = useMemo(() => {
+  const { sortedQueue, downloadingCount, queuedCount, errorCount } = useMemo(() => {
     const downloading: DownloadQueueItem[] = [];
     const queued: DownloadQueueItem[] = [];
     const errored: DownloadQueueItem[] = [];
@@ -281,7 +345,12 @@ export function DownloadQueueScreen() {
       else if (item.status === 'queued') queued.push(item);
       else if (item.status === 'error') errored.push(item);
     }
-    return [...downloading, ...queued, ...errored];
+    return {
+      sortedQueue: [...downloading, ...queued, ...errored],
+      downloadingCount: downloading.length,
+      queuedCount: queued.length,
+      errorCount: errored.length,
+    };
   }, [downloadQueue]);
 
   /* ---- Header buttons ---- */
@@ -356,18 +425,17 @@ export function DownloadQueueScreen() {
   /* ---- Drag reorder ---- */
 
   const handleReorder = useCallback(
-    ({ from, to }: ReorderableListReorderEvent) => {
+    (from: number, to: number) => {
       // `from` and `to` are indices into the displayed sortedQueue, which is partitioned
-      // [downloading..., queued..., error...]. The drag handle is only rendered for queued
+      // [downloading..., queued..., error...]. The drag handle is only active for queued
       // rows, so `from` is always within the queued region. Clamp `to` to the queued region
       // so users can't drop into the downloading or error sections.
       const dragged = sortedQueue[from];
       if (!dragged || dragged.status !== 'queued') return;
 
-      const downloadingCount = sortedQueue.filter((q) => q.status === 'downloading').length;
-      const queuedCount = sortedQueue.filter((q) => q.status === 'queued').length;
       const queuedStart = downloadingCount;
       const queuedEnd = downloadingCount + queuedCount - 1;
+      if (queuedEnd < queuedStart) return;
       const clampedTo = Math.max(queuedStart, Math.min(to, queuedEnd));
       if (from === clampedTo) return;
 
@@ -383,47 +451,29 @@ export function DownloadQueueScreen() {
 
       musicCacheStore.getState().reorderQueue(fromInStore, toInStore);
     },
-    [sortedQueue],
+    [sortedQueue, downloadingCount, queuedCount],
   );
 
   /* ---- Render ---- */
 
-  /**
-   * Suppresses list scrolling for as long as the drag handle is held.
-   *
-   * `useReorderableDrag` only disables scrolling after `startDrag` round-trips
-   * JS -> UI -> JS, and the library composes its pan as
-   * `Gesture.Simultaneous(Gesture.Native(), pan)` — so the native scroll stays live
-   * across that window and claims any finger movement inside it, scrolling the list
-   * instead of picking the row up. Grabbing the handle is unambiguous intent, so cut
-   * scrolling at touch-down instead of racing.
-   *
-   * Released on press-out AND on drag-end: a tap that never becomes a drag fires only
-   * the former, and a pan that steals the Pressable's responder only the latter.
-   *
-   * `onDragEnd` is invoked on the UI runtime, so it must be a worklet that hops back to
-   * JS itself — the prop's type is a plain signature and will not enforce this.
-   */
-  const [handleHeld, setHandleHeld] = useState(false);
-  const grabHandle = useCallback(() => setHandleHeld(true), []);
-  const releaseHandle = useCallback(() => setHandleHeld(false), []);
-  const releaseHandleOnDragEnd = useCallback(() => {
-    'worklet';
-    runOnJS(setHandleHeld)(false);
-  }, []);
-
   const renderItem = useCallback(
-    ({ item }: { item: DownloadQueueItem }) => (
+    ({ item, isDragging }: { item: DownloadQueueItem; isDragging: boolean }) => (
       <QueueRow
         item={item}
+        isDragging={isDragging}
         colors={colors}
         onRemove={handleRemove}
         onRetry={handleRetry}
-        onGrabHandle={grabHandle}
-        onReleaseHandle={releaseHandle}
       />
     ),
-    [colors, handleRemove, handleRetry, grabHandle, releaseHandle],
+    [colors, handleRemove, handleRetry],
+  );
+
+  const renderGhost = useCallback(
+    (item: DownloadQueueItem) => (
+      <DownloadQueueGhostRow item={item} colors={colors} />
+    ),
+    [colors],
   );
 
   const keyExtractor = useCallback(
@@ -431,17 +481,19 @@ export function DownloadQueueScreen() {
     [],
   );
 
+  const getItemType = useCallback(
+    (item: DownloadQueueItem) => item.status,
+    [],
+  );
+
   const listEmpty = useMemo(
     () => (
       <EmptyState icon="cloud-download-outline" title={t('noDownloadsInQueue')} subtitle={t('noDownloadsInQueueSubtitle')} />
     ),
-    [],
+    [t],
   );
 
-  const queuedCount = useMemo(
-    () => downloadQueue.filter((q) => q.status === 'downloading' || q.status === 'queued').length,
-    [downloadQueue],
-  );
+  const activeAndQueuedCount = downloadingCount + queuedCount;
 
   // Why is nothing downloading? Offline mode parks the queue by design; an unreachable
   // server leaves items retrying. Either way the user sees a stalled list, so say which.
@@ -460,7 +512,7 @@ export function DownloadQueueScreen() {
   const listHeader = useMemo(
     () =>
       downloadQueue.length > 0 ? (
-        <>
+        <View>
           {pausedReason && (
             <View style={[styles.pausedNotice, { backgroundColor: colors.card }]}>
               <Ionicons
@@ -475,34 +527,47 @@ export function DownloadQueueScreen() {
               </Text>
             </View>
           )}
-          <DownloadStatsCard colors={colors} queuedCount={queuedCount} />
-        </>
+          <DownloadStatsCard colors={colors} queuedCount={activeAndQueuedCount} />
+        </View>
       ) : null,
-    [downloadQueue.length, colors, queuedCount, pausedReason, t],
+    [downloadQueue.length, colors, activeAndQueuedCount, pausedReason, t],
   );
 
+  const contentPaddingBottom = insets.bottom + 32;
   const contentStyle = useMemo(
     () => ({
       flexGrow: 1 as const,
       paddingTop: headerHeight,
-      paddingBottom: insets.bottom + 32,
+      paddingBottom: contentPaddingBottom,
     }),
-    [headerHeight, insets.bottom],
+    [headerHeight, contentPaddingBottom],
   );
 
   return (
     <GradientBackground style={styles.container} scrollable>
-      <ReorderableList
+      <ReorderableFlashList
+        testID="download-queue-reorderable-list"
         data={sortedQueue}
         renderItem={renderItem}
+        renderGhost={renderGhost}
         keyExtractor={keyExtractor}
+        getItemType={getItemType}
         onReorder={handleReorder}
-        onDragEnd={releaseHandleOnDragEnd}
-        scrollEnabled={!handleHeld}
+        rowHeight={DOWNLOAD_QUEUED_ROW_HEIGHT}
+        rowGap={DOWNLOAD_ROW_GAP}
+        draggableStart={downloadingCount}
+        draggableCount={queuedCount}
+        leadingRowsHeight={downloadingCount * DOWNLOAD_ACTIVE_ROW_STRIDE}
+        trailingRowsHeight={errorCount * DOWNLOAD_QUEUED_ROW_STRIDE}
+        contentPaddingTop={headerHeight}
+        contentPaddingBottom={contentPaddingBottom}
+        dragHandleHitWidth={DOWNLOAD_DRAG_HANDLE_HIT_WIDTH}
+        ghostHorizontalInset={16}
+        accentColor={colors.primary}
         onScrollBeginDrag={closeOpenRow}
         ListHeaderComponent={listHeader}
         ListEmptyComponent={listEmpty}
-        style={styles.container}
+        drawDistance={LIST_DRAW_DISTANCE}
         contentContainerStyle={contentStyle}
       />
     </GradientBackground>
@@ -574,13 +639,36 @@ const styles = StyleSheet.create({
   },
   rowWrapper: {
     marginHorizontal: 16,
-    marginBottom: 10,
+    marginBottom: DOWNLOAD_ROW_GAP,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 12,
     paddingHorizontal: 16,
+  },
+  downloadingRow: {
+    height: DOWNLOAD_ACTIVE_ROW_HEIGHT,
+  },
+  queuedRow: {
+    height: DOWNLOAD_QUEUED_ROW_HEIGHT,
+  },
+  draggingRow: {
+    opacity: 0.25,
+  },
+  ghostRowInner: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 8,
   },
   thumbWrap: {
     width: 56,

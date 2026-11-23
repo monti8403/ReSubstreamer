@@ -168,6 +168,18 @@ describe('SwipeableRow — disabled prop', () => {
     expect(onLongPress).toHaveBeenCalledTimes(1);
     expect(mockHapticsImpact).toHaveBeenCalledTimes(1);
   });
+
+  it('suppresses onLongPress and impact haptic when shouldSuppressLongPress returns true', () => {
+    const onLongPress = jest.fn();
+    const { getByTestId } = render(
+      <SwipeableRow onLongPress={onLongPress} shouldSuppressLongPress={() => true}>
+        <Text testID="content">child</Text>
+      </SwipeableRow>,
+    );
+    fireEvent(getByTestId('content'), 'longPress');
+    expect(onLongPress).not.toHaveBeenCalled();
+    expect(mockHapticsImpact).not.toHaveBeenCalled();
+  });
 });
 
 describe('SwipeableRow — edge-back gesture', () => {

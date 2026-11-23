@@ -21,18 +21,13 @@ import { LIST_DRAW_DISTANCE } from '../constants/layout';
 import { useTranslation } from 'react-i18next';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import ReorderableList, {
-  reorderItems,
-  useReorderableDrag,
-  type ReorderableListReorderEvent,
-} from 'react-native-reorderable-list';
-
 import { CachedImage } from '../components/CachedImage';
 import { EmptyState } from '../components/EmptyState';
 import { DownloadButton } from '../components/DownloadButton';
 import { MarqueeText } from '../components/MarqueeText';
 import { BottomChrome } from '../components/BottomChrome';
 import { MoreOptionsButton } from '../components/MoreOptionsButton';
+import { ReorderableFlashList } from '../components/ReorderableFlashList';
 import { closeOpenRow, SwipeableRow, type SwipeAction } from '../components/SwipeableRow';
 import { TrackRow } from '../components/TrackRow';
 import { DetailScreenBackground } from '../components/DetailScreenBackground';
@@ -49,6 +44,8 @@ import { enqueuePlaylistDownload, syncCachedPlaylistTracks } from '../services/m
 import { playTrack } from '../services/playerService';
 import { updatePlaylistDetails, updatePlaylistOrder } from '../services/subsonicService';
 import { shuffleArray } from '../utils/arrayHelpers';
+import { ensureQueueKey, withUniqueQueueKeys } from '../utils/queueKeys';
+import { reorderArray } from '../utils/reorderDragMath';
 import { foldAccents } from '../utils/sortHelpers';
 import { authStore } from '../store/authStore';
 import { moreOptionsStore } from '../store/moreOptionsStore';
@@ -69,24 +66,28 @@ const HERO_PADDING = 24;
 const HERO_COVER_SIZE = 600;
 const HEADER_BAR_HEIGHT = 44;
 const EDIT_ROW_HEIGHT = 64;
+const EDIT_DRAG_HANDLE_HIT_WIDTH = 60;
 const SEARCH_HEADER_HEIGHT = 52;
 
 const EditTrackRow = memo(function EditTrackRow({
   item,
+  entryKey,
   index,
+  isDragging,
   colors,
   onDelete,
 }: {
   item: Child;
+  entryKey: string;
   index: number;
+  isDragging: boolean;
   colors: ReturnType<typeof useTheme>['colors'];
-  onDelete: (index: number) => void;
+  onDelete: (entryKey: string) => void;
 }) {
   const { t } = useTranslation();
-  const drag = useReorderableDrag();
   const songCoverArtId = useSongCoverArt(item);
 
-  const handleDelete = useCallback(() => onDelete(index), [onDelete, index]);
+  const handleDelete = useCallback(() => onDelete(entryKey), [onDelete, entryKey]);
 
   const rightActions: SwipeAction[] = useMemo(
     () => [
@@ -106,8 +107,15 @@ const EditTrackRow = memo(function EditTrackRow({
       rightActions={rightActions}
       enableFullSwipeRight
       restingBackgroundColor={colors.background}
+      recyclingKey={entryKey}
     >
-      <View style={[styles.editRow, { borderBottomColor: colors.border }]}>
+      <View
+        style={[
+          styles.editRow,
+          { borderBottomColor: colors.border },
+          isDragging && styles.editRowDragging,
+        ]}
+      >
         <CachedImage
           coverArtId={songCoverArtId}
           size={300}
@@ -130,11 +138,60 @@ const EditTrackRow = memo(function EditTrackRow({
           </Text>
         </View>
 
-        <Pressable onPressIn={drag} hitSlop={8} style={styles.editDragHandle}>
+        <View testID="edit-track-drag-handle" style={styles.editDragHandle}>
           <Ionicons name="reorder-three" size={28} color={colors.textSecondary} />
-        </Pressable>
+        </View>
       </View>
     </SwipeableRow>
+  );
+});
+
+const EditTrackGhostRow = memo(function EditTrackGhostRow({
+  item,
+  index,
+  colors,
+}: {
+  item: Child;
+  index: number;
+  colors: ReturnType<typeof useTheme>['colors'];
+}) {
+  const { t } = useTranslation();
+  const songCoverArtId = useSongCoverArt(item);
+
+  return (
+    <View
+      style={[
+        styles.editGhostRow,
+        {
+          backgroundColor: colors.card,
+          borderColor: colors.primary,
+        },
+      ]}
+    >
+      <CachedImage
+        coverArtId={songCoverArtId}
+        size={300}
+        style={styles.editCover}
+        resizeMode="cover"
+      />
+      <View style={styles.editTrackInfo}>
+        <Text
+          style={[styles.editTrackTitle, { color: colors.textPrimary }]}
+          numberOfLines={1}
+        >
+          {index + 1}. {item.title}
+        </Text>
+        <Text
+          style={[styles.editTrackArtist, { color: colors.textSecondary }]}
+          numberOfLines={1}
+        >
+          {item.artist ?? t('unknownArtist')}
+        </Text>
+      </View>
+      <View style={styles.editDragHandle}>
+        <Ionicons name="reorder-three" size={28} color={colors.primary} />
+      </View>
+    </View>
   );
 });
 
@@ -340,7 +397,7 @@ export function PlaylistDetailScreen() {
   const handleStartEdit = useCallback(() => {
     setSearchOpen(false);
     setSearchQuery('');
-    setEditedTracks([...tracks]);
+    setEditedTracks(withUniqueQueueKeys([...tracks]));
     nameRef.current = playlist?.name ?? '';
     commentRef.current = playlist?.comment ?? '';
     setEditedPublic(!!playlist?.public);
@@ -352,13 +409,13 @@ export function PlaylistDetailScreen() {
     setEditedTracks([]);
   }, []);
 
-  const handleReorder = useCallback(({ from, to }: ReorderableListReorderEvent) => {
-    setEditedTracks((prev) => reorderItems(prev, from, to));
+  const handleReorder = useCallback((from: number, to: number) => {
+    setEditedTracks((prev) => reorderArray(prev, from, to));
   }, []);
 
   const handleDeleteTrack = useCallback(
-    (index: number) => {
-      setEditedTracks((prev) => prev.filter((_, i) => i !== index));
+    (entryKey: string) => {
+      setEditedTracks((prev) => prev.filter((tr) => ensureQueueKey(tr) !== entryKey));
     },
     [],
   );
@@ -596,10 +653,12 @@ export function PlaylistDetailScreen() {
   /* ---- Edit-mode renderItem ---- */
 
   const renderEditItem = useCallback(
-    ({ item, index }: { item: Child; index: number }) => (
+    ({ item, index, isDragging }: { item: Child; index: number; isDragging: boolean }) => (
       <EditTrackRow
         item={item}
+        entryKey={ensureQueueKey(item)}
         index={index}
+        isDragging={isDragging}
         colors={colors}
         onDelete={handleDeleteTrack}
       />
@@ -607,20 +666,79 @@ export function PlaylistDetailScreen() {
     [colors, handleDeleteTrack],
   );
 
+  const renderEditGhost = useCallback(
+    (item: Child, index: number) => (
+      <EditTrackGhostRow item={item} index={index} colors={colors} />
+    ),
+    [colors],
+  );
+
+  const editKeyExtractor = useCallback(
+    (item: Child) => ensureQueueKey(item),
+    [],
+  );
+
   const keyExtractor = useCallback(
     (item: Child, index: number) => `${item.id}-${index}`,
     [],
   );
 
-  /* ---- List header ---- */
+  /* ---- List headers ---- */
 
-  const listHeader = useMemo(() => {
+  const editSongCount = editedTracks.length;
+  const editDuration = useMemo(
+    () => editedTracks.reduce((sum, tr) => sum + (tr.duration ?? 0), 0),
+    [editedTracks],
+  );
+
+  const editListHeader = useMemo(() => {
     if (!playlist) return null;
-    const displayTracks = editing ? editedTracks : tracks;
-    const songCount = editing ? editedTracks.length : playlist.songCount;
-    const duration = editing
-      ? editedTracks.reduce((sum, tr) => sum + (tr.duration ?? 0), 0)
-      : playlist.duration;
+    return (
+      <View>
+        <View style={styles.hero}>
+          <View style={styles.heroImageWrap}>
+            <CachedImage
+              coverArtId={playlist.coverArt}
+              size={HERO_COVER_SIZE}
+              style={styles.heroImage}
+              resizeMode="contain"
+            />
+          </View>
+        </View>
+        <View style={styles.info}>
+          <PlaylistEditHeader
+            colors={colors}
+            initialName={playlist.name}
+            initialComment={playlist.comment ?? ''}
+            isPublic={editedPublic}
+            onChangePublic={setEditedPublic}
+            nameRef={nameRef}
+            commentRef={commentRef}
+            t={t}
+          />
+          <View style={styles.subtitleRow}>
+            <View style={styles.subtitleText}>
+              <View style={styles.meta}>
+                <Ionicons name="musical-notes-outline" size={14} color={colors.primary} />
+                <Text style={[styles.metaText, { color: colors.textSecondary }]}>
+                  {t('songCount', { count: editSongCount })}
+                </Text>
+                <View style={styles.metaSpacer} />
+                <Ionicons name="time-outline" size={14} color={colors.primary} />
+                <Text style={[styles.metaText, { color: colors.textSecondary }]}>
+                  {formatCompactDuration(editDuration)}
+                </Text>
+              </View>
+            </View>
+          </View>
+        </View>
+        <View style={styles.trackListSpacer} />
+      </View>
+    );
+  }, [playlist, colors, editSongCount, editDuration, editedPublic, t]);
+
+  const normalListHeader = useMemo(() => {
+    if (!playlist) return null;
 
     return (
       <View>
@@ -635,54 +753,40 @@ export function PlaylistDetailScreen() {
           </View>
         </View>
         <View style={styles.info}>
-          {editing ? (
-            <PlaylistEditHeader
-              colors={colors}
-              initialName={playlist.name}
-              initialComment={playlist.comment ?? ''}
-              isPublic={editedPublic}
-              onChangePublic={setEditedPublic}
-              nameRef={nameRef}
-              commentRef={commentRef}
-              t={t}
-            />
-          ) : (
-            <MarqueeText style={[styles.playlistName, { color: colors.textPrimary }]}>
-              {playlist.name}
-            </MarqueeText>
-          )}
+          <MarqueeText style={[styles.playlistName, { color: colors.textPrimary }]}>
+            {playlist.name}
+          </MarqueeText>
           <View style={styles.subtitleRow}>
             <View style={styles.subtitleText}>
-              {!editing &&
-                (!isOwn ? (
-                  <View style={styles.sharedBadge}>
-                    <Ionicons name="people-outline" size={13} color={colors.primary} />
-                    <Text style={[styles.sharedBadgeText, { color: colors.primary }]}>
-                      {t('sharedByOwner', { owner: playlist.owner })}
-                    </Text>
-                  </View>
-                ) : typeof playlist.public === 'boolean' ? (
-                  // Owner's own playlist: show its current visibility so it's
-                  // clear without opening edit mode. Only when the server
-                  // actually reported `public` — never guess "Private".
-                  <View style={styles.sharedBadge}>
-                    <Ionicons
-                      name={playlist.public ? 'globe-outline' : 'lock-closed-outline'}
-                      size={13}
-                      color={colors.primary}
-                    />
-                    <Text style={[styles.sharedBadgeText, { color: colors.primary }]}>
-                      {playlist.public ? t('publicPlaylist') : t('privatePlaylist')}
-                    </Text>
-                  </View>
-                ) : (
-                  playlist.owner && (
-                    <Text style={[styles.ownerName, { color: colors.textSecondary }]}>
-                      {t('byOwner', { owner: playlist.owner })}
-                    </Text>
-                  )
-                ))}
-              {!editing && playlist.comment ? (
+              {!isOwn ? (
+                <View style={styles.sharedBadge}>
+                  <Ionicons name="people-outline" size={13} color={colors.primary} />
+                  <Text style={[styles.sharedBadgeText, { color: colors.primary }]}>
+                    {t('sharedByOwner', { owner: playlist.owner })}
+                  </Text>
+                </View>
+              ) : typeof playlist.public === 'boolean' ? (
+                // Owner's own playlist: show its current visibility so it's
+                // clear without opening edit mode. Only when the server
+                // actually reported `public` — never guess "Private".
+                <View style={styles.sharedBadge}>
+                  <Ionicons
+                    name={playlist.public ? 'globe-outline' : 'lock-closed-outline'}
+                    size={13}
+                    color={colors.primary}
+                  />
+                  <Text style={[styles.sharedBadgeText, { color: colors.primary }]}>
+                    {playlist.public ? t('publicPlaylist') : t('privatePlaylist')}
+                  </Text>
+                </View>
+              ) : (
+                playlist.owner && (
+                  <Text style={[styles.ownerName, { color: colors.textSecondary }]}>
+                    {t('byOwner', { owner: playlist.owner })}
+                  </Text>
+                )
+              )}
+              {playlist.comment ? (
                 <Text style={[styles.comment, { color: colors.textSecondary }]}>
                   {playlist.comment}
                 </Text>
@@ -690,47 +794,43 @@ export function PlaylistDetailScreen() {
               <View style={styles.meta}>
                 <Ionicons name="musical-notes-outline" size={14} color={colors.primary} />
                 <Text style={[styles.metaText, { color: colors.textSecondary }]}>
-                  {t('songCount', { count: songCount })}
+                  {t('songCount', { count: playlist.songCount })}
                 </Text>
                 <View style={styles.metaSpacer} />
                 <Ionicons name="time-outline" size={14} color={colors.primary} />
                 <Text style={[styles.metaText, { color: colors.textSecondary }]}>
-                  {formatCompactDuration(duration)}
+                  {formatCompactDuration(playlist.duration)}
                 </Text>
               </View>
             </View>
-            {!editing && displayTracks.length > 1 && (
+            {tracks.length > 1 && (
               <ShufflePlayButton
                 style={styles.heroButtonSpacing}
                 onPress={() => {
-                  const shuffled = shuffleArray(displayTracks);
-                  if (playlist) {
-                    recentPlaysStore.getState().recordRecentPlay({
-                      id,
-                      type: 'playlist',
-                      title: playlist.name ?? '',
-                      subtitle: playlist.comment ?? '',
-                      coverUri: playlist.coverArt,
-                    });
-                  }
+                  const shuffled = shuffleArray(tracks);
+                  recentPlaysStore.getState().recordRecentPlay({
+                    id,
+                    type: 'playlist',
+                    title: playlist.name ?? '',
+                    subtitle: playlist.comment ?? '',
+                    coverUri: playlist.coverArt,
+                  });
                   playTrack(shuffled[0], shuffled, id);
                 }}
               />
             )}
-            {!editing && displayTracks.length > 0 && (
+            {tracks.length > 0 && (
               <PlayAllButton
                 style={styles.heroButtonSpacing}
                 onPress={() => {
-                  if (playlist) {
-                    recentPlaysStore.getState().recordRecentPlay({
-                      id,
-                      type: 'playlist',
-                      title: playlist.name ?? '',
-                      subtitle: playlist.comment ?? '',
-                      coverUri: playlist.coverArt,
-                    });
-                  }
-                  playTrack(displayTracks[0], displayTracks, id);
+                  recentPlaysStore.getState().recordRecentPlay({
+                    id,
+                    type: 'playlist',
+                    title: playlist.name ?? '',
+                    subtitle: playlist.comment ?? '',
+                    coverUri: playlist.coverArt,
+                  });
+                  playTrack(tracks[0], tracks, id);
                 }}
               />
             )}
@@ -739,7 +839,7 @@ export function PlaylistDetailScreen() {
         <View style={styles.trackListSpacer} />
       </View>
     );
-  }, [playlist, colors, tracks, editing, editedTracks, editedPublic, isOwn, t]);
+  }, [playlist, colors, tracks, isOwn, id, t]);
 
   const listEmpty = useMemo(() => {
     if (searchOpen && !editing) {
@@ -798,12 +898,16 @@ export function PlaylistDetailScreen() {
   // RCTScrollViewComponentView across screen pushes and ignores contentOffset on a
   // recycled instance, leaving the hero partly scrolled off the top.
   // See album-detail.tsx.
-  const listContentStyle = {
-    paddingTop:
-      insets.top +
-      (searchOpen && !editing ? SEARCH_HEADER_HEIGHT + 8 : HEADER_BAR_HEIGHT),
-    paddingBottom: 32,
-  };
+  const contentPaddingTop =
+    insets.top +
+    (searchOpen && !editing ? SEARCH_HEADER_HEIGHT + 8 : HEADER_BAR_HEIGHT);
+  const listContentStyle = useMemo(
+    () => ({
+      paddingTop: contentPaddingTop,
+      paddingBottom: 32,
+    }),
+    [contentPaddingTop],
+  );
 
   return (
     <>
@@ -912,14 +1016,22 @@ export function PlaylistDetailScreen() {
         )}
 
       {editing ? (
-        <ReorderableList
+        <ReorderableFlashList
+          testID="playlist-edit-reorderable-list"
           data={editedTracks}
           renderItem={renderEditItem}
-          keyExtractor={keyExtractor}
+          renderGhost={renderEditGhost}
+          keyExtractor={editKeyExtractor}
           onReorder={handleReorder}
+          rowHeight={EDIT_ROW_HEIGHT}
+          contentPaddingTop={contentPaddingTop}
+          contentPaddingBottom={32}
+          dragHandleHitWidth={EDIT_DRAG_HANDLE_HIT_WIDTH}
+          accentColor={colors.primary}
           onScrollBeginDrag={closeOpenRow}
-          ListHeaderComponent={listHeader}
+          ListHeaderComponent={editListHeader}
           ListEmptyComponent={listEmpty}
+          drawDistance={LIST_DRAW_DISTANCE}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           contentContainerStyle={listContentStyle}
@@ -930,7 +1042,8 @@ export function PlaylistDetailScreen() {
           renderItem={renderItem}
           keyExtractor={keyExtractor}
           drawDistance={LIST_DRAW_DISTANCE}
-          ListHeaderComponent={searchOpen && !editing ? null : listHeader}
+          maintainVisibleContentPosition={{ disabled: true }}
+          ListHeaderComponent={searchOpen && !editing ? null : normalListHeader}
           ListEmptyComponent={listEmpty}
           onScrollBeginDrag={closeOpenRow}
           showsVerticalScrollIndicator={false}
@@ -1107,10 +1220,26 @@ const styles = StyleSheet.create({
   editRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: EDIT_ROW_HEIGHT,
+    height: EDIT_ROW_HEIGHT,
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  editRowDragging: {
+    opacity: 0.25,
+  },
+  editGhostRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 8,
   },
   editCover: {
     width: 40,

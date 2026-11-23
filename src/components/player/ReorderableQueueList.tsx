@@ -45,6 +45,8 @@ import {
   contentYToListIndex,
   contentYToTargetIndex,
   DRAG_HANDLE_HIT_WIDTH,
+  DRAG_HOLD_DURATION_MS,
+  DRAG_HOLD_SLOP_PX,
   getDropLineContentY,
   getTotalContentHeight,
 } from './queueDragMath';
@@ -186,6 +188,7 @@ export const ReorderableQueueList = memo(function ReorderableQueueList({
   }, [hasNowPlaying, userQueueCount, nextUpCount, hasNowPlayingSV, userQueueCountSV, nextUpCountSV]);
 
   const isDraggingSV = useSharedValue(false);
+  const pendingDragIndexSV = useSharedValue(-1);
   const dragFromIndexSV = useSharedValue(-1);
   const dragTargetIndexSV = useSharedValue(-1);
   const fingerYSV = useSharedValue(0);
@@ -307,7 +310,10 @@ export const ReorderableQueueList = memo(function ReorderableQueueList({
 
   const panGesture = useMemo(() => {
     return Gesture.Pan()
-      .manualActivation(true)
+      .activateAfterLongPress(DRAG_HOLD_DURATION_MS)
+      .failOffsetX([-DRAG_HOLD_SLOP_PX, DRAG_HOLD_SLOP_PX])
+      .failOffsetY([-DRAG_HOLD_SLOP_PX, DRAG_HOLD_SLOP_PX])
+      .maxPointers(1)
       .shouldCancelWhenOutside(false)
       .onTouchesDown((e, stateManager) => {
         'worklet';
@@ -316,12 +322,14 @@ export const ReorderableQueueList = memo(function ReorderableQueueList({
           e.numberOfTouches !== 1 ||
           e.allTouches.length === 0
         ) {
+          pendingDragIndexSV.value = -1;
           stateManager.fail();
           return;
         }
         const touch = e.allTouches[0];
         const w = containerWidthSV.value;
         if (w <= 0 || touch.x < w - DRAG_HANDLE_HIT_WIDTH) {
+          pendingDragIndexSV.value = -1;
           stateManager.fail();
           return;
         }
@@ -333,9 +341,18 @@ export const ReorderableQueueList = memo(function ReorderableQueueList({
           nextUpCountSV.value,
         );
         if (listIdx < 0) {
+          pendingDragIndexSV.value = -1;
           stateManager.fail();
           return;
         }
+        pendingDragIndexSV.value = listIdx;
+      })
+      .onStart((e) => {
+        'worklet';
+        const listIdx = pendingDragIndexSV.value;
+        if (listIdx < 0 || isDraggingSV.value) return;
+        pendingDragIndexSV.value = -1;
+        const touchY = e.y;
         const h = containerHeightSV.value;
         const maxGhostTop = Math.max(0, h - QUEUE_ROW_HEIGHT);
         const maxDropY = Math.max(0, h - 2);
@@ -343,10 +360,10 @@ export const ReorderableQueueList = memo(function ReorderableQueueList({
         isDraggingSV.value = true;
         dragFromIndexSV.value = listIdx;
         dragTargetIndexSV.value = listIdx;
-        fingerYSV.value = touch.y;
+        fingerYSV.value = touchY;
         ghostTopSV.value = Math.min(
           maxGhostTop,
-          Math.max(0, touch.y - QUEUE_ROW_HEIGHT / 2),
+          Math.max(0, touchY - QUEUE_ROW_HEIGHT / 2),
         );
         const lineContentY = getDropLineContentY(
           listIdx,
@@ -359,8 +376,7 @@ export const ReorderableQueueList = memo(function ReorderableQueueList({
           maxDropY,
           Math.max(0, lineContentY - scrollOffsetSV.value),
         );
-        stateManager.activate();
-        runOnJS(handleDragStartJS)(listIdx, touch.y);
+        runOnJS(handleDragStartJS)(listIdx, touchY);
       })
       .onTouchesMove((e) => {
         'worklet';
@@ -402,6 +418,7 @@ export const ReorderableQueueList = memo(function ReorderableQueueList({
       })
       .onFinalize(() => {
         'worklet';
+        pendingDragIndexSV.value = -1;
         if (!isDraggingSV.value) return;
         const from = dragFromIndexSV.value;
         const to = dragTargetIndexSV.value;
@@ -424,6 +441,7 @@ export const ReorderableQueueList = memo(function ReorderableQueueList({
     hasNowPlayingSV,
     isDraggingSV,
     nextUpCountSV,
+    pendingDragIndexSV,
     scrollOffsetSV,
     userQueueCountSV,
   ]);

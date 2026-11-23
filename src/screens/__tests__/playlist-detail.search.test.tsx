@@ -47,15 +47,9 @@ jest.mock('@shopify/flash-list', () => {
     ),
   };
 });
-jest.mock('react-native-reorderable-list', () => {
+jest.mock('../../components/ReorderableFlashList', () => {
   const { View } = require('react-native');
-  const ReorderableList = () => <View />;
-  return {
-    __esModule: true,
-    default: ReorderableList,
-    ReorderableListItem: ({ children }: { children: React.ReactNode }) => <View>{children}</View>,
-    useReorderableDrag: () => jest.fn(),
-  };
+  return { ReorderableFlashList: () => <View /> };
 });
 
 let mockHeaderRight: (() => React.ReactNode) | undefined;

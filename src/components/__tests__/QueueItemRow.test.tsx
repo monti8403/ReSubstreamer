@@ -245,6 +245,43 @@ describe('QueueItemRow', () => {
     expect(queryByTestId('queue-item-drag-handle')).toBeTruthy();
   });
 
+  it('suppresses row long-press when touch starts on the drag handle and resets on release/cancel', () => {
+    const track = makeTrack('s1');
+    const onLongPress = jest.fn();
+    const onPress = jest.fn();
+    const { getByTestId } = render(
+      <QueueItemRow
+        track={track}
+        index={1}
+        isActive={false}
+        isInUserQueue={false}
+        colors={mockColors}
+        onPress={onPress}
+        onLongPress={onLongPress}
+      />,
+    );
+
+    const handle = getByTestId('queue-item-drag-handle');
+    expect(mockCapturedProps.shouldSuppressLongPress()).toBe(false);
+
+    fireEvent(handle, 'touchStart');
+    expect(mockCapturedProps.shouldSuppressLongPress()).toBe(true);
+
+    fireEvent(handle, 'touchEnd');
+    expect(mockCapturedProps.shouldSuppressLongPress()).toBe(false);
+
+    fireEvent(handle, 'touchStart');
+    expect(mockCapturedProps.shouldSuppressLongPress()).toBe(true);
+
+    fireEvent(handle, 'touchCancel');
+    expect(mockCapturedProps.shouldSuppressLongPress()).toBe(false);
+
+    fireEvent(handle, 'touchStart');
+    mockCapturedProps.onPress();
+    expect(onPress).toHaveBeenCalledWith(1);
+    expect(mockCapturedProps.shouldSuppressLongPress()).toBe(false);
+  });
+
   it('respects explicit isInUserQueue prop without subscribing to playerStore', () => {
     const subscribeSpy = jest.spyOn(playerStore, 'subscribe');
     const track = makeTrack('s1');

@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useMemo, useRef } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import Ionicons from '@react-native-vector-icons/ionicons/static';
@@ -66,7 +66,20 @@ const QueueItemRowInner = memo(function QueueItemRowInner({
   onGrabHandle,
   onReleaseHandle,
 }: Omit<QueueItemRowProps, 'isInUserQueue'> & { isInUserQueue: boolean }) {
+  const handleTouchedRef = useRef(false);
+
+  const handleDragHandleTouchStart = useCallback(() => {
+    handleTouchedRef.current = true;
+  }, []);
+
+  const handleDragHandleTouchEnd = useCallback(() => {
+    handleTouchedRef.current = false;
+  }, []);
+
+  const shouldSuppressLongPress = useCallback(() => handleTouchedRef.current, []);
+
   const handlePress = useCallback(() => {
+    handleTouchedRef.current = false;
     onPress(index);
   }, [index, onPress]);
 
@@ -140,6 +153,7 @@ const QueueItemRowInner = memo(function QueueItemRowInner({
       recyclingKey={queueKey ?? track.id}
       onPress={handlePress}
       onLongPress={onLongPress ? handleLongPress : undefined}
+      shouldSuppressLongPress={onLongPress ? shouldSuppressLongPress : undefined}
     >
       <View
         style={[
@@ -220,7 +234,13 @@ const QueueItemRowInner = memo(function QueueItemRowInner({
               />
             </Pressable>
           ) : (
-            <View testID="queue-item-drag-handle" style={styles.dragHandle}>
+            <View
+              testID="queue-item-drag-handle"
+              onTouchStart={handleDragHandleTouchStart}
+              onTouchEnd={handleDragHandleTouchEnd}
+              onTouchCancel={handleDragHandleTouchEnd}
+              style={styles.dragHandle}
+            >
               <Ionicons
                 name="reorder-three-outline"
                 size={24}
@@ -268,7 +288,11 @@ const styles = StyleSheet.create({
     opacity: 0.25,
   },
   dragHandle: {
-    marginLeft: 8,
+    marginLeft: 0,
+    paddingLeft: 12,
+    paddingRight: 8,
+    paddingVertical: 12,
+    marginRight: -8,
     opacity: 0.5,
   },
   coverWrap: {

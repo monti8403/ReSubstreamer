@@ -78,6 +78,8 @@ export interface SwipeableRowProps {
   restingBackgroundColor?: string;
   /** Called when a long-press gesture activates. */
   onLongPress?: () => void;
+  /** Optional predicate checked right before long-press fires (e.g. drag handle press). */
+  shouldSuppressLongPress?: () => boolean;
   /** Called when the row is tapped. */
   onPress?: () => void;
   /**
@@ -137,6 +139,7 @@ export const SwipeableRow = memo(function SwipeableRow({
   rowGap = 0,
   restingBackgroundColor,
   onLongPress,
+  shouldSuppressLongPress,
   onPress,
   disabled = false,
   compact = false,
@@ -375,14 +378,14 @@ export const SwipeableRow = memo(function SwipeableRow({
   }, [disabled, onPress]);
 
   const handleLongPress = useCallback(() => {
-    if (disabled) return;
+    if (disabled || shouldSuppressLongPress?.()) return;
     if (isOpenRef.current) {
       swipeableRef.current?.close();
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     onLongPress?.();
-  }, [disabled, onLongPress]);
+  }, [disabled, onLongPress, shouldSuppressLongPress]);
 
   /* ---- Action panel render functions ---- */
 

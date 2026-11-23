@@ -79,18 +79,44 @@ jest.mock('@shopify/flash-list', () => {
   };
 });
 
+const mockPanConfig: {
+  activateAfterLongPress?: number;
+  failOffsetX?: number | number[];
+  failOffsetY?: number | number[];
+  maxPointers?: number;
+} = {};
 const mockPanCallbacks: {
   onTouchesDown?: (e: any, stateManager: any) => void;
+  onStart?: (e: any) => void;
   onTouchesMove?: (e: any) => void;
   onFinalize?: () => void;
 } = {};
 jest.mock('react-native-gesture-handler', () => {
   const makePan = () => {
     const g: any = {
-      manualActivation: () => g,
+      activateAfterLongPress: (ms: number) => {
+        mockPanConfig.activateAfterLongPress = ms;
+        return g;
+      },
+      failOffsetX: (offset: number | number[]) => {
+        mockPanConfig.failOffsetX = offset;
+        return g;
+      },
+      failOffsetY: (offset: number | number[]) => {
+        mockPanConfig.failOffsetY = offset;
+        return g;
+      },
+      maxPointers: (count: number) => {
+        mockPanConfig.maxPointers = count;
+        return g;
+      },
       shouldCancelWhenOutside: () => g,
       onTouchesDown: (cb: any) => {
         mockPanCallbacks.onTouchesDown = cb;
+        return g;
+      },
+      onStart: (cb: any) => {
+        mockPanCallbacks.onStart = cb;
         return g;
       },
       onTouchesMove: (cb: any) => {
@@ -307,7 +333,13 @@ describe('ReorderableQueueList', () => {
     expect(headerSM.fail).toHaveBeenCalled();
     expect(headerSM.activate).not.toHaveBeenCalled();
 
-    // Touch handle on Song 1 (y = 170 -> index 1 in reorderableListItems: header=0, Song1=1)
+    // Pan gesture must require a 280ms hold with 8px movement tolerance so fast scrolling never triggers drag
+    expect(mockPanConfig.activateAfterLongPress).toBe(280);
+    expect(mockPanConfig.failOffsetX).toEqual([-8, 8]);
+    expect(mockPanConfig.failOffsetY).toEqual([-8, 8]);
+    expect(mockPanConfig.maxPointers).toBe(1);
+
+    // Touch handle on Song 1 (y = 170 -> index 1): stays pending without grabbing immediately at 0ms
     const dragSM = { activate: jest.fn(), fail: jest.fn() };
     act(() => {
       mockPanCallbacks.onTouchesDown?.(
@@ -315,8 +347,28 @@ describe('ReorderableQueueList', () => {
         dragSM,
       );
     });
-    expect(dragSM.activate).toHaveBeenCalled();
+    expect(dragSM.fail).not.toHaveBeenCalled();
+    expect(onDragStateChange).not.toHaveBeenCalled();
+    expect(mockFlashListProps.scrollEnabled).toBe(true);
+
+    // Fast scroll/fail before 280ms hold completes must NOT start drag or reorder
+    act(() => {
+      mockPanCallbacks.onFinalize?.();
+    });
+    expect(onDragStateChange).not.toHaveBeenCalled();
+
+    // Hold for 280ms on Song 1 -> onStart fires, lifting ghost row immediately + haptic feedback
+    act(() => {
+      mockPanCallbacks.onTouchesDown?.(
+        { numberOfTouches: 1, allTouches: [{ x: 380, y: 170 }] },
+        dragSM,
+      );
+    });
+    act(() => {
+      mockPanCallbacks.onStart?.({ y: 170 });
+    });
     expect(onDragStateChange).toHaveBeenCalledWith(true);
+    expect(mockHapticsSelection).toHaveBeenCalled();
     expect(mockFlashListProps.scrollEnabled).toBe(false);
     expect(mockRenderedRowProps[ensureQueueKey(n1)]?.isDragging).toBe(true);
 
@@ -402,7 +454,7 @@ describe('ReorderableQueueList', () => {
       });
       expect(multiSM.fail).toHaveBeenCalled();
 
-      // Single-touch near bottom edge (y = 280 in 300px viewport) activates drag + triggers bottom autoscroll
+      // Single-touch near bottom edge (y = 280 in 300px viewport) activates drag after hold + triggers bottom autoscroll
       const dragSM = { activate: jest.fn(), fail: jest.fn() };
       act(() => {
         mockPanCallbacks.onTouchesDown?.(
@@ -410,7 +462,9 @@ describe('ReorderableQueueList', () => {
           dragSM,
         );
       });
-      expect(dragSM.activate).toHaveBeenCalled();
+      act(() => {
+        mockPanCallbacks.onStart?.({ y: 280 });
+      });
       expect(rafQueue.length).toBeGreaterThan(0);
 
       act(() => {
@@ -483,7 +537,9 @@ describe('ReorderableQueueList', () => {
         promoSM,
       );
     });
-    expect(promoSM.activate).toHaveBeenCalled();
+    act(() => {
+      mockPanCallbacks.onStart?.({ y: 280 });
+    });
 
     act(() => {
       mockPanCallbacks.onTouchesMove?.({

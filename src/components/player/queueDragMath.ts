@@ -1,9 +1,21 @@
+import {
+  computeEdgeAutoScrollDelta,
+  DEFAULT_DRAG_HANDLE_HIT_WIDTH,
+  EDGE_AUTOSCROLL_ZONE,
+  MAX_AUTOSCROLL_PX_PER_FRAME,
+} from '@/utils/reorderDragMath';
+
 export const QUEUE_ROW_HEIGHT = 64;
 export const QUEUE_SECTION_HEADER_HEIGHT = 42;
 
-export const DRAG_HANDLE_HIT_WIDTH = 56;
-export const EDGE_AUTOSCROLL_ZONE = 64;
-export const MAX_AUTOSCROLL_PX_PER_FRAME = 14;
+export const DRAG_HANDLE_HIT_WIDTH = DEFAULT_DRAG_HANDLE_HIT_WIDTH;
+export const DRAG_HOLD_DURATION_MS = 280;
+export const DRAG_HOLD_SLOP_PX = 8;
+export {
+  computeEdgeAutoScrollDelta,
+  EDGE_AUTOSCROLL_ZONE,
+  MAX_AUTOSCROLL_PX_PER_FRAME,
+};
 
 /** Height of the non-reorderable `ListHeaderComponent` (Now Playing header + active row). */
 export function getListHeaderHeight(hasNowPlaying: boolean): number {
@@ -212,22 +224,4 @@ export function getDropLineContentY(
     return fromIndex > targetIndex ? top : top + QUEUE_SECTION_HEADER_HEIGHT;
   }
   return targetIndex > fromIndex ? top + QUEUE_ROW_HEIGHT : top;
-}
-
-/** Compute per-frame scroll delta (px) when finger enters top/bottom auto-scroll zones. */
-export function computeEdgeAutoScrollDelta(
-  fingerY: number,
-  containerHeight: number,
-): number {
-  if (containerHeight <= 0) return 0;
-  if (fingerY < EDGE_AUTOSCROLL_ZONE) {
-    const ratio = Math.min(1, Math.max(0, (EDGE_AUTOSCROLL_ZONE - fingerY) / EDGE_AUTOSCROLL_ZONE));
-    return -MAX_AUTOSCROLL_PX_PER_FRAME * ratio;
-  }
-  const bottomStart = containerHeight - EDGE_AUTOSCROLL_ZONE;
-  if (fingerY > bottomStart) {
-    const ratio = Math.min(1, Math.max(0, (fingerY - bottomStart) / EDGE_AUTOSCROLL_ZONE));
-    return MAX_AUTOSCROLL_PX_PER_FRAME * ratio;
-  }
-  return 0;
 }
