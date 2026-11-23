@@ -1,6 +1,8 @@
 import {
   computeEdgeAutoScrollDelta,
   DEFAULT_DRAG_HANDLE_HIT_WIDTH,
+  DRAG_HOLD_DURATION_MS,
+  DRAG_HOLD_SLOP_PX,
   EDGE_AUTOSCROLL_ZONE,
   MAX_AUTOSCROLL_PX_PER_FRAME,
 } from '@/utils/reorderDragMath';
@@ -9,10 +11,10 @@ export const QUEUE_ROW_HEIGHT = 64;
 export const QUEUE_SECTION_HEADER_HEIGHT = 42;
 
 export const DRAG_HANDLE_HIT_WIDTH = DEFAULT_DRAG_HANDLE_HIT_WIDTH;
-export const DRAG_HOLD_DURATION_MS = 280;
-export const DRAG_HOLD_SLOP_PX = 8;
 export {
   computeEdgeAutoScrollDelta,
+  DRAG_HOLD_DURATION_MS,
+  DRAG_HOLD_SLOP_PX,
   EDGE_AUTOSCROLL_ZONE,
   MAX_AUTOSCROLL_PX_PER_FRAME,
 };

@@ -71,16 +71,24 @@ jest.mock('@shopify/flash-list', () => {
 
 const mockPanCallbacks: {
   onTouchesDown?: (e: any, stateManager: any) => void;
+  onStart?: (e: any) => void;
   onTouchesMove?: (e: any) => void;
   onFinalize?: () => void;
 } = {};
 jest.mock('react-native-gesture-handler', () => {
   const makePan = () => {
     const g: any = {
-      manualActivation: () => g,
+      activateAfterLongPress: () => g,
+      failOffsetX: () => g,
+      failOffsetY: () => g,
+      maxPointers: () => g,
       shouldCancelWhenOutside: () => g,
       onTouchesDown: (cb: any) => {
         mockPanCallbacks.onTouchesDown = cb;
+        return g;
+      },
+      onStart: (cb: any) => {
+        mockPanCallbacks.onStart = cb;
         return g;
       },
       onTouchesMove: (cb: any) => {
@@ -375,7 +383,9 @@ describe('PlaylistDetailScreen — edit mode with ReorderableFlashList', () => {
         dragSM,
       );
     });
-    expect(dragSM.activate).toHaveBeenCalled();
+    act(() => {
+      mockPanCallbacks.onStart?.({ y: 310 });
+    });
 
     // Drag Row 0 down to Row 2
     act(() => {
@@ -447,7 +457,9 @@ describe('PlaylistDetailScreen — edit mode with ReorderableFlashList', () => {
         dragSM,
       );
     });
-    expect(dragSM.activate).toHaveBeenCalled();
+    act(() => {
+      mockPanCallbacks.onStart?.({ y: 310 });
+    });
     act(() => {
       mockPanCallbacks.onTouchesMove?.({
         numberOfTouches: 1,
@@ -521,7 +533,9 @@ describe('PlaylistDetailScreen — edit mode with ReorderableFlashList', () => {
         dragSM,
       );
     });
-    expect(dragSM.activate).toHaveBeenCalled();
+    act(() => {
+      mockPanCallbacks.onStart?.({ y: 32 });
+    });
 
     act(() => {
       mockPanCallbacks.onTouchesMove?.({

@@ -34,18 +34,44 @@ jest.mock('@shopify/flash-list', () => {
   };
 });
 
+const mockPanConfig: {
+  activateAfterLongPress?: number;
+  failOffsetX?: number | number[];
+  failOffsetY?: number | number[];
+  maxPointers?: number;
+} = {};
 const mockPanCallbacks: {
   onTouchesDown?: (e: any, stateManager: any) => void;
+  onStart?: (e: any) => void;
   onTouchesMove?: (e: any) => void;
   onFinalize?: () => void;
 } = {};
 jest.mock('react-native-gesture-handler', () => {
   const makePan = () => {
     const g: any = {
-      manualActivation: () => g,
+      activateAfterLongPress: (ms: number) => {
+        mockPanConfig.activateAfterLongPress = ms;
+        return g;
+      },
+      failOffsetX: (offset: number | number[]) => {
+        mockPanConfig.failOffsetX = offset;
+        return g;
+      },
+      failOffsetY: (offset: number | number[]) => {
+        mockPanConfig.failOffsetY = offset;
+        return g;
+      },
+      maxPointers: (count: number) => {
+        mockPanConfig.maxPointers = count;
+        return g;
+      },
       shouldCancelWhenOutside: () => g,
       onTouchesDown: (cb: any) => {
         mockPanCallbacks.onTouchesDown = cb;
+        return g;
+      },
+      onStart: (cb: any) => {
+        mockPanCallbacks.onStart = cb;
         return g;
       },
       onTouchesMove: (cb: any) => {
@@ -205,7 +231,12 @@ describe('ReorderableFlashList', () => {
     });
     expect(headerSM.fail).toHaveBeenCalled();
 
-    // Touch handle of item 0 (y = 140 -> contentY 140 -> index 0) -> activate
+    expect(mockPanConfig.activateAfterLongPress).toBe(280);
+    expect(mockPanConfig.failOffsetX).toEqual([-8, 8]);
+    expect(mockPanConfig.failOffsetY).toEqual([-8, 8]);
+    expect(mockPanConfig.maxPointers).toBe(1);
+
+    // Touch handle of item 0 (y = 140) stays pending until 280ms hold completes
     const dragSM = { activate: jest.fn(), fail: jest.fn() };
     act(() => {
       mockPanCallbacks.onTouchesDown?.(
@@ -213,7 +244,26 @@ describe('ReorderableFlashList', () => {
         dragSM,
       );
     });
-    expect(dragSM.activate).toHaveBeenCalled();
+    expect(dragSM.fail).not.toHaveBeenCalled();
+    expect(onDragStateChange).not.toHaveBeenCalled();
+    expect(mockFlashListProps.scrollEnabled).toBe(true);
+
+    // Quick scroll / release before 280ms must NOT start drag
+    act(() => {
+      mockPanCallbacks.onFinalize?.();
+    });
+    expect(onDragStateChange).not.toHaveBeenCalled();
+
+    // Hold for 280ms -> onStart activates drag
+    act(() => {
+      mockPanCallbacks.onTouchesDown?.(
+        { numberOfTouches: 1, allTouches: [{ x: 380, y: 140 }] },
+        dragSM,
+      );
+    });
+    act(() => {
+      mockPanCallbacks.onStart?.({ y: 140 });
+    });
     expect(mockCloseOpenRow).toHaveBeenCalled();
     expect(mockHapticsSelection).toHaveBeenCalledTimes(1);
     expect(onDragStateChange).toHaveBeenCalledWith(true);
@@ -296,7 +346,9 @@ describe('ReorderableFlashList', () => {
           dragSM,
         );
       });
-      expect(dragSM.activate).toHaveBeenCalled();
+      act(() => {
+        mockPanCallbacks.onStart?.({ y: 280 });
+      });
 
       act(() => {
         for (let f = 0; f < 8; f += 1) {
@@ -327,6 +379,9 @@ describe('ReorderableFlashList', () => {
           { numberOfTouches: 1, allTouches: [{ x: 380, y: 20 }] },
           drag2SM,
         );
+      });
+      act(() => {
+        mockPanCallbacks.onStart?.({ y: 20 });
       });
       unmount();
       expect(cafSpy).toHaveBeenCalled();
@@ -378,7 +433,9 @@ describe('ReorderableFlashList', () => {
         dragSM,
       );
     });
-    expect(dragSM.activate).toHaveBeenCalled();
+    act(() => {
+      mockPanCallbacks.onStart?.({ y: 190 });
+    });
 
     // Move to target index 3 (y = 260)
     act(() => {
@@ -420,7 +477,9 @@ describe('ReorderableFlashList', () => {
         drag2SM,
       );
     });
-    expect(drag2SM.activate).toHaveBeenCalled();
+    act(() => {
+      mockPanCallbacks.onStart?.({ y: 20 });
+    });
 
     rerender(
       <ReorderableFlashList

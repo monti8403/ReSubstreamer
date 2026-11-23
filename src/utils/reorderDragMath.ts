@@ -1,4 +1,6 @@
 export const DEFAULT_DRAG_HANDLE_HIT_WIDTH = 56;
+export const DRAG_HOLD_DURATION_MS = 280;
+export const DRAG_HOLD_SLOP_PX = 8;
 export const EDGE_AUTOSCROLL_ZONE = 64;
 export const MAX_AUTOSCROLL_PX_PER_FRAME = 14;
 
