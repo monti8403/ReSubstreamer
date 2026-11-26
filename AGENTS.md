@@ -320,7 +320,7 @@ scripts/        build helpers + CI validators
 
 ### Sensitive
 
-Public repository. **Never** commit secrets, credentials, API keys, PII, names, emails. Use env vars (`fastlane/.env`, gitignored) or GitHub Secrets via `${{ secrets.* }}` / `ENV["..."]`, never literals. Review every new file before committing.
+Never commit secrets, credentials, API keys (Google, AI, Open Banking, etc.), certificates, keystores, PII, names, or emails — even in a private repository. All `.env` / `.env.*` files and sensitive configuration files (`google-services.json`, `GoogleService-Info.plist`, `*service-account*.json`, `credentials*.json`, `secrets.*`, `key.properties`, `*.p8`, `*.keystore`, etc.) must stay in `.gitignore` (and `.easignore`) and never be pushed to GitHub. Use gitignored `.env` files (`fastlane/.env`), GitHub Secrets via `${{ secrets.* }}` / `ENV["..."]`, EAS Secrets, or runtime encrypted storage (`secureKeyVault`), never literals or `EXPO_PUBLIC_*` env vars (which Expo inlines into the client bundle). Review every new file before committing.
 
 ### Tests
 

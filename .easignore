@@ -11,23 +11,77 @@ dist/
 web-build/
 expo-env.d.ts
 
-# Native credentials (managed by EAS)
+# Native credentials & signing (managed by EAS)
 *.orig.*
 *.jks
 *.p8
 *.p12
+*.pfx
 *.key
+*.cer
+*.crt
+*.der
+*.ppk
 *.mobileprovision
 *.keystore
+keystore.properties
+key.properties
+signing.properties
+local.properties
+id_rsa*
+id_ed25519*
+id_ecdsa*
+*.ovpn
+
+# Sensitive service / API / cloud / Open Banking / AI configuration files
+google-services.json
+GoogleService-Info.plist
+firebase-adminsdk*.json
+*service-account*.json
+*serviceAccount*.json
+client_secret*.json
+gcp-*.json
 credentials.json
+credentials.*.json
+*.credentials.json
+secrets.json
+secrets.yaml
+secrets.yml
+secrets.toml
+secrets.local.*
+.secrets
+.secrets.*
+*.secret
+*.secrets
+openbanking*.json
+*open-banking*.json
+*open_banking*.json
+.sentryclirc
+sentry.properties
+.eas/secrets*
+eas-secrets.json
+.netrc
+_netrc
+.npmrc.local
+.pypirc
 
 # Metro
 .metro-health-check*
 
-# debug
+# debug & logs
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+*.log
+
+# Local databases & encrypted key vault files
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+.atrum_sec_k*
+.atrum_sec_v*
 
 # Claude Code
 .claude/
@@ -38,7 +92,12 @@ yarn-error.*
 
 # local env files
 .env
+.env.*
 .env*.local
+.envrc
+!.env.example
+!.env.template
+!.env-template
 
 # release script temp file
 .release-notes-tmp
